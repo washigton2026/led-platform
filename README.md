@@ -67,7 +67,15 @@ led-audio: samples ──Hann FFT──▶ AudioFeatures ──▶ AudioShare �
 
 ```sh
 cargo test --workspace
+cargo run -p led-demo --release   # renders ./show.gif — a watchable 6 s show
 ```
+
+### Watch it
+
+`show.gif` is a rendered 6-second show on a 32×18 matrix: a `Plasma` GPU-style compute
+effect (background) with **beat-synced** white flashes (Add blend) on a 120 BPM grid —
+produced by the real render path (layout → sequencer → compute effect → frame), encoded to
+GIF. It's the end-to-end proof that the stack composes into something you can actually see.
 
 ## Next slices (not built yet)
 

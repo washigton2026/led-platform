@@ -35,6 +35,7 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-pixel-engine` | `Effect`s, HSV/gamma, lock-free triple buffer, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL) | led-pixel-engine |
 | `led-sequencer` | non-destructive `Timeline`/`Track`/`Clip`/keyframes + `TempoMap` beat-sync; **a `Timeline` is an `Effect`** | led-sequencer |
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `AudioFeatures` | led-audio |
+| `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
 (a `Timeline` *is* an `Effect`) → `led-pixel-engine` renders `LogicalFrame`s → (lock-free
@@ -63,7 +64,8 @@ so it does **not** depend on `led-audio` (only the app/test wires them together)
 
 ## Status (keep current)
 
-7 crates · **54 tests green** · zero warnings · triple buffer validated natively
+7 lib crates + `led-demo` binary · **54 tests green** · zero warnings · a runnable demo
+renders `show.gif` (a watchable show) · triple buffer validated natively
 (200k-publish stress) and under Miri across 24 scheduler seeds.
 
 Built: HAL core + mapping, layout (MegaTree/matrix-serpentine) + mapper, E1.31 driver,
@@ -89,6 +91,25 @@ multi-device clustering / shared frame deadline, realtime audio capture (Phase 3
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-04 — Rendered demo + git baseline
+
+**Done.** Added `led-demo` (binary): renders a 6 s show to `show.gif` (384×216) — a 32×18
+matrix driven by the real render path (layout → `Timeline` with a `Plasma` compute effect +
+beat-synced white flashes on a 120 BPM `TempoMap`, Add blend), encoded with the `gif` crate.
+First watchable artifact. Initialized git in both `~/led-platform` and `~/drone-show-suite`
+(local identity, `main`, initial commits).
+
+**Invariants verified.** Workspace still warning-free and 54/54 green with the new binary;
+libraries remain std-only (only the `led-demo` app pulls `gif`). The demo uses the same
+`Effect::render` path the pipeline drives — no special-case rendering.
+
+**Pending.** Push to a remote (backup); real wgpu executor (`gpu` feature); drone codebase
+(safety+sim); multi-device clustering; realtime audio.
+
+**Decisions.** Demo is a separate binary crate so the libs stay dependency-free. Now that
+there are real deps (`gif`), `Cargo.lock` is tracked (committed) for reproducible builds.
+`show.gif` is committed as the demo artifact.
 
 ### 2026-06-03 — Phase 1 foundation + render core + governance
 
