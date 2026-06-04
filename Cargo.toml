@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/led-core",
+    "crates/led-hal",
+    "crates/led-protocols",
+    "crates/led-layout",
+    "crates/led-pixel-engine",
+    "crates/led-sequencer",
+    "crates/led-audio",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"

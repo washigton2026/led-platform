@@ -1,0 +1,8 @@
+[package]
+name = "led-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Seam types, traits, and the compiled logical→physical mapping shared across the platform."
+
+[dependencies]

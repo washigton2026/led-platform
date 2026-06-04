@@ -1,0 +1,9 @@
+[package]
+name = "led-protocols"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Wire-protocol device drivers (E1.31 sACN) that plug in under the HAL."
+
+[dependencies]
+led-core = { path = "../led-core" }

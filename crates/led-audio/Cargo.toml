@@ -1,0 +1,9 @@
+[package]
+name = "led-audio"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Audio analysis: Hann-windowed FFT, band energy, spectral-flux beat detection → AudioFeatures."
+
+[dependencies]
+led-core = { path = "../led-core" }
