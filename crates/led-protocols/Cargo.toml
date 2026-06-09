@@ -7,3 +7,7 @@ description = "Wire-protocol device drivers (E1.31 sACN) that plug in under the 
 
 [dependencies]
 led-core = { path = "../led-core" }
+tokio   = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
