@@ -34,18 +34,31 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-protocols` | `SacnDevice` (E1.31, unicast + per-universe multicast) + ArtPoll source-conflict detection | led-protocols |
 | `led-pixel-engine` | `Effect`s, HSV/gamma, lock-free triple buffer, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL) | led-pixel-engine |
 | `led-sequencer` | non-destructive `Timeline`/`Track`/`Clip`/keyframes + `TempoMap` beat-sync; **a `Timeline` is an `Effect`** | led-sequencer |
-| `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `AudioFeatures` | led-audio |
+| `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
 | `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
+| `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
 (a `Timeline` *is* an `Effect`) → `led-pixel-engine` renders `LogicalFrame`s → (lock-free
 triple buffer) → `Hal` applies the mapping **once** → `DeviceDriver` fan-out →
 `SimulatorDevice` / `SacnDevice`. `Heartbeat` runs on its own thread.
 
-Audio→light: `led-audio` analyzes samples → `AudioFeatures` → `led-pixel-engine`'s
-`AudioShare` (written by the audio thread) → reactive effects (`BandPulse`, `BeatFlash`)
-read it on the render thread. `led-pixel-engine` consumes `AudioFeatures` from `led-core`,
-so it does **not** depend on `led-audio` (only the app/test wires them together).
+Audio→light (Phase-1, wired): `led-audio` analyzes samples → `led-core::AudioFeatures` →
+`led-pixel-engine`'s `AudioShare` (written by the audio thread) → reactive effects
+(`BandPulse`, `BeatFlash`) read it on the render thread. `led-pixel-engine` consumes
+`AudioFeatures` from `led-core`, so it does **not** depend on `led-audio` (only the
+app/test wires them together).
+
+Audio intelligence (`audio-core`, not yet wired): a separate, richer realtime pipeline —
+own `AudioFeatures` (adds `peak`, `onset`, `bpm`, `spectral_centroid`, `spectral_rolloff`,
+`spectral_flux`, `musical_section`; `spectrum` is `[f32; 512]` not `Vec<f32>` for a `Copy`,
+alloc-free struct) — per the `lumyx-system-architect` skill's contract (§3/§11, owner
+`audio-core/`). **Contract divergence flagged per that skill's §10/§15**: `led-core`'s
+smaller `AudioFeatures` (consumed by `led-audio`/`led-pixel-engine` above) is now the
+outdated sub-skill version relative to the architect skill's canonical contract. Not yet
+reconciled — `audio-core` does not feed the existing `AudioShare` bridge. Future work:
+either migrate `led-core::AudioFeatures` to the v1.0 shape (major-version, multi-crate
+change, see `references/data-contracts.md`) or add an adapter at the `AudioShare` boundary.
 
 ## Invariants that bite (enforced by tests — don't regress)
 
@@ -61,12 +74,16 @@ so it does **not** depend on `led-audio` (only the app/test wires them together)
   conflict and names the other IP before starting). Multicast needs IGMP on the path (`/security`).
 - **Hann window before every FFT** (structural: `magnitude_spectrum` is the only path);
   **`sample_rate` explicit**, never hardcoded; spectral-flux beat with a slow-EMA threshold.
+- `audio-core` (separate leaf, see crate map): same Hann/sample_rate/spectral-flux
+  invariants, plus its own zero-alloc proof (`audio-core/tests/no_alloc.rs` — `Analyzer`
+  hot path + `watch::send`, `AudioFeatures` is `Copy`) and an SPSC ring buffer Miri-clean
+  across scheduler seeds (`audio-core/src/ring_buffer.rs`).
 
 ## Status (keep current)
 
-7 lib crates + `led-demo` binary · **54 tests green** · zero warnings · a runnable demo
-renders `show.gif` (a watchable show) · triple buffer validated natively
-(200k-publish stress) and under Miri across 24 scheduler seeds.
+8 lib crates + `led-demo` binary · **103 tests green** (`cargo test --workspace`) · zero
+warnings · a runnable demo renders `show.gif` (a watchable show) · triple buffer validated
+natively (200k-publish stress) and under Miri across 24 scheduler seeds.
 
 Built: HAL core + mapping, layout (MegaTree/matrix-serpentine) + mapper, E1.31 driver,
 render core (effects + triple buffer + render→send pipeline), async heartbeat, `IDevice`
@@ -79,18 +96,79 @@ per-universe multicast sACN, ArtPoll source-conflict detection, GPU-style comput
 (portable per-pixel `Plasma` kernel + matching `PLASMA_WGSL`; CPU executor tested, real
 wgpu executor specified behind a hardware-gated `gpu` feature).
 
+Realtime audio (`audio-core`, new): CPAL default-input capture (F32/I16/U16 formats,
+downmixed to mono) → SPSC ring buffer → sliding 1024-sample window (256-sample hop, 75%
+overlap) → Hann window → `rustfft` → bands/centroid/rolloff/spectral-flux beat (EMA
+0.9/0.1)/BPM → `AudioFeatures` (v1.0, lumyx-system-architect contract) → broadcast via
+`tokio::sync::watch`. Leaf crate: no workspace dependencies, no imports of
+sequencer/effect-engine/protocols.
+
 Not built yet: wiring the real wgpu GPU executor (needs a `gpu` feature + GPU hardware),
-multi-device clustering / shared frame deadline, realtime audio capture (Phase 3).
+multi-device clustering / shared frame deadline, reconciling `audio-core`'s `AudioFeatures`
+with `led-core`'s (see crate map), wiring `audio-core` into the render-side `AudioShare`
+bridge.
 
 ## Conventions
 
-- Std-only where possible (no deps yet); add a dependency only with a reason.
+- Std-only where possible; add a dependency only with a reason. `audio-core` is the first
+  crate with real external dependencies (`cpal`, `rustfft`, `tokio` sync) — justified by
+  its CPAL/FFT/watch-channel pipeline contract; it remains a leaf so this doesn't ripple
+  into the rest of the workspace.
 - New seam type or change → edit `led-core` in one place, update both sides + this file.
+  (`audio-core`'s `AudioFeatures` is a separate, self-owned contract — see crate map.)
 - A new `unsafe` block must come with a test that exercises it (and Miri if concurrent).
 
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-10 — `audio-core`: realtime audio intelligence (leaf crate)
+
+**Done.** Added `audio-core`, a new leaf crate (lumyx-system-architect §6: imports nothing
+from sequencer/effect-engine/protocols/led-core). Pipeline: CPAL default-input capture
+(`capture.rs`, F32/I16/U16, downmixed to mono) → SPSC lock-free `RingBuffer` (`ring_buffer.rs`)
+→ `Analyzer` (`analyzer.rs`) sliding a 1024-sample window 256 samples at a time (75%
+overlap) → Hann window (`window.rs`) → `rustfft` magnitude spectrum with preallocated
+scratch (`fft.rs`) → band energy/RMS/peak/spectral centroid/rolloff (`bands.rs`) →
+spectral-flux beat/onset detection with `flux_avg = flux_avg*0.9 + flux*0.1`
+(`beat.rs`) → smoothed BPM (`bpm.rs`) → `AudioFeatures` (`contracts.rs`, the
+lumyx-system-architect v1.0 contract: adds `peak`/`onset`/`bpm`/`spectral_centroid`/
+`spectral_rolloff`/`spectral_flux`/`musical_section` vs `led-core`'s; `spectrum` is a fixed
+`[f32; 512]` so the struct is `Copy`) → broadcast via `tokio::sync::watch`
+(`pipeline.rs::AudioPipeline`). 26 new tests (25 unit/lib + 1 `tests/no_alloc.rs`).
+
+**Invariants verified.** Hann-before-FFT (`fft::SpectrumAnalyzer::magnitude_spectrum` is the
+only FFT path, takes the window as a required arg); `sample_rate` explicit end-to-end (from
+CPAL device config through `Analyzer` to every `AudioFeatures`, `bands` tests prove
+bin↔Hz uses it not a hardcoded rate); spectral-flux beat fires on bursts not
+silence/sustain with the specified 0.9/0.1 EMA and a refractory window (`beat.rs`); BPM
+tracker converges to 120 on a steady 500 ms beat (`bpm.rs`). Zero-alloc hot path:
+`audio-core/tests/no_alloc.rs` proves 1000 `Analyzer::process_hop` + `watch::send` cycles
+allocate nothing after warm-up (relies on `AudioFeatures: Copy` + `rustfft`'s
+`process_with_scratch` + preallocated FFT/window/ring buffers). The new `unsafe impl Sync`
++ `unsafe` cells in `RingBuffer` are covered by an SPSC stress test, Miri-clean
+(`cargo +nightly miri test -p audio-core --lib ring_buffer::`) and across 8 scheduler seeds
+with `-Zmiri-many-seeds`/`-Zmiri-preemption-rate`. Workspace stays warning-free; 103/103
+tests green (`cargo test --workspace`).
+
+**Pending.** `audio-core` is not wired into the existing render-side `AudioShare`
+bridge — it currently has no consumers in this workspace. CPAL capture (`capture.rs`,
+`pipeline.rs`) cannot be exercised by automated tests here (no audio hardware in the
+sandbox); only the hardware-independent DSP/ring-buffer/analyzer modules have tests.
+`musical_section` is always `None` (realtime-only pipeline, per data-contracts.md). U16
+CPAL format is supported for downmixing; other sample formats (I8/I32/I64/U8/U32/U64/F64)
+return `AudioCoreError::UnsupportedSampleFormat`.
+
+**Decisions.** Per lumyx-system-architect §10/§15 ("when sub-skills conflict, this document
+wins, flag the conflict"): built `audio-core` as a standalone leaf with its **own**
+`AudioFeatures` v1.0 (the richer architect-skill contract) rather than reusing/extending
+`led-core::AudioFeatures` (the smaller Phase-1 contract `led-audio`/`led-pixel-engine`
+already depend on) — flagged in the crate map as a divergence to reconcile later, not
+silently merged. Chose a fixed-size `[f32; 512]` `spectrum` field (vs the contract doc's
+`Vec<f32>`) specifically so `AudioFeatures` is `Copy` and the `watch` channel send is
+allocation-free — a deliberate, documented deviation in service of invariant 3.
+`cpal`/`rustfft`/`tokio` (sync feature only) are `audio-core`'s only dependencies, scoped to
+this leaf so the rest of the workspace stays std-only.
 
 ### 2026-06-04 — Rendered demo + git baseline
 
