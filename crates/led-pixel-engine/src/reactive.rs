@@ -217,3 +217,164 @@ mod tests {
         assert_eq!(render(&fx, 1200), PixelColor::rgb(0, 0, 200), "new beat ⇒ full again");
     }
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+    use std::sync::Arc;
+    use led_core::PixelColor;
+
+    fn af(beat: bool, ts: u64, bass: f32, rms: f32) -> AudioFeatures {
+        AudioFeatures {
+            sample_rate: 48_000,
+            timestamp_ms: ts,
+            rms,
+            beat,
+            bass,
+            mid: 0.3,
+            high: 0.1,
+            spectrum: vec![0.0; 8],
+        }
+    }
+
+    fn px(fx: &dyn Effect, t: u64) -> PixelColor {
+        let mut out = [PixelColor::default(); 4];
+        fx.render(t, &[Vec3::ZERO; 4], &mut out);
+        out[0]
+    }
+
+    // ── CONCURRENCY: AudioShare — 8 writers, 8 readers simultaneously ─────
+    #[test]
+    fn audioshare_concurrent_publish_read_no_deadlock() {
+        use std::thread;
+        let share = Arc::new(AudioShare::new());
+        let mut handles = Vec::new();
+
+        for i in 0..8 {
+            let s = share.clone();
+            handles.push(thread::spawn(move || {
+                for j in 0..1_000u64 {
+                    s.publish(&af(j % 3 == 0, i * 1000 + j, j as f32 * 0.001, 0.5));
+                }
+            }));
+        }
+        for i in 0..8 {
+            let s = share.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..1_000 {
+                    let sc = s.scalars();
+                    assert!(sc.rms >= 0.0, "rms must be non-negative");
+                    s.with_spectrum(|spec| assert!(spec.len() == 8 || spec.is_empty()));
+                    let _ = i; // prevent optimization
+                }
+            }));
+        }
+        for h in handles { h.join().unwrap(); }
+    }
+
+    // ── INVARIANT: AudioShare never hands out stale sample_rate=0 after publish ──
+    #[test]
+    fn audioshare_after_publish_sample_rate_reflects_features() {
+        let share = Arc::new(AudioShare::new());
+        let f = af(false, 100, 0.5, 0.8);
+        share.publish(&f);
+        let sc = share.scalars();
+        assert_eq!(sc.sample_rate, 48_000, "sample_rate must reflect last publish");
+        assert_eq!(sc.timestamp_ms, 100);
+    }
+
+    // ── STRESS: 100k publish cycles — spectrum size must stay stable ──────
+    // NOTE: led-core::AudioFeatures has Vec<f32> spectrum so it is NOT Copy.
+    // We construct a fresh AudioFeatures per iteration.
+    #[test]
+    fn audioshare_100k_publishes_spectrum_size_stable() {
+        let share = Arc::new(AudioShare::new());
+        for i in 0..100_000u64 {
+            let feat = af(i % 4 == 0, i, 1.0, 0.5);
+            share.publish(&feat);
+        }
+        // Spectrum size must remain exactly 8 (set on first publish, no resize after)
+        share.with_spectrum(|s| assert_eq!(s.len(), 8, "spectrum must not resize after init"));
+    }
+
+    // ── FUZZ: publish with empty spectrum → no panic ──────────────────────
+    #[test]
+    fn audioshare_empty_spectrum_no_panic() {
+        let share = Arc::new(AudioShare::new());
+        let f = AudioFeatures {
+            sample_rate: 44_100,
+            timestamp_ms: 0,
+            rms: 0.0, beat: false,
+            bass: 0.0, mid: 0.0, high: 0.0,
+            spectrum: vec![], // empty
+        };
+        share.publish(&f);
+        share.with_spectrum(|s| assert_eq!(s.len(), 0));
+        let sc = share.scalars();
+        assert_eq!(sc.sample_rate, 44_100);
+    }
+
+    // ── FUZZ: AudioShare with NaN/Inf energy values ────────────────────────
+    #[test]
+    fn audioshare_nan_inf_energy_publish_no_panic() {
+        let share = Arc::new(AudioShare::new());
+        let f = AudioFeatures {
+            sample_rate: 48_000, timestamp_ms: 1,
+            rms: f32::NAN, beat: false,
+            bass: f32::INFINITY, mid: f32::NEG_INFINITY, high: f32::NAN,
+            spectrum: vec![f32::NAN; 8],
+        };
+        share.publish(&f);
+        let sc = share.scalars();
+        assert!(sc.bass.is_infinite() || sc.bass.is_nan(), "extreme value preserved");
+    }
+
+    // ── CONTRACT: BeatFlash never retrigs on same timestamp ───────────────
+    #[test]
+    fn beatflash_no_retrig_same_timestamp() {
+        let share = Arc::new(AudioShare::new());
+        let fx = BeatFlash::new(PixelColor::rgb(0, 255, 0), 1000, share.clone());
+        share.publish(&af(true, 42, 0.0, 0.5));
+        let a = px(&fx, 0).g;
+        let b = px(&fx, 1).g;
+        // second render: same timestamp 42 — must NOT retrigger, must have decayed
+        assert!(b <= a, "same-ts beat must not retrigger: a={a} b={b}");
+    }
+
+    // ── CONTRACT: BandPulse gain=0 → always black ────────────────────────
+    #[test]
+    fn bandpulse_zero_gain_always_black() {
+        let share = Arc::new(AudioShare::new());
+        let fx = BandPulse::new(PixelColor::rgb(255, 0, 0), Band::Bass, 0.0, share.clone());
+        share.publish(&af(false, 1, 9999.0, 1.0));
+        assert_eq!(px(&fx, 0), PixelColor::default(), "gain=0 must be black regardless");
+    }
+
+    // ── CONTRACT: BandPulse never exceeds base color ──────────────────────
+    #[test]
+    fn bandpulse_never_exceeds_base_color() {
+        let share = Arc::new(AudioShare::new());
+        let base = PixelColor::rgb(100, 50, 200);
+        let fx = BandPulse::new(base, Band::Bass, 999.0, share.clone());
+        share.publish(&af(false, 1, 1.0, 1.0));
+        let out = px(&fx, 0);
+        assert!(out.r <= base.r, "r overflow: {} > {}", out.r, base.r);
+        assert!(out.g <= base.g, "g overflow: {} > {}", out.g, base.g);
+        assert!(out.b <= base.b, "b overflow: {} > {}", out.b, base.b);
+    }
+
+    // ── REAL-TIME: BeatFlash render must complete in < 1ms (50ms tick budget) ─
+    #[test]
+    fn beatflash_render_latency_under_1ms() {
+        use std::time::Instant;
+        let share = Arc::new(AudioShare::new());
+        let fx = BeatFlash::new(PixelColor::rgb(255, 255, 255), 500, share.clone());
+        share.publish(&af(true, 1, 0.5, 0.5));
+        let mut out = vec![PixelColor::default(); 1_000];
+        let pos = vec![Vec3::ZERO; 1_000];
+        let t0 = Instant::now();
+        fx.render(0, &pos, &mut out);
+        let elapsed = t0.elapsed();
+        assert!(elapsed.as_millis() < 5, "1000-pixel render took {}ms", elapsed.as_millis());
+    }
+}

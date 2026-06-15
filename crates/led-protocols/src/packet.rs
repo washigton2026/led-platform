@@ -103,3 +103,104 @@ pub fn start_code(pkt: &[u8]) -> u8 {
 pub fn dmx_slots(pkt: &[u8]) -> &[u8] {
     &pkt[126..126 + DMX_SLOTS]
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+
+    fn cid() -> [u8; 16] { [0xAB; 16] }
+    fn dmx_full() -> [u8; DMX_SLOTS] { [0xCC; DMX_SLOTS] }
+    fn dmx_zeros() -> [u8; DMX_SLOTS] { [0x00; DMX_SLOTS] }
+
+    // ── PROTOCOL: ACN PID must be correct on every packet ─────────────────
+    #[test]
+    fn acn_pid_invariant() {
+        let mut buf = [0u8; PACKET_LEN];
+        build_data_packet(&mut buf, &cid(), "LUMYX", 100, 0, 1, &dmx_full());
+        assert!(acn_pid_ok(&buf), "ACN PID must be correct");
+        assert_eq!(root_vector(&buf), VECTOR_ROOT_E131_DATA);
+        assert_eq!(framing_vector(&buf), VECTOR_E131_DATA_PACKET);
+    }
+
+    // ── PROTOCOL: DMX start code must always be 0x00 ──────────────────────
+    #[test]
+    fn dmx_start_code_always_zero() {
+        let mut buf = [0u8; PACKET_LEN];
+        for priority in [0u8, 100, 200] {
+            build_data_packet(&mut buf, &cid(), "TEST", priority, 42, 63999, &dmx_full());
+            assert_eq!(start_code(&buf), 0x00, "DMX start code must be 0x00");
+        }
+    }
+
+    // ── PROTOCOL: sequence wraps 0..=255 ──────────────────────────────────
+    #[test]
+    fn sequence_wraps_correctly() {
+        let mut buf = [0u8; PACKET_LEN];
+        for seq in [0u8, 127, 255] {
+            build_data_packet(&mut buf, &cid(), "TEST", 100, seq, 1, &dmx_zeros());
+            assert_eq!(sequence_of(&buf), seq);
+        }
+    }
+
+    // ── PROTOCOL: universe field round-trips 1..=63999 ────────────────────
+    #[test]
+    fn universe_round_trips() {
+        let mut buf = [0u8; PACKET_LEN];
+        for u in [1u16, 512, 1024, 32768, 63999] {
+            build_data_packet(&mut buf, &cid(), "TEST", 100, 0, u, &dmx_zeros());
+            assert_eq!(universe_of(&buf), u, "universe {u} must round-trip");
+        }
+    }
+
+    // ── PROTOCOL: DMX payload integrity — all 512 bytes preserved ─────────
+    #[test]
+    fn dmx_payload_integrity() {
+        let mut buf = [0u8; PACKET_LEN];
+        let mut dmx = [0u8; DMX_SLOTS];
+        for (i, b) in dmx.iter_mut().enumerate() { *b = (i % 256) as u8; }
+        build_data_packet(&mut buf, &cid(), "LUMYX", 100, 0, 1, &dmx);
+        assert_eq!(dmx_slots(&buf), &dmx, "all 512 DMX bytes must survive packet build");
+    }
+
+    // ── FUZZ: source name at max length (63 chars) ─────────────────────────
+    #[test]
+    fn source_name_max_length_no_overflow() {
+        let mut buf = [0u8; PACKET_LEN];
+        let long_name = "A".repeat(100); // longer than 63 bytes — must be truncated
+        build_data_packet(&mut buf, &cid(), &long_name, 100, 0, 1, &dmx_zeros());
+        assert!(acn_pid_ok(&buf), "long source name must not corrupt packet");
+        // Verify null termination exists within the 64-byte name field
+        let name_field = &buf[44..108];
+        assert!(name_field.iter().any(|&b| b == 0), "name field must be null-terminated");
+    }
+
+    // ── FUZZ: empty source name ────────────────────────────────────────────
+    #[test]
+    fn empty_source_name_is_valid() {
+        let mut buf = [0u8; PACKET_LEN];
+        build_data_packet(&mut buf, &cid(), "", 100, 0, 1, &dmx_zeros());
+        assert!(acn_pid_ok(&buf));
+        assert_eq!(buf[44], 0x00, "empty name: first byte of name field must be null");
+    }
+
+    // ── PROTOCOL: priority clamps stay in wire format ──────────────────────
+    #[test]
+    fn priority_extremes_survive_wire() {
+        let mut buf = [0u8; PACKET_LEN];
+        build_data_packet(&mut buf, &cid(), "TEST", 0, 0, 1, &dmx_zeros());
+        assert_eq!(buf[108], 0, "priority 0 on wire");
+        build_data_packet(&mut buf, &cid(), "TEST", 200, 0, 1, &dmx_zeros());
+        assert_eq!(buf[108], 200, "priority 200 on wire");
+    }
+
+    // ── STRESS: build 10_000 packets without allocation ───────────────────
+    #[test]
+    fn stress_10k_packet_builds() {
+        let mut buf = [0u8; PACKET_LEN];
+        let dmx = dmx_full();
+        for seq in 0..10_000u32 {
+            build_data_packet(&mut buf, &cid(), "LUMYX-STRESS", 100, (seq % 256) as u8, (seq % 512 + 1) as u16, &dmx);
+            assert!(acn_pid_ok(&buf));
+        }
+    }
+}

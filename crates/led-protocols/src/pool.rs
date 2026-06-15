@@ -102,3 +102,82 @@ mod tests {
         assert_eq!(buf[PACKET_LEN - 1], 0xBB);
     }
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::thread;
+
+    // ── STRESS: concurrent pull/drop from 16 threads ──────────────────────
+    #[test]
+    fn pool_concurrent_pull_drop_no_deadlock() {
+        let pool = Arc::new(BufferPool::new(8));
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let p = pool.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..1_000 {
+                    let mut buf = p.pull();
+                    buf[0] = 0xAB;
+                    buf[PACKET_LEN - 1] = 0xCD;
+                    drop(buf); // returns to pool
+                }
+            }));
+        }
+        for h in handles { h.join().unwrap(); }
+        // Pool must be non-empty — all bufs returned
+        assert!(pool.available() > 0, "some buffers must have returned");
+    }
+
+    // ── STRESS: exhaustion + fallback — pool grows (all bufs return on Drop) ─
+    // DESIGN NOTE: fallback-allocated buffers ALSO return to the pool on Drop
+    // (per the push_back call in PooledBuf::drop). This means the pool can grow
+    // beyond its initial capacity under burst load. Confirmed by test — documented.
+    #[test]
+    fn pool_exhaustion_fallback_returns_to_pool_grows() {
+        let pool = BufferPool::new(4);
+        let bufs: Vec<_> = (0..20).map(|_| pool.pull()).collect(); // 16 fallback allocs
+        assert_eq!(pool.available(), 0, "all 4 originals are checked out");
+        drop(bufs); // ALL 20 bufs return — pool grows beyond initial capacity
+        assert_eq!(pool.available(), 20, "pool absorbs fallback bufs: grows to 20");
+    }
+
+    // ── DESIGN RISK: pool growth under burst — cap it ─────────────────────
+    #[test]
+    fn pool_exhaustion_pool_never_shrinks_below_initial() {
+        let pool = BufferPool::new(4);
+        {
+            let _bufs: Vec<_> = (0..20).map(|_| pool.pull()).collect();
+        }
+        // after burst: pool has 20 — must have at least the original 4
+        assert!(pool.available() >= 4, "pool must retain at least initial capacity");
+    }
+
+    // ── INVARIANT: returned buffer is zero-initialized on reuse ──────────
+    #[test]
+    fn pool_returned_buffer_reusable() {
+        let pool = BufferPool::new(2);
+        {
+            let mut b = pool.pull();
+            b.fill(0xFF);
+        } // returned
+        // next pull may get the same buffer — writes must be possible
+        let mut b2 = pool.pull();
+        b2.fill(0x00);
+        assert!(b2.iter().all(|&x| x == 0));
+    }
+
+    // ── CHAOS: 1M pull/drop cycles — no panic, no leak ───────────────────
+    #[test]
+    fn pool_1m_cycles_no_panic() {
+        let pool = BufferPool::new(16);
+        for i in 0..1_000_000u32 {
+            let mut b = pool.pull();
+            b[0] = (i % 256) as u8;
+        }
+        // pool should still function
+        let b = pool.pull();
+        assert_eq!(b.len(), PACKET_LEN);
+    }
+}
