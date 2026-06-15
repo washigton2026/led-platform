@@ -43,6 +43,7 @@ impl<K: ComputeKernel> Effect for ComputeEffect<K> {
 
 /// Classic plasma field: three summed sine waves over logical position + time → a hue.
 /// Pure per-pixel; the CPU code below and [`PLASMA_WGSL`] compute the identical value.
+#[derive(Clone, Copy, Debug)]
 pub struct Plasma {
     pub scale: f32,
     pub speed: f32,

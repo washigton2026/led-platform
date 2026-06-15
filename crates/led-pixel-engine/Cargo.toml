@@ -8,6 +8,17 @@ description = "The render core: effects → per-pixel colors in logical space, w
 [dependencies]
 led-core = { path = "../led-core" }
 
+# GPU executor — hardware-gated; only activates when `--features gpu` is passed.
+# Requires a physical GPU + wgpu-compatible driver. CI runs without this feature.
+# The CPU ComputeEffect is the always-available reference; this feature adds a
+# wgpu dispatcher that runs the same WGSL kernel on the GPU.
+[features]
+gpu = ["wgpu"]
+
+[dependencies.wgpu]
+version = "22"
+optional = true
+
 [dev-dependencies]
 led-hal = { path = "../led-hal" }
 led-audio = { path = "../led-audio" }

@@ -13,6 +13,7 @@
 //! heartbeat never zeros, zero allocation on the hot path, Core reaches hardware only
 //! through `ProtocolOutput`.
 
+pub mod cluster;
 pub mod engine;
 pub mod hal;
 pub mod heartbeat;
@@ -21,6 +22,7 @@ pub mod sim;
 // Re-export the shared seams so `led_hal::*` and downstream code have one import surface.
 pub use led_core::*;
 
+pub use cluster::{ClusteredHal, SharedCluster};
 pub use engine::Core;
 pub use hal::Hal;
 pub use heartbeat::Heartbeat;

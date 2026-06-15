@@ -16,12 +16,14 @@
 pub mod color;
 pub mod compute;
 pub mod effect;
+pub mod gpu;
 pub mod pipeline;
 pub mod reactive;
 pub mod triple;
 
 pub use compute::{ComputeEffect, ComputeKernel, Plasma, PLASMA_WGSL};
 pub use effect::{Effect, Pulse, Rainbow, SolidColor, Vec3};
+pub use gpu::assert_cpu_gpu_parity;
 pub use pipeline::{spawn, PipelineHandle};
 pub use reactive::{AudioScalars, AudioShare, Band, BandPulse, BeatFlash};
 pub use triple::{triple_buffer, Consumer, Producer};
