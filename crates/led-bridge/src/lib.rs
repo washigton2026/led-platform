@@ -27,6 +27,6 @@ pub mod adapter;
 pub mod bridge;
 pub mod sim;
 
-pub use adapter::adapt;
+pub use adapter::{adapt, harmonic_ratio, is_tonal};
 pub use bridge::BridgeHandle;
 pub use sim::SimLoop;

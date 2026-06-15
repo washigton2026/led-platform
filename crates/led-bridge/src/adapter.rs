@@ -1,18 +1,26 @@
 //! `adapt` — the v1→v0 adapter function.
 //!
-//! ## Mapping
+//! ## Mapping (v1.1 — updated Cycle 7/8)
 //!
 //! | v1 field (audio-core)      | v0 field (led-core)   | Notes                        |
 //! |----------------------------|-----------------------|------------------------------|
 //! | `timestamp_ms`             | `timestamp_ms`        | direct                       |
 //! | `sample_rate`              | `sample_rate`         | direct                       |
 //! | `rms`                      | `rms`                 | direct                       |
-//! | `beat`                     | `beat`                | direct                       |
+//! | `beat`                     | `beat`                | direct (gated by harmonic)   |
 //! | `bass_energy`              | `bass`                | rename only                  |
 //! | `mid_energy`               | `mid`                 | rename only                  |
 //! | `high_energy`              | `high`                | rename only                  |
 //! | `spectrum[0..SPECTRUM_LEN]`| `spectrum` (Vec)      | copy fixed array → Vec slice |
-//! | `peak`, `onset`, `bpm`, …  | *(dropped)*           | v0 has no field for these    |
+//! | `peak`, `onset`, `bpm`     | *(dropped)*           | v0 has no field for these    |
+//! | `harmonic_ratio`           | *(available via fn)*  | use `harmonic_ratio(v1)`     |
+//!
+//! ## harmonic_ratio availability
+//!
+//! `led_core::AudioFeatures` (v0) does not carry `harmonic_ratio` — it predates v1.1.
+//! Consumers needing harmonic information should:
+//! 1. Call [`harmonic_ratio`] to extract it from the v1 features before adapting, OR
+//! 2. Depend directly on `audio_core::AudioFeatures` if they need the full v1.1 contract.
 //!
 //! ## Allocation contract
 //!
@@ -42,6 +50,22 @@ pub fn adapt(v1: &V1) -> V0 {
         high:         v1.high_energy,
         spectrum:     v1.spectrum.to_vec(),
     }
+}
+
+/// Extract `harmonic_ratio` from a v1 `AudioFeatures` without full adaptation.
+///
+/// Use this when downstream code needs only the harmonic content signal and not
+/// the full v0 `AudioFeatures`. Zero allocation, zero copy — just reads the field.
+#[inline]
+pub fn harmonic_ratio(v1: &V1) -> f32 {
+    v1.harmonic_ratio
+}
+
+/// True if `v1` is strongly tonal (sustained instrument, not transient).
+/// Equivalent to `harmonic_ratio(v1) >= audio_core::harmonics::TONAL_THRESHOLD`.
+#[inline]
+pub fn is_tonal(v1: &V1) -> bool {
+    v1.harmonic_ratio >= audio_core::harmonics::TONAL_THRESHOLD
 }
 
 /// Zero-alloc variant: write the adapted v0 fields into a pre-allocated `V0`.

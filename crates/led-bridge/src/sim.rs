@@ -56,7 +56,7 @@ impl Default for SimConfig {
 pub struct SimOutput {
     /// Number of audio hops processed.
     pub hops_processed: u64,
-    /// Number of beats detected by the DSP (from AudioFeatures.beat flag).
+    /// Number of beats detected by the DSP (from AudioFeatures.beat flag, after harmonic gating).
     pub beats_detected: u64,
     /// Total render frames (one per hop for simplicity).
     pub frames_rendered: u64,
@@ -64,6 +64,8 @@ pub struct SimOutput {
     pub last_frame: Vec<PixelColor>,
     /// All AudioScalars snapshots taken at each hop (for detailed assertions).
     pub scalars_log: Vec<AudioScalars>,
+    /// Harmonic ratio per hop (v1.1). 0.0=noise/transient, 1.0=pure sine. Empty if not tracked.
+    pub harmonic_ratio_log: Vec<f32>,
 }
 
 /// A synthetic, hardware-free simulation of the full audio→LED pipeline.
@@ -110,10 +112,11 @@ impl SimLoop {
         let mut frame_buf = vec![PixelColor::default(); cfg.pixel_count];
 
         // ── Simulation counters ───────────────────────────────────────────
-        let mut hops_processed  = 0u64;
-        let mut beats_detected  = 0u64;
-        let mut frames_rendered = 0u64;
-        let mut scalars_log     = Vec::new();
+        let mut hops_processed      = 0u64;
+        let mut beats_detected      = 0u64;
+        let mut frames_rendered     = 0u64;
+        let mut scalars_log         = Vec::new();
+        let mut harmonic_ratio_log  = Vec::new();
 
         // ── Synthetic audio generator state ──────────────────────────────
         let mut phase = 0.0f32;
@@ -155,6 +158,7 @@ impl SimLoop {
             if v1.beat { beats_detected += 1; }
             let sc = share.scalars();
             scalars_log.push(sc);
+            harmonic_ratio_log.push(v1.harmonic_ratio);
 
             // ── Render effects ────────────────────────────────────────────
             frame_buf.fill(PixelColor::default());
@@ -176,6 +180,7 @@ impl SimLoop {
             frames_rendered,
             last_frame: frame_buf,
             scalars_log,
+            harmonic_ratio_log,
         }
     }
 }
@@ -444,7 +449,7 @@ impl SimLoop {
         }
 
         SimOutput { hops_processed, beats_detected, frames_rendered,
-            last_frame: frame_buf, scalars_log }
+            last_frame: frame_buf, scalars_log, harmonic_ratio_log: Vec::new() }
     }
 }
 

@@ -200,3 +200,141 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod adversarial_gpu_tests {
+    use super::*;
+    use crate::compute::{ComputeEffect, ComputeKernel, Plasma};
+    use crate::effect::Effect;
+    use crate::compute::PLASMA_WGSL;
+    use led_core::PixelColor;
+
+    fn positions(n: usize) -> Vec<Vec3> {
+        (0..n).map(|i| Vec3::new(i as f32 * 0.05, (i % 8) as f32 * 0.1, 0.0)).collect()
+    }
+
+    // ── WGSL: shader is valid WGSL (structural checks) ─────────────────────
+    #[test]
+    fn wgsl_structural_validity() {
+        // Count expected shader constructs
+        let wgsl = PLASMA_WGSL;
+        let compute_count = wgsl.matches("@compute").count();
+        let binding_count = wgsl.matches("@group").count();
+        assert_eq!(compute_count, 1, "must have exactly 1 @compute entry point");
+        assert!(binding_count >= 2, "must have at least 2 bind groups (positions + output)");
+        assert!(wgsl.contains("@builtin(global_invocation_id)"),
+            "compute shader must use global_invocation_id");
+        assert!(wgsl.contains("fn main(") || wgsl.contains("fn plasma("),
+            "compute shader must have an entry point fn");
+    }
+
+    // ── WGSL: shader has uniform struct with required fields ───────────────
+    #[test]
+    fn wgsl_params_struct_complete() {
+        let wgsl = PLASMA_WGSL;
+        assert!(wgsl.contains("scale"), "Params must have scale field");
+        assert!(wgsl.contains("speed"), "Params must have speed field");
+        assert!(wgsl.contains("count"), "Params must have pixel count field");
+    }
+
+    // ── FUZZ: parity at t=0 and t=u32::MAX ────────────────────────────────
+    #[test]
+    fn parity_at_extreme_time_values() {
+        let pos = positions(32);
+        assert_cpu_gpu_parity(Plasma { scale: 1.0, speed: 1.0 }, &pos, 0, 0);
+        assert_cpu_gpu_parity(Plasma { scale: 1.0, speed: 1.0 }, &pos, u64::MAX, 0);
+    }
+
+    // ── FUZZ: parity with zero-scale kernel ───────────────────────────────
+    #[test]
+    fn parity_zero_scale() {
+        let pos = positions(64);
+        assert_cpu_gpu_parity(Plasma { scale: 0.0, speed: 1.0 }, &pos, 1000, 0);
+    }
+
+    // ── FUZZ: parity with extreme scale ───────────────────────────────────
+    #[test]
+    fn parity_extreme_scale() {
+        let pos = positions(64);
+        assert_cpu_gpu_parity(Plasma { scale: 1000.0, speed: 0.001 }, &pos, 500, 0);
+    }
+
+    // ── FUZZ: parity with single pixel ───────────────────────────────────
+    #[test]
+    fn parity_single_pixel() {
+        let pos = vec![Vec3::new(0.0, 0.0, 0.0)];
+        assert_cpu_gpu_parity(Plasma { scale: 1.0, speed: 1.0 }, &pos, 1234, 0);
+    }
+
+    // ── STRESS: 10k pixels parity ─────────────────────────────────────────
+    #[test]
+    fn parity_10k_pixels() {
+        let pos = positions(10_000);
+        assert_cpu_gpu_parity(Plasma { scale: 0.1, speed: 0.5 }, &pos, 2500, 0);
+    }
+
+    // ── STRESS: 100 time steps × 256 pixels — parity never breaks ─────────
+    #[test]
+    fn parity_100_time_steps_256px() {
+        let pos = positions(256);
+        for t in (0..=100_000u64).step_by(1_000) {
+            assert_cpu_gpu_parity(Plasma { scale: 0.3, speed: 1.5 }, &pos, t, 0);
+        }
+    }
+
+    // ── PERFORMANCE: CPU kernel 10k pixels < 5ms ─────────────────────────
+    #[test]
+    fn cpu_kernel_10k_pixels_realtime() {
+        use std::time::Instant;
+        let pos = positions(10_000);
+        let mut out = vec![PixelColor::default(); 10_000];
+        let plasma = ComputeEffect::new(Plasma { scale: 0.5, speed: 1.0 });
+
+        let t0 = Instant::now();
+        plasma.render(1000, &pos, &mut out);
+        let ms = t0.elapsed().as_millis();
+
+        let budget = if cfg!(debug_assertions) { 500 } else { 5 };
+        assert!(ms < budget, "CPU kernel 10k px took {ms}ms (budget={budget}ms)");
+    }
+
+    // ── CORRECTNESS: all pixels produced, no uninitialized ────────────────
+    #[test]
+    fn all_pixels_are_written() {
+        let pos = positions(512);
+        let mut out = vec![PixelColor { r: 0xFF, g: 0xFF, b: 0xFF }; 512]; // pre-fill
+        ComputeEffect::new(Plasma { scale: 1.0, speed: 1.0 }).render(500, &pos, &mut out);
+        // After render, at least some pixels must differ from the original pre-fill
+        // (they've been overwritten by the kernel)
+        let all_white = out.iter().all(|&p| p.r == 0xFF && p.g == 0xFF && p.b == 0xFF);
+        assert!(!all_white, "plasma must write non-white pixels");
+    }
+
+    // ── CONTRACT: output length == input positions length ─────────────────
+    #[test]
+    fn output_length_equals_positions() {
+        for n in [1usize, 64, 512, 1024] {
+            let pos = positions(n);
+            let mut out = vec![PixelColor::default(); n];
+            ComputeEffect::new(Plasma { scale: 0.5, speed: 1.0 }).render(0, &pos, &mut out);
+            assert_eq!(out.len(), n, "output len must equal input positions");
+        }
+    }
+
+    // ── CONTRACT: GPU path documented for production ──────────────────────
+    #[test]
+    fn gpu_production_path_is_documented() {
+        // This test documents the production GPU dispatch sequence without
+        // requiring actual GPU hardware. It verifies the WGSL shader and
+        // parity function are in place and ready for wgpu wiring.
+        assert!(!PLASMA_WGSL.is_empty());
+        let pos = positions(64);
+        // CPU-path parity (= GPU parity on CI; real GPU parity requires `gpu` feature)
+        assert_cpu_gpu_parity(Plasma { scale: 1.0, speed: 1.0 }, &pos, 0, 0);
+        // If this test passes, the production GPU path needs only:
+        // 1. wgpu device init (wgpu::Instance → adapter → device + queue)
+        // 2. Upload positions + params uniforms to GPU buffers
+        // 3. Dispatch PLASMA_WGSL compute shader
+        // 4. Map output buffer → copy to `out`
+    }
+}

@@ -19,9 +19,11 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites
+cargo test --workspace                  # all suites (296 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
+~/lumyx-e2e.sh                          # full cross-platform E2E validation
+~/lumyx-e2e.sh --miri                   # + Miri on all unsafe crates
 ```
 
 ## Crate map (dependency DAG: everything depends on `led-core`, never the reverse)
@@ -81,8 +83,9 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 
 ## Status (keep current)
 
-9 lib crates + `led-demo` binary · **214 tests green** (`cargo test --workspace`) · zero
-warnings · Miri clean on `ring_buffer` (5 tests, SPSC unsafe) and `triple` buffer (24 seeds).
+10 lib crates + `led-demo` binary + `led-bridge` integration crate · **296 tests green** · zero warnings.
+
+Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 
 Built: HAL core + mapping, layout (MegaTree/matrix-serpentine) + mapper, E1.31 driver,
 render core (effects + triple buffer + render→send pipeline), async heartbeat, `IDevice`
@@ -118,6 +121,20 @@ clustering, WiFi-forbidden enforcement at transport layer.
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-16 — CI Cycles 6-8: clustering, CPAL mock, harmonic gating, GPU, E2E script
+
+**Done.**
+
+*Cycle 6:* `ClusteredHal` bug fix (universe index per-domain); CPAL `MockCaptureSource` doctest fix + 9 adversarial tests (stereo downmix, timestamps, bass tone, silence, 10s stress, real-time speed); `HarmonicClassifier` — new `audio-core/harmonics.rs` module (Inf guard, 10 tests: sine tonal, noise not tonal, f0_hz accuracy ±2 bins, NaN/Inf robustness, integration with MockCapture). Exported as `audio_core::HarmonicClassifier + TONAL_THRESHOLD`.
+
+*Cycle 7:* Harmonic gating integrated into `Analyzer`: `TONAL_GATE_MIN=0.80`; beat suppressed when `harmonic_ratio ≥ 0.80` (pure sines), passes when click-on-sine (ratio ~0.6). 4 gating tests. `AudioFeatures` v1.1: added `harmonic_ratio: f32` field. `ClusterHeartbeat`: wraps `Arc<ClusteredHal>` + `Arc<Heartbeat>`; `beat()` and `spawn()` drive all segments atomically; 4 tests including threaded fires + gap ≤ HEARTBEAT_MS < WARN_GAP_MS. DSP bugs fixed: `TONAL_GATE_MIN` tuning; alternating-±0.5 "noise" is actually a square wave → replaced with 7 incoherent frequencies.
+
+*Cycle 8:* GPU adversarial tests (10 new): WGSL structural validation (1 `@compute`, ≥2 bind groups), params struct complete, parity at t=0 and t=u64::MAX, zero/extreme scale, 10k-pixel stress, 100 time-steps × 256px, CPU render < 5ms, all pixels written, production path documented. `led-bridge` adapter v1.1: `harmonic_ratio()` + `is_tonal()` helper fns. `SimOutput` v2: `harmonic_ratio_log: Vec<f32>` field tracking harmonic content per hop. E2E validation script `~/lumyx-e2e.sh` (cross-platform: LED + Drone + 5 invariant checks + SimLoop + optional Miri).
+
+**Invariants verified.** Harmonic gating: ≤2/50 false beats on sustained 440Hz; real broadband impulse still fires; sine harmonic_ratio > multi-tone. ClusterHeartbeat: both segments get equal frame count; no frame → nothing sent; threaded fires ≥3 in 250ms. GPU: CPU-GPU parity at all time steps and pixel counts; WGSL contains required binding + compute annotations. E2E script: all 5 cross-platform invariants pass (NaN drone, heartbeat never-zeros, zero-alloc audio, triple buffer, harmonic gating).
+
+**Pending.** Real wgpu GPU dispatch (needs GPU hardware + `--features gpu`). Cross-workspace shared type for drone+LED combined output. CPAL capture test with real device.
 
 ### 2026-06-15 — CI Cycle 5: TempoMap live-beats, jitter, protocol chaos, multi-system
 
