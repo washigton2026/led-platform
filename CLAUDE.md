@@ -136,7 +136,7 @@ Sequence wrap 255→0 detected; out-of-order via signed diff; corrupted ACN PID 
 LED thread (SimLoop→adapt→HAL) + Drone safety (O(n²) 50-drone) concurrent: both complete within budget. AudioShare under 200Hz write + 60fps read: no deadlock. 2 independent HAL instances: independent content (red vs blue). Drone + LED heartbeat concurrent: 0 violations, ≥2 heartbeats. Stress: 4 LED + 4 Drone threads, all pass.
 
 *P5 — Miri:*
-`audio-core ring_buffer` 5 PASS (SPSC `unsafe impl Sync`). `led-bridge/adapter` Miri running.
+`audio-core ring_buffer` 5 PASS (SPSC `unsafe impl Sync`). `led-bridge/adapter` **6 PASS** (adapt/adapt_into/NaN/1M iter — no UB detected, ~7min under Miri).
 
 **Invariants verified.**
 - TempoMap::from_beat_flags: sorted, deduped, consistent with constant BPM at ±2 hops.
