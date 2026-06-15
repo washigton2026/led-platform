@@ -373,6 +373,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "led-bridge"
+version = "0.1.0"
+dependencies = [
+ "audio-core",
+ "led-core",
+ "led-hal",
+ "led-layout",
+ "led-pixel-engine",
+ "led-protocols",
+ "led-sequencer",
+ "tokio",
+]
+
+[[package]]
 name = "led-core"
 version = "0.1.0"
 

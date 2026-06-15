@@ -10,6 +10,7 @@ members = [
     "crates/led-audio",
     "crates/led-demo",
     "crates/audio-core",
+    "crates/led-bridge",
 ]
 
 [workspace.package]

@@ -1,0 +1,24 @@
+[package]
+name    = "led-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# This crate is the ONLY place in the workspace that depends on BOTH
+# audio-core (v1.0 contract) and led-pixel-engine (AudioShare / v0 contract).
+# Its sole job: adapt audio-core::AudioFeatures v1 → led-core::AudioFeatures v0
+# and keep AudioShare current at the analysis rate.
+#
+# Dependency rule: all other crates stay clean of this bridge.
+
+[dependencies]
+audio-core       = { path = "../audio-core" }
+led-core         = { path = "../led-core" }
+led-pixel-engine = { path = "../led-pixel-engine" }
+tokio            = { version = "1", features = ["sync", "rt"] }
+
+[dev-dependencies]
+led-sequencer   = { path = "../led-sequencer" }
+led-protocols   = { path = "../led-protocols" }
+led-hal         = { path = "../led-hal" }
+led-layout      = { path = "../led-layout" }
