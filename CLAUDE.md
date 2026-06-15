@@ -81,9 +81,8 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 
 ## Status (keep current)
 
-9 lib crates + `led-demo` binary · **186 tests green** (`cargo test --workspace`) · zero
-warnings · Miri clean on `ring_buffer` (5 tests, SPSC unsafe) and `triple` buffer (Miri
-confirmed in previous sessions across 24 scheduler seeds).
+9 lib crates + `led-demo` binary · **214 tests green** (`cargo test --workspace`) · zero
+warnings · Miri clean on `ring_buffer` (5 tests, SPSC unsafe) and `triple` buffer (24 seeds).
 
 Built: HAL core + mapping, layout (MegaTree/matrix-serpentine) + mapper, E1.31 driver,
 render core (effects + triple buffer + render→send pipeline), async heartbeat, `IDevice`
@@ -119,6 +118,34 @@ clustering, WiFi-forbidden enforcement at transport layer.
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-15 — CI Cycle 5: TempoMap live-beats, jitter, protocol chaos, multi-system
+
+**Done.**
+
+*P1 — TempoMap from live beats (led-sequencer, 8 tests):*
+`from_beat_flags` sorted+deduped invariant; 120 BPM beat-time accuracy ±2 hops; `snap()` to nearest beat; fuzz with empty/all-false stream; jitter tolerance ±10ms; constant vs detected BPM agreement; 10k stream build <50ms.
+
+*P2 — Scheduler jitter simulation (led-bridge/sim.rs, 5 tests):*
+`SimLoop::run_with_jitter()` injects hop timestamp gaps. Tests: 50% / 100% / 80% jitter survive; sample_rate valid throughout; pixels valid; zero-jitter == normal run.
+
+*P3 — Protocol chaos (led-protocols/packet.rs, 8 tests):*
+Sequence wrap 255→0 detected; out-of-order via signed diff; corrupted ACN PID detected; corrupted universe no panic; short buffer no panic; burst 256 sequential packets all valid; heartbeat after seq wrap preserves payload.
+
+*P4 — Multi-system simultaneous (led-bridge/tests/multi_system.rs, 5 tests):*
+LED thread (SimLoop→adapt→HAL) + Drone safety (O(n²) 50-drone) concurrent: both complete within budget. AudioShare under 200Hz write + 60fps read: no deadlock. 2 independent HAL instances: independent content (red vs blue). Drone + LED heartbeat concurrent: 0 violations, ≥2 heartbeats. Stress: 4 LED + 4 Drone threads, all pass.
+
+*P5 — Miri:*
+`audio-core ring_buffer` 5 PASS (SPSC `unsafe impl Sync`). `led-bridge/adapter` Miri running.
+
+**Invariants verified.**
+- TempoMap::from_beat_flags: sorted, deduped, consistent with constant BPM at ±2 hops.
+- Jitter: sample_rate never corrupted; pixels always valid u8; run_with_jitter(0,0)=run().
+- Protocol chaos: corrupted PID detected; sequence wrap valid; no panic on bad inputs.
+- Multi-system: 4+4 threads complete; AudioShare no deadlock; HAL instances independent.
+- 214 tests, 0 warnings.
+
+**Pending.** Real wgpu GPU executor; multi-device clustering; harmonic/overtone detection for richer beat classification; cross-workspace drone+LED integration test (requires shared workspace or FFI boundary); CPAL capture test (no hardware).
 
 ### 2026-06-15 — CI Cycles 1-4: adversarial suites, audio→LED bridge, BeatDetector v2
 
