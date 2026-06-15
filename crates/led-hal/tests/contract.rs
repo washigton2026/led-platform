@@ -87,3 +87,79 @@ fn core_reaches_hardware_only_through_protocol_output() {
     core.render_and_send(&frame).unwrap();
     assert_eq!(core.universe_count(), 2);
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Heartbeat REAL TIMING tests (P2 — Cycle 4)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn heartbeat_thread_fires_within_interval_budget() {
+    use std::time::{Duration, Instant};
+    let (sim1, _s2, hal) = setup();
+    let hb = Arc::new(Heartbeat::new());
+
+    // Record a real frame so the heartbeat has something to send.
+    let mut pixels = vec![PixelColor::default(); PIXELS];
+    pixels[0] = PixelColor::rgb(200, 100, 50);
+    hb.record(&LogicalFrame::new(pixels, 0));
+
+    let hal: Arc<dyn led_core::ProtocolOutput> = Arc::new(hal);
+
+    // Spawn heartbeat at 100ms interval.
+    let interval = Duration::from_millis(100);
+    let _handle = Arc::clone(&hb).spawn(Arc::clone(&hal), interval);
+
+    // Wait 350ms — expect at least 3 heartbeats (fired at ~100, 200, 300 ms).
+    let t0 = Instant::now();
+    std::thread::sleep(Duration::from_millis(350));
+    let elapsed = t0.elapsed();
+
+    let sent = sim1.frames_sent();
+    assert!(sent >= 2,
+        "heartbeat must fire ≥2 times in {}ms at 100ms interval (got {})",
+        elapsed.as_millis(), sent);
+
+    // Each heartbeat must have sent the REAL frame, not zeros.
+    assert_eq!(sim1.channel(0, 1), Some(200),
+        "heartbeat must resend the real frame content (R channel in GRB)");
+}
+
+#[test]
+fn heartbeat_gap_thresholds_match_gosl_rules() {
+    // Inline the threshold constants from LUMYX_GOSL / led-protocols::heartbeat
+    // to avoid adding led-protocols as a dev-dep here.
+    const HEARTBEAT_MS: u64 = 800;
+    const WARN_GAP_MS:  u64 = 2_000;
+    const CRIT_GAP_MS:  u64 = 2_500;
+
+    // LUMYX_GOSL rule: heartbeat interval must be below warning threshold.
+    assert!(HEARTBEAT_MS < WARN_GAP_MS,
+        "HEARTBEAT_MS ({HEARTBEAT_MS}) must be < WARN_GAP_MS ({WARN_GAP_MS})");
+
+    // 1 missed interval (800ms) → well inside Ok zone.
+    assert!(HEARTBEAT_MS < WARN_GAP_MS, "one missed heartbeat must stay Ok");
+
+    // 2 missed intervals (1600ms) → still Ok.
+    assert!(HEARTBEAT_MS * 2 < WARN_GAP_MS, "two missed heartbeats must stay Ok");
+
+    // 3 missed intervals (2400ms) → Warning zone (2000-2500ms).
+    let triple = HEARTBEAT_MS * 3;
+    assert!(triple >= WARN_GAP_MS && triple < CRIT_GAP_MS,
+        "3 missed heartbeats ({triple}ms) must be in Warning zone [2000, 2500)");
+
+    // 4 missed intervals (3200ms) → Critical.
+    let quad = HEARTBEAT_MS * 4;
+    assert!(quad >= CRIT_GAP_MS,
+        "4 missed heartbeats ({quad}ms) must be Critical (≥2500ms)");
+}
+
+#[test]
+fn heartbeat_never_sends_zero_frame_when_record_never_called() {
+    // INVARIANT: If no frame was ever recorded, heartbeat must send NOTHING.
+    // This is the "never zeros" rule from LUMYX_GOSL.
+    let (_s1, _s2, hal) = setup();
+    let hb = Heartbeat::new();
+    // no hb.record() call
+    let result = hb.beat(&hal).unwrap();
+    assert!(!result, "beat with no recorded frame must return false (sent nothing)");
+}

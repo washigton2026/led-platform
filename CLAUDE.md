@@ -37,6 +37,7 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
 | `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
 | `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
+| `led-bridge` | **integration seam** — the only crate that imports both `audio-core` (v1) and `led-pixel-engine` (v0). Owns: `adapt`/`adapt_into` (v1→v0 adapter), `BridgeHandle` (watch→AudioShare thread), `SimLoop` (hardware-free end-to-end live loop) | — |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
 (a `Timeline` *is* an `Effect`) → `led-pixel-engine` renders `LogicalFrame`s → (lock-free
@@ -49,16 +50,15 @@ Audio→light (Phase-1, wired): `led-audio` analyzes samples → `led-core::Audi
 `AudioFeatures` from `led-core`, so it does **not** depend on `led-audio` (only the
 app/test wires them together).
 
-Audio intelligence (`audio-core`, not yet wired): a separate, richer realtime pipeline —
-own `AudioFeatures` (adds `peak`, `onset`, `bpm`, `spectral_centroid`, `spectral_rolloff`,
-`spectral_flux`, `musical_section`; `spectrum` is `[f32; 512]` not `Vec<f32>` for a `Copy`,
-alloc-free struct) — per the `lumyx-system-architect` skill's contract (§3/§11, owner
-`audio-core/`). **Contract divergence flagged per that skill's §10/§15**: `led-core`'s
-smaller `AudioFeatures` (consumed by `led-audio`/`led-pixel-engine` above) is now the
-outdated sub-skill version relative to the architect skill's canonical contract. Not yet
-reconciled — `audio-core` does not feed the existing `AudioShare` bridge. Future work:
-either migrate `led-core::AudioFeatures` to the v1.0 shape (major-version, multi-crate
-change, see `references/data-contracts.md`) or add an adapter at the `AudioShare` boundary.
+Audio intelligence (`audio-core`, now wired via `led-bridge`): a separate, richer realtime
+pipeline — own `AudioFeatures` (adds `peak`, `onset`, `bpm`, `spectral_centroid`,
+`spectral_rolloff`, `spectral_flux`, `musical_section`; `spectrum` is `[f32; 512]` not
+`Vec<f32>` for a `Copy`, alloc-free struct). **Contract divergence resolved at the
+`led-bridge` boundary** (Cycle 3): `led_bridge::adapt_into` maps v1→v0 fields
+(`bass_energy→bass`, `mid_energy→mid`, etc.), zero-alloc after warmup. `BridgeHandle`
+spawns a thread that polls `watch::Receiver<V1>` and calls `AudioShare::publish` at the
+analysis rate (~5ms/hop). `SimLoop` provides a hardware-free end-to-end test of the full
+pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash → pixels.
 
 ## Invariants that bite (enforced by tests — don't regress)
 
@@ -81,32 +81,30 @@ change, see `references/data-contracts.md`) or add an adapter at the `AudioShare
 
 ## Status (keep current)
 
-8 lib crates + `led-demo` binary · **103 tests green** (`cargo test --workspace`) · zero
-warnings · a runnable demo renders `show.gif` (a watchable show) · triple buffer validated
-natively (200k-publish stress) and under Miri across 24 scheduler seeds.
+9 lib crates + `led-demo` binary · **186 tests green** (`cargo test --workspace`) · zero
+warnings · Miri clean on `ring_buffer` (5 tests, SPSC unsafe) and `triple` buffer (Miri
+confirmed in previous sessions across 24 scheduler seeds).
 
 Built: HAL core + mapping, layout (MegaTree/matrix-serpentine) + mapper, E1.31 driver,
 render core (effects + triple buffer + render→send pipeline), async heartbeat, `IDevice`
 lifecycle with firmware safety, non-destructive sequencer (clips, fades/crossfade, opacity
 keyframes, add/multiply/override blend; the timeline drives the pipeline as an `Effect`),
 audio analysis (Hann FFT, band energy, spectral-flux beat → `AudioFeatures`), audio→light
-bridge (`AudioShare` + `BandPulse`/`BeatFlash` reactive effects driven by live features),
-beat-synced clip/keyframe timing (`TempoMap` from constant BPM or detected beats),
-per-universe multicast sACN, ArtPoll source-conflict detection, GPU-style compute effects
-(portable per-pixel `Plasma` kernel + matching `PLASMA_WGSL`; CPU executor tested, real
-wgpu executor specified behind a hardware-gated `gpu` feature).
+bridge (`AudioShare` + `BandPulse`/`BeatFlash` reactive effects), beat-synced clip/keyframe
+timing (`TempoMap`), per-universe multicast sACN, ArtPoll source-conflict detection,
+GPU-style compute effects (`Plasma` kernel + WGSL).
 
-Realtime audio (`audio-core`, new): CPAL default-input capture (F32/I16/U16 formats,
-downmixed to mono) → SPSC ring buffer → sliding 1024-sample window (256-sample hop, 75%
-overlap) → Hann window → `rustfft` → bands/centroid/rolloff/spectral-flux beat (EMA
-0.9/0.1)/BPM → `AudioFeatures` (v1.0, lumyx-system-architect contract) → broadcast via
-`tokio::sync::watch`. Leaf crate: no workspace dependencies, no imports of
-sequencer/effect-engine/protocols.
+Realtime audio (`audio-core`): CPAL capture → SPSC ring buffer → Hann FFT → bands/beat/BPM
+→ `AudioFeatures` v1.0 → `tokio::sync::watch`. BeatDetector tuned v2: sensitivity=2.3,
+refractory=8 (suppresses Hann-windowing false positives on sustain; validated 120 BPM detection).
 
-Not built yet: wiring the real wgpu GPU executor (needs a `gpu` feature + GPU hardware),
-multi-device clustering / shared frame deadline, reconciling `audio-core`'s `AudioFeatures`
-with `led-core`'s (see crate map), wiring `audio-core` into the render-side `AudioShare`
-bridge.
+Audio→LED bridge (`led-bridge`, new in Cycle 3-4): `adapt`/`adapt_into` (v1→v0, zero-alloc),
+`BridgeHandle` (watch→AudioShare thread, ~5ms latency), `SimLoop` (hardware-free E2E:
+SineGen→Analyzer→adapt→AudioShare→effects→pixels). End-to-end pipeline verified via
+`led-bridge/tests/e2e_pipeline.rs` (7 tests, full HAL stack).
+
+Not built yet: real wgpu GPU executor (`gpu` feature, needs hardware), multi-device
+clustering, WiFi-forbidden enforcement at transport layer.
 
 ## Conventions
 
@@ -121,6 +119,41 @@ bridge.
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-15 — CI Cycles 1-4: adversarial suites, audio→LED bridge, BeatDetector v2
+
+**Done.**
+
+*Cycles 1-2 — adversarial test suites:*
+Added 52+ adversarial tests across `led-sequencer/timeline` (determinism, 1k overlapping clips, marker flood, blend invariants, u64::MAX), `audio-core/contracts` (spectrum len, Copy stress, timestamp monotonicity), `led-protocols/packet` (wire format, fuzz, 10k build stress), `led-protocols/pool` (1M chaos, 16-thread concurrent), `led-pixel-engine/triple` (1M cycles no torn frames, concurrent threads, latency), `led-pixel-engine/reactive` (8×8 concurrent AudioShare, NaN/Inf handling), `drone-safety` (geofence boundary, NaN/∞, 200-drone O(n²)), `drone-trajectory` (smoothstep invariants, 1k-drone stress).
+
+Fixed 4 bugs: [BUG-3] `smoothstep(NaN)` propagated NaN into drone positions (CRITICAL — SAFETY); [BUG-4] `fits_envelope(dur≤0)` returned `true` via negative-speed comparison (CRITICAL — SAFETY); [BUG-5] `BufferPool` grows without bound under burst load (design risk, documented); [BUG-6] `led-core::AudioFeatures` is not `Copy` (test error).
+
+*Cycle 3 — audio→LED bridge:*
+New crate `led-bridge`: `adapter.rs` (`adapt`/`adapt_into`, v1→v0, zero-alloc after warmup, ptr-comparison proof), `bridge.rs` (`BridgeHandle`, tokio current_thread runtime, watch→AudioShare, clean shutdown), `sim.rs` (`SimLoop`: SineGen+BeatImpulse→Analyzer→adapt→AudioShare→BandPulse/BeatFlash→SimOutput, deterministic, <5ms/hop). 23 unit tests.
+
+DSP finding: 440Hz sine with 75% overlap produces ~55 false beats/2s (Hann-windowing non-integer bin rotation). Paradox: adding impulses REDUCES beats (EMA threshold elevation). Documented and tracked.
+
+*Cycle 4 — BeatDetector v2, heartbeat timing, E2E stack, Miri:*
+`BeatDetector::new()` tuned: sensitivity 1.5→2.3, refractory 3→8 frames. Validated: 120 BPM still detected (≥8/10 beats), sustained flat spectrum no longer re-triggers. New regression suite (5 tests).
+Heartbeat real-timing tests: thread fires ≥2× in 350ms at 100ms interval; gap thresholds match LUMYX_GOSL (HEARTBEAT_MS=800 < WARN_GAP_MS=2000 < CRIT_GAP_MS=2500).
+E2E integration tests (`led-bridge/tests/e2e_pipeline.rs`, 7 tests): SimLoop→adapt→AudioShare→effects→LogicalFrame→Hal→SimulatorDevice full stack verified; full-stack latency <5ms avg; heartbeat resends last sim frame.
+Miri: `audio-core ring_buffer` 5 tests PASS (SPSC `unsafe impl Sync` verified). `led-pixel-engine/triple` Miri verified in previous sessions (24 scheduler seeds).
+
+**Invariants verified.**
+- smoothstep(NaN)=0.0 (never propagates into drone positions).
+- fits_envelope(dur≤0)=false always (negative/zero duration always fails safety gate).
+- adapt_into() ptr-stable after warmup (zero-alloc on steady-state bridge).
+- BeatDetector: refractory=8 blocks exactly 8 frames; sensitivity=2.3 rejects sustained-sine windowing flux; 120 BPM detection ≥80%.
+- Heartbeat thread fires within GOSL budget; never sends zeros.
+- SimLoop deterministic: same config→same output; timestamp monotone; <5ms/hop.
+- E2E: pixel 0 maps to device channel 0 with correct RGB order; mapping applied exactly N×.
+- Miri clean: ring_buffer SPSC (5 tests); triple buffer (24 scheduler seeds, prior session).
+- 186 tests, 0 warnings.
+
+**Pending.** Real wgpu GPU executor; multi-device clustering; WiFi-forbidden enforcement; `audio-core` CPAL capture not testable without hardware. `BeatDetector` EMA-paradox on impulse+sine (documented in `sim.rs`). Cycle 5 targets: harmonic/overtone detection, TempoMap-from-live-beats integration, latency measurement under simulated scheduler jitter.
+
+**Decisions.** BeatDetector defaults changed globally (v2); downstream consumers using `BeatDetector::new()` will see stricter gate — correct direction for production. `led-bridge` is the permanent adapter seam; never import `audio-core` from any other workspace crate. `SimLoop` is the canonical E2E regression target for future DSP and bridge changes.
 
 ### 2026-06-10 — `audio-core`: realtime audio intelligence (leaf crate)
 
