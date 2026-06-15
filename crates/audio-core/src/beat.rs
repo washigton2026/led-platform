@@ -22,6 +22,11 @@ use crate::contracts::SPECTRUM_LEN;
 const FLUX_AVG_DECAY: f32 = 0.9;
 /// EMA weight given to the new flux sample on each frame (`1.0 - FLUX_AVG_DECAY`).
 const FLUX_AVG_GAIN: f32 = 0.1;
+/// v3: after this many consecutive frames with flux < flux_avg (steady-state),
+/// apply a sustain multiplier to the beat threshold to suppress tonal artefacts.
+const SUSTAIN_GATE: u32 = 20; // ~100ms at 48kHz/256-hop
+/// v3: multiplier applied to the beat threshold when in sustained-tone state.
+const SUSTAIN_MULTIPLIER: f32 = 3.5;
 
 pub struct BeatDetector {
     prev: [f32; SPECTRUM_LEN],
@@ -30,6 +35,11 @@ pub struct BeatDetector {
     refractory: u32,  // frames to suppress after a beat (no double-trigger)
     cooldown: u32,
     warmed: bool,
+    // v3 — sustain suppressor: counts consecutive near-zero-flux frames.
+    // After `SUSTAIN_GATE` frames of sustained spectrum, the detector raises
+    // its internal threshold to suppress windowing artefacts from tonal sources.
+    sustain_count: u32,
+    sustain_flux_min: f32, // running min flux (tracks how "steady" the signal is)
 }
 
 impl Default for BeatDetector {
@@ -49,7 +59,16 @@ impl BeatDetector {
     }
 
     pub fn with_params(sensitivity: f32, refractory: u32) -> Self {
-        Self { prev: [0.0; SPECTRUM_LEN], flux_avg: 0.0, sensitivity, refractory, cooldown: 0, warmed: false }
+        Self {
+            prev: [0.0; SPECTRUM_LEN],
+            flux_avg: 0.0,
+            sensitivity,
+            refractory,
+            cooldown: 0,
+            warmed: false,
+            sustain_count: 0,
+            sustain_flux_min: f32::MAX,
+        }
     }
 
     /// Feed one magnitude spectrum (post-FFT, pre-Hann-windowed input). Returns
@@ -69,7 +88,26 @@ impl BeatDetector {
         self.prev = *spectrum;
 
         let onset = self.warmed && flux > self.flux_avg.max(1e-6);
-        let beat_threshold = (self.flux_avg * self.sensitivity).max(1e-6);
+
+        // v3 — sustain suppressor:
+        // Track how many consecutive frames have flux below the running average
+        // (i.e. the spectrum is not really changing = sustained tone).
+        if self.warmed && flux < self.flux_avg.max(1e-6) {
+            self.sustain_count = self.sustain_count.saturating_add(1);
+            self.sustain_flux_min = self.sustain_flux_min.min(flux);
+        } else {
+            // A real onset resets the sustain counter
+            self.sustain_count = 0;
+            self.sustain_flux_min = f32::MAX;
+        }
+
+        // Apply sustain multiplier when in steady-state tonal region
+        let sustain_factor = if self.sustain_count >= SUSTAIN_GATE {
+            SUSTAIN_MULTIPLIER
+        } else {
+            1.0
+        };
+        let beat_threshold = (self.flux_avg * self.sensitivity * sustain_factor).max(1e-6);
         let beat = self.warmed && self.cooldown == 0 && flux > beat_threshold;
 
         self.flux_avg = self.flux_avg * FLUX_AVG_DECAY + flux * FLUX_AVG_GAIN;
@@ -77,6 +115,8 @@ impl BeatDetector {
 
         if beat {
             self.cooldown = self.refractory;
+            // A real beat resets sustain — it was a genuine transient
+            self.sustain_count = 0;
         } else if self.cooldown > 0 {
             self.cooldown -= 1;
         }

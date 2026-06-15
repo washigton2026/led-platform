@@ -40,7 +40,14 @@ impl TempoMap {
         }
     }
 
-    /// The time of the beat nearest to `t` (i.e. snap `t` onto the grid).
+    /// The time of the beat nearest to `t` (i.e. snap `t` onto the beat grid).
+    ///
+    /// ## Complexity
+    /// - `Constant`: O(1) — arithmetic.
+    /// - `Beats`: O(log n) — binary search on the sorted beat array, then checks
+    ///   the two surrounding entries. Linear scan (the original implementation) is
+    ///   O(n) which becomes a bottleneck when building Timelines with thousands of
+    ///   detected beats (e.g. 10 min × 120 BPM = 1200 beats).
     pub fn snap(&self, t: u64) -> u64 {
         match self {
             TempoMap::Constant { bpm, offset_ms } => {
@@ -53,7 +60,22 @@ impl TempoMap {
             }
             TempoMap::Beats(v) => match v.as_slice() {
                 [] => t,
-                _ => *v.iter().min_by_key(|&&b| (b as i64 - t as i64).abs()).unwrap(),
+                [only] => *only,
+                _ => {
+                    // Binary search: find the insertion point, then compare neighbours.
+                    let idx = v.partition_point(|&b| b <= t);
+                    match idx {
+                        0 => v[0],
+                        n if n >= v.len() => *v.last().unwrap(),
+                        n => {
+                            let lo = v[n - 1];
+                            let hi = v[n];
+                            // Ties go to the lower (earlier) beat — consistent with the
+                            // original linear-scan behaviour (`min_by_key` picks first).
+                            if t - lo <= hi - t { lo } else { hi }
+                        }
+                    }
+                }
             },
         }
     }
