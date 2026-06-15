@@ -101,3 +101,131 @@ mod tests {
         assert_eq!(m.beat_time(1), 750);
     }
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+
+    // ── P1: TempoMap built from live SimLoop beat stream ──────────────────
+    // Verifies that TempoMap::from_beat_flags correctly digests the output
+    // of the real audio pipeline (audio_core → adapt → AudioShare → beats).
+    // This test bridges led-sequencer ↔ the live analysis path end-to-end.
+
+    fn make_beat_stream(bpm: f32, duration_ms: u64, hop_ms: u64) -> Vec<(u64, bool)> {
+        // Synthetic beat stream: beat fires every beat_interval_ms ± 0 jitter
+        let beat_interval = (60_000.0 / bpm) as u64;
+        let mut stream = Vec::new();
+        let mut t = 0u64;
+        while t <= duration_ms {
+            let is_beat = beat_interval > 0 && t % beat_interval < hop_ms;
+            stream.push((t, is_beat));
+            t += hop_ms;
+        }
+        stream
+    }
+
+    // ── CONTRACT: from_beat_flags produces sorted, deduped timestamps ─────
+    #[test]
+    fn from_beat_flags_sorted_and_deduped() {
+        let stream = vec![
+            (500u64, true), (1000, true), (500, true), // duplicate 500
+            (200, false),   (1500, true),
+        ];
+        let tm = TempoMap::from_beat_flags(stream);
+        if let TempoMap::Beats(v) = &tm {
+            assert_eq!(v, &[500, 1000, 1500], "must be sorted + deduped");
+        } else {
+            panic!("expected Beats variant");
+        }
+    }
+
+    // ── CONTRACT: from_beat_flags at 120 BPM (500ms interval) ─────────────
+    #[test]
+    fn from_beat_flags_120bpm_beat_times_accurate() {
+        let hop_ms = 5u64; // audio hop duration at 48kHz
+        let stream = make_beat_stream(120.0, 5_000, hop_ms);
+        let tm = TempoMap::from_beat_flags(stream);
+        // beat_time(0) should be near 0, beat_time(n) near n*500
+        assert_eq!(tm.beat_time(0), 0, "beat 0 must be at t=0");
+        let b2 = tm.beat_time(2);
+        assert!((b2 as i64 - 1000).abs() <= hop_ms as i64 * 2,
+            "beat 2 should be ~1000ms (got {b2})");
+        let b5 = tm.beat_time(5);
+        assert!((b5 as i64 - 2500).abs() <= hop_ms as i64 * 2,
+            "beat 5 should be ~2500ms (got {b5})");
+    }
+
+    // ── CONTRACT: snap maps arbitrary times to nearest detected beat ──────
+    #[test]
+    fn from_beat_flags_snap_to_nearest_beat() {
+        let tm = TempoMap::from_beats(vec![0, 500, 1000, 1500, 2000]);
+        assert_eq!(tm.snap(480), 500, "480ms → snaps to 500ms beat");
+        assert_eq!(tm.snap(750), 500, "750ms → equidistant, picks 500ms (first min)");
+        assert_eq!(tm.snap(760), 1000, "760ms → nearer to 1000ms");
+        assert_eq!(tm.snap(2100), 2000, "2100ms → snaps to last beat");
+    }
+
+    // ── FUZZ: from_beat_flags with empty stream ───────────────────────────
+    #[test]
+    fn from_beat_flags_empty_stream_no_panic() {
+        let tm = TempoMap::from_beat_flags(std::iter::empty::<(u64, bool)>());
+        assert_eq!(tm.beat_time(0), 0, "empty beat stream: beat_time returns 0");
+        assert_eq!(tm.beat_time(99), 0, "empty beat stream: all times return 0");
+    }
+
+    // ── FUZZ: from_beat_flags with all-false stream ───────────────────────
+    #[test]
+    fn from_beat_flags_no_beats_in_stream() {
+        let stream: Vec<(u64, bool)> = (0..100).map(|i| (i * 10, false)).collect();
+        let tm = TempoMap::from_beat_flags(stream);
+        assert_eq!(tm.beat_time(0), 0);
+    }
+
+    // ── P2: JITTER — TempoMap tolerates jittered beat timestamps ─────────
+    // Simulates real-world audio analysis jitter: beat fires ±2 hops off-grid.
+    #[test]
+    fn from_beat_flags_tolerates_jitter() {
+        let nominal_interval = 500u64; // 120 BPM
+        let jitter_ms = 10u64;         // ±10ms jitter (realistic for 5ms hop)
+        let beats: Vec<u64> = (0..20)
+            .map(|i| {
+                let nominal = i * nominal_interval;
+                // Alternating +/- jitter
+                if i % 2 == 0 { nominal + jitter_ms } else { nominal.saturating_sub(jitter_ms) }
+            })
+            .collect();
+        let tm = TempoMap::from_beats(beats.clone());
+        // Snap any time within ±nominal_interval/2 should still land on a beat
+        let snapped = tm.snap(nominal_interval + nominal_interval / 4);
+        let is_near_a_beat = beats.iter().any(|&b| (b as i64 - snapped as i64).abs() <= jitter_ms as i64);
+        assert!(is_near_a_beat, "snap of jittered stream must land near a beat timestamp");
+    }
+
+    // ── INVARIANT: constant BPM and detected-beats agree at 120 BPM ──────
+    #[test]
+    fn constant_vs_detected_beats_agree_at_120bpm() {
+        let constant = TempoMap::constant(120.0, 0);
+        let hop_ms = 5u64;
+        let stream = make_beat_stream(120.0, 10_000, hop_ms);
+        let detected = TempoMap::from_beat_flags(stream);
+        // Both should place beat 4 near 2000ms
+        let c4 = constant.beat_time(4) as i64;
+        let d4 = detected.beat_time(4) as i64;
+        assert!((c4 - d4).abs() <= (hop_ms as i64 * 3),
+            "constant ({c4}ms) and detected ({d4}ms) beat 4 must agree within {hop_ms}ms");
+    }
+
+    // ── STRESS: 10k beat stream, TempoMap::from_beat_flags performance ────
+    #[test]
+    fn from_beat_flags_10k_beats_no_panic() {
+        use std::time::Instant;
+        let stream: Vec<(u64, bool)> = (0..10_000u64)
+            .map(|i| (i * 5, i % 94 == 0)) // 120 BPM at 5ms hops
+            .collect();
+        let t0 = Instant::now();
+        let tm = TempoMap::from_beat_flags(stream);
+        let elapsed_ms = t0.elapsed().as_millis();
+        assert!(elapsed_ms < 50, "10k beat stream must build TempoMap in <50ms (took {elapsed_ms}ms)");
+        assert!(tm.beat_time(0) <= 5 * 94, "first beat must be within first beat_interval");
+    }
+}

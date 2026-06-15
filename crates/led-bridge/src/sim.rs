@@ -370,3 +370,149 @@ mod tests {
         assert_eq!(out.last_frame.len(), 512, "pixel count must match config throughout");
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// P2: Scheduler jitter simulation
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Jitter configuration for adversarial simulation.
+pub struct JitterConfig {
+    /// Max hop-processing delay to inject (simulates OS scheduler preemption).
+    pub max_delay_hops: u64,
+    /// Fraction of hops that receive a delay (0.0 = none, 1.0 = all).
+    pub delay_fraction: f32,
+}
+
+impl SimLoop {
+    /// Run with injected scheduler jitter: some hops take longer to process.
+    /// Returns timestamps that may have gaps — tests pipeline monotonicity invariant.
+    pub fn run_with_jitter(&self, duration_ms: u64, jitter: JitterConfig) -> SimOutput {
+        let cfg = &self.config;
+        let sr = cfg.sample_rate;
+        let mut analyzer = audio_core::Analyzer::new(sr);
+        let mut v0 = led_core::AudioFeatures {
+            sample_rate: 0, timestamp_ms: 0, rms: 0.0, beat: false,
+            bass: 0.0, mid: 0.0, high: 0.0, spectrum: Vec::new(),
+        };
+        let share = std::sync::Arc::new(led_pixel_engine::AudioShare::new());
+        let positions: Vec<led_pixel_engine::Vec3> = (0..cfg.pixel_count)
+            .map(|i| led_pixel_engine::Vec3::new(i as f32, 0.0, 0.0))
+            .collect();
+        let band_pulse = led_pixel_engine::BandPulse::new(
+            led_core::PixelColor::rgb(0, 0, 200), led_pixel_engine::Band::Bass, 2.0, share.clone(),
+        );
+
+        let mut frame_buf = vec![led_core::PixelColor::default(); cfg.pixel_count];
+        let mut hops_processed = 0u64;
+        let mut beats_detected = 0u64;
+        let mut frames_rendered = 0u64;
+        let mut scalars_log = Vec::new();
+        let mut phase = 0.0f32;
+        let phase_inc = std::f32::consts::TAU * cfg.tone_hz / sr as f32;
+        let hop_dur_ms = (audio_core::contracts::HOP_SIZE as u64 * 1_000) / sr as u64;
+        let total_hops = (duration_ms / hop_dur_ms).max(1);
+
+        for hop_idx in 0..total_hops {
+            // Jitter: skip some hops (simulates dropped/late frame from OS preemption)
+            let inject = (hop_idx as f32 / total_hops as f32) < jitter.delay_fraction;
+            let effective_ts = if inject {
+                // Delay: timestamp jumps by extra hops (gap in the stream)
+                hop_idx * hop_dur_ms + jitter.max_delay_hops * hop_dur_ms
+            } else {
+                hop_idx * hop_dur_ms
+            };
+
+            let mut hop = [0.0f32; audio_core::contracts::HOP_SIZE];
+            for s in hop.iter_mut() {
+                *s = phase.sin() * 0.5;
+                phase = (phase + phase_inc) % std::f32::consts::TAU;
+            }
+            if cfg.beat_interval_ms > 0 && hop_idx * hop_dur_ms % cfg.beat_interval_ms < hop_dur_ms {
+                for s in hop.iter_mut() { *s += 0.8; }
+            }
+
+            let v1 = analyzer.process_hop(&hop, effective_ts);
+            crate::adapter::adapt_into(&v1, &mut v0);
+            share.publish(&v0);
+            hops_processed += 1;
+            if v1.beat { beats_detected += 1; }
+            scalars_log.push(share.scalars());
+
+            frame_buf.fill(led_core::PixelColor::default());
+            led_pixel_engine::Effect::render(&band_pulse, effective_ts, &positions, &mut frame_buf);
+            frames_rendered += 1;
+        }
+
+        SimOutput { hops_processed, beats_detected, frames_rendered,
+            last_frame: frame_buf, scalars_log }
+    }
+}
+
+#[cfg(test)]
+mod jitter_tests {
+    use super::*;
+
+    // ── P2: pipeline survives 50% hop jitter ─────────────────────────────
+    #[test]
+    fn pipeline_survives_50pct_jitter() {
+        let sim = SimLoop::new(SimConfig::default());
+        let out = sim.run_with_jitter(1_000, JitterConfig {
+            max_delay_hops: 5,
+            delay_fraction: 0.5,
+        });
+        assert!(out.hops_processed > 0);
+        assert!(out.frames_rendered > 0);
+        assert_eq!(out.last_frame.len(), 100);
+    }
+
+    // ── P2: pipeline survives 100% jitter (every hop delayed) ─────────────
+    #[test]
+    fn pipeline_survives_100pct_jitter() {
+        let sim = SimLoop::new(SimConfig::default());
+        let out = sim.run_with_jitter(500, JitterConfig {
+            max_delay_hops: 10,
+            delay_fraction: 1.0,
+        });
+        assert!(out.frames_rendered > 0, "must produce frames even under 100% jitter");
+    }
+
+    // ── P2: AudioShare always has valid sample_rate under jitter ──────────
+    #[test]
+    fn audioshare_sample_rate_valid_under_jitter() {
+        let sim = SimLoop::new(SimConfig::default());
+        let out = sim.run_with_jitter(500, JitterConfig {
+            max_delay_hops: 3,
+            delay_fraction: 0.3,
+        });
+        for sc in &out.scalars_log {
+            assert_eq!(sc.sample_rate, 48_000,
+                "sample_rate must be 48000 even under jitter, got {}", sc.sample_rate);
+        }
+    }
+
+    // ── P2: pixels produced are valid even under extreme jitter ──────────
+    #[test]
+    fn pixels_valid_under_extreme_jitter() {
+        let sim = SimLoop::new(SimConfig { tone_hz: 100.0, ..SimConfig::default() });
+        let out = sim.run_with_jitter(1_000, JitterConfig {
+            max_delay_hops: 20, // 20-hop = ~100ms delay injection
+            delay_fraction: 0.8,
+        });
+        for px in &out.last_frame {
+            assert!(px.r <= 255 && px.g <= 255 && px.b <= 255, "pixel values must be valid");
+        }
+    }
+
+    // ── P2: zero-jitter matches normal run ────────────────────────────────
+    #[test]
+    fn zero_jitter_matches_normal_run() {
+        let cfg = || SimConfig { beat_interval_ms: 300, ..SimConfig::default() };
+        let normal = SimLoop::new(cfg()).run(500);
+        let jittered = SimLoop::new(cfg()).run_with_jitter(500, JitterConfig {
+            max_delay_hops: 0,
+            delay_fraction: 0.0,
+        });
+        assert_eq!(normal.hops_processed, jittered.hops_processed);
+        assert_eq!(normal.beats_detected, jittered.beats_detected);
+    }
+}

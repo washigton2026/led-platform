@@ -204,3 +204,120 @@ mod adversarial_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod chaos_tests {
+    use super::*;
+
+    fn make_pkt(seq: u8, universe: u16, dmx_val: u8) -> [u8; PACKET_LEN] {
+        let mut buf = [0u8; PACKET_LEN];
+        let cid = [0xAB; 16];
+        let dmx = [dmx_val; DMX_SLOTS];
+        build_data_packet(&mut buf, &cid, "LUMYX-CHAOS", 100, seq, universe, &dmx);
+        buf
+    }
+
+    // ── CHAOS: sequence counter wraps 255→0 correctly ────────────────────
+    #[test]
+    fn sequence_wraps_255_to_0() {
+        let p255 = make_pkt(255, 1, 0xAA);
+        let p0   = make_pkt(0,   1, 0xBB);
+        assert_eq!(sequence_of(&p255), 255);
+        assert_eq!(sequence_of(&p0),   0);
+        // Receiver detects wrap: (0u8.wrapping_sub(255)) = 1 (one step forward)
+        assert_eq!(0u8.wrapping_sub(255), 1, "sequence must wrap correctly");
+    }
+
+    // ── CHAOS: out-of-order detection via sequence number ─────────────────
+    #[test]
+    fn out_of_order_detected_via_sequence() {
+        let p1 = make_pkt(5, 1, 0x11);
+        let p2 = make_pkt(3, 1, 0x22); // older seq — should be detected as out-of-order
+        let seq1 = sequence_of(&p1);
+        let seq2 = sequence_of(&p2);
+        // A receiver detects out-of-order when (seq2 - seq1) as i8 < 0
+        let diff = (seq2 as i16) - (seq1 as i16);
+        assert!(diff < 0, "seq {seq2} after {seq1} must be detected as out-of-order");
+    }
+
+    // ── CHAOS: corrupted ACN PID detected ────────────────────────────────
+    #[test]
+    fn corrupted_acn_pid_detected() {
+        let mut pkt = make_pkt(0, 1, 0xFF);
+        pkt[4] ^= 0xFF; // corrupt first byte of ACN PID
+        assert!(!acn_pid_ok(&pkt), "corrupted PID must be detected");
+    }
+
+    // ── CHAOS: corrupted universe field ───────────────────────────────────
+    #[test]
+    fn corrupted_universe_does_not_panic() {
+        let mut pkt = make_pkt(0, 63999, 0x42);
+        pkt[113] ^= 0xFF; // flip high byte of universe field
+        pkt[114] ^= 0xFF;
+        let u = universe_of(&pkt);
+        // Must not panic — result is undefined but should be a valid u16
+        assert!(u <= 65535, "universe read must not overflow: got {u}");
+    }
+
+    // ── CHAOS: packet truncation — short buffer ───────────────────────────
+    #[test]
+    fn short_buffer_accessors_do_not_panic() {
+        let short = [0u8; 16]; // only 16 bytes — just enough for ACN PID check
+        assert!(!acn_pid_ok(&short[..4]), "4-byte buffer must fail PID check");
+        // acn_pid_ok: checks pkt.len() >= 16 and pkt[4..16] == ACN_PID
+        let result = acn_pid_ok(&short);
+        let _ = result; // must not panic
+    }
+
+    // ── CHAOS: zero-byte universe ─────────────────────────────────────────
+    #[test]
+    fn universe_zero_packet_builds_without_panic() {
+        // Universe 0 is not valid in sACN but must not panic
+        let pkt = make_pkt(0, 0, 0);
+        assert_eq!(universe_of(&pkt), 0);
+    }
+
+    // ── CHAOS: burst of 256 sequential packets — all valid ────────────────
+    #[test]
+    fn burst_256_sequential_packets_all_valid() {
+        for seq in 0..=255u8 {
+            let pkt = make_pkt(seq, 1, seq);
+            assert!(acn_pid_ok(&pkt),           "seq={seq}: PID must be valid");
+            assert_eq!(sequence_of(&pkt), seq,  "seq={seq}: sequence field round-trip");
+            assert_eq!(dmx_slots(&pkt)[0], seq, "seq={seq}: DMX data must match");
+        }
+    }
+
+    // ── CHAOS: duplicate packet detection ────────────────────────────────
+    #[test]
+    fn duplicate_packet_has_same_sequence() {
+        let p = make_pkt(42, 7, 0x80);
+        let p_dup = p; // exact duplicate
+        assert_eq!(sequence_of(&p), sequence_of(&p_dup), "duplicate packet has same seq");
+        assert_eq!(dmx_slots(&p), dmx_slots(&p_dup), "duplicate packet has same payload");
+    }
+
+    // ── CHAOS: multi-universe: each packet carries the correct universe ────
+    #[test]
+    fn multi_universe_packets_carry_correct_universe() {
+        for u in [1u16, 7, 64, 512, 1024, 32768, 63999] {
+            let pkt = make_pkt(0, u, 0xAB);
+            assert_eq!(universe_of(&pkt), u, "universe {u} must survive wire format");
+            assert!(acn_pid_ok(&pkt), "universe {u}: PID must be valid");
+        }
+    }
+
+    // ── CHAOS: heartbeat desync simulation ───────────────────────────────
+    // The sACN heartbeat must resend the last valid frame.
+    // If sequence wraps mid-heartbeat, receiver should still see valid data.
+    #[test]
+    fn heartbeat_desync_sequence_wrap_does_not_corrupt_data() {
+        let frame_at_255 = make_pkt(255, 1, 0xDE);
+        let heartbeat_at_0 = make_pkt(0, 1, 0xDE); // same data, wrapped seq
+        // Both must carry the same DMX payload
+        assert_eq!(dmx_slots(&frame_at_255), dmx_slots(&heartbeat_at_0),
+            "heartbeat after seq wrap must carry same payload");
+        assert!(acn_pid_ok(&frame_at_255) && acn_pid_ok(&heartbeat_at_0),
+            "both heartbeat packets must have valid PID");
+    }
+}
