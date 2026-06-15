@@ -22,8 +22,8 @@ pub mod sim;
 // Re-export the shared seams so `led_hal::*` and downstream code have one import surface.
 pub use led_core::*;
 
-pub use cluster::{ClusteredHal, SharedCluster};
+pub use cluster::{ClusteredHal, ClusterHeartbeat, SharedCluster};
 pub use engine::Core;
 pub use hal::Hal;
-pub use heartbeat::Heartbeat;
+pub use heartbeat::{Heartbeat, HeartbeatHandle};
 pub use sim::SimulatorDevice;

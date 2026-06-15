@@ -60,6 +60,12 @@ pub struct AudioFeatures {
     pub spectral_rolloff: f32,
     pub spectral_flux: f32,
 
+    // HARMONIC CONTENT (v1.1 — added Cycle 7)
+    /// Fraction of spectral energy at the fundamental + 4 harmonics vs total.
+    /// 0.0 = pure noise/transient; 1.0 = pure sine. See [`crate::harmonics`].
+    /// Threshold for "tonal": [`crate::harmonics::TONAL_THRESHOLD`] = 0.40.
+    pub harmonic_ratio: f32,
+
     // RAW SPECTRUM — magnitude per FFT bin, after Hann windowing. len == SPECTRUM_LEN.
     pub spectrum: [f32; SPECTRUM_LEN],
 
@@ -85,6 +91,7 @@ impl Default for AudioFeatures {
             spectral_centroid: 0.0,
             spectral_rolloff: 0.0,
             spectral_flux: 0.0,
+            harmonic_ratio: 0.0,
             spectrum: [0.0; SPECTRUM_LEN],
             musical_section: None,
         }

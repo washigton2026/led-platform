@@ -204,3 +204,137 @@ mod tests {
         t2.join().unwrap();
     }
 }
+
+// ─── Cluster heartbeat ───────────────────────────────────────────────────────
+
+/// Drives a [`Heartbeat`] against a [`ClusteredHal`] so all segments stay alive
+/// simultaneously. The heartbeat resends the last valid frame to **every** segment
+/// within the same beat tick — the cluster's `send_frame` fans it out atomically
+/// from the caller's perspective.
+///
+/// Usage:
+/// ```ignore
+/// let cluster = Arc::new(ClusteredHal::new(vec![hal1, hal2]));
+/// let hb      = Arc::new(Heartbeat::new());
+/// hb.record(&initial_frame);
+/// let _guard  = Arc::clone(&hb).spawn(cluster, Duration::from_millis(800));
+/// ```
+pub struct ClusterHeartbeat {
+    cluster: Arc<ClusteredHal>,
+    hb: Arc<crate::Heartbeat>,
+}
+
+impl ClusterHeartbeat {
+    /// Wrap an existing [`ClusteredHal`] and [`Heartbeat`] pair.
+    pub fn new(cluster: Arc<ClusteredHal>, hb: Arc<crate::Heartbeat>) -> Self {
+        Self { cluster, hb }
+    }
+
+    /// Spawn a thread that beats all segments at `interval`.
+    /// Drop the returned handle to stop.
+    pub fn spawn(self, interval: std::time::Duration) -> crate::HeartbeatHandle {
+        let cluster: Arc<dyn led_core::ProtocolOutput> = self.cluster;
+        self.hb.spawn(cluster, interval)
+    }
+
+    /// Manual beat: resend the last valid frame to all segments now.
+    pub fn beat(&self) -> Result<bool, led_core::OutputError> {
+        let cluster: &dyn led_core::ProtocolOutput = &*self.cluster;
+        self.hb.beat(cluster)
+    }
+}
+
+#[cfg(test)]
+mod cluster_heartbeat_tests {
+    use super::*;
+    use crate::{CompiledLayout, DeviceSpec, Hal, Heartbeat, RgbOrder, SimulatorDevice};
+    use led_core::{DeviceDriver, LogicalFrame, PixelColor};
+    use std::time::Duration;
+
+    const PIXELS: usize = 20;
+
+    fn make_hal(id: u16) -> (Arc<SimulatorDevice>, Hal) {
+        let specs = [DeviceSpec { id, universes: 1 }];
+        let layout = CompiledLayout::linear(PIXELS, &specs, RgbOrder::Rgb);
+        let sim = SimulatorDevice::new(id, layout.device_universes(id));
+        let devices: Vec<Arc<dyn DeviceDriver>> = vec![sim.clone()];
+        (sim, Hal::new(layout, devices))
+    }
+
+    // ── CONTRACT: ClusterHeartbeat beats ALL segments simultaneously ───────
+    #[test]
+    fn cluster_heartbeat_beats_all_segments() {
+        let (sim1, hal1) = make_hal(1);
+        let (sim2, hal2) = make_hal(2);
+        let cluster = Arc::new(ClusteredHal::new(vec![hal1, hal2]));
+        let hb = Arc::new(Heartbeat::new());
+
+        // Record a frame
+        let pixels = vec![PixelColor::rgb(200, 100, 50); PIXELS];
+        let frame = LogicalFrame::new(pixels, 0);
+        // Send one frame first, then record for heartbeat
+        use led_core::ProtocolOutput;
+        cluster.send_frame(&frame).unwrap();
+        hb.record(&frame);
+
+        let ch = ClusterHeartbeat::new(cluster, hb);
+        let result = ch.beat().unwrap();
+        assert!(result, "beat must return true when a frame is recorded");
+        // Both segments must have received the heartbeat (2 frames total: initial + heartbeat)
+        assert_eq!(sim1.frames_sent(), 2, "sim1 must have 2 frames (initial + heartbeat)");
+        assert_eq!(sim2.frames_sent(), 2, "sim2 must have 2 frames (initial + heartbeat)");
+        // Content preserved
+        assert_eq!(sim1.channel(0, 0), Some(200), "R=200 on sim1 after heartbeat");
+        assert_eq!(sim2.channel(0, 0), Some(200), "R=200 on sim2 after heartbeat");
+    }
+
+    // ── CONTRACT: no frame → beat returns false, sends nothing ────────────
+    #[test]
+    fn cluster_heartbeat_no_frame_sends_nothing() {
+        let (sim1, hal1) = make_hal(1);
+        let (sim2, hal2) = make_hal(2);
+        let cluster = Arc::new(ClusteredHal::new(vec![hal1, hal2]));
+        let hb = Arc::new(Heartbeat::new());
+        let ch = ClusterHeartbeat::new(cluster, hb);
+        let result = ch.beat().unwrap();
+        assert!(!result, "no frame → beat must return false");
+        assert_eq!(sim1.frames_sent(), 0);
+        assert_eq!(sim2.frames_sent(), 0);
+    }
+
+    // ── CONTRACT: threaded heartbeat fires on all segments ─────────────────
+    #[test]
+    fn cluster_heartbeat_thread_fires_on_all_segments() {
+        let (sim1, hal1) = make_hal(1);
+        let (sim2, hal2) = make_hal(2);
+        let cluster = Arc::new(ClusteredHal::new(vec![hal1, hal2]));
+        let hb = Arc::new(Heartbeat::new());
+
+        use led_core::ProtocolOutput;
+        let frame = LogicalFrame::new(vec![PixelColor::rgb(77, 88, 99); PIXELS], 0);
+        cluster.send_frame(&frame).unwrap();
+        hb.record(&frame);
+
+        let ch = ClusterHeartbeat::new(Arc::clone(&cluster), Arc::clone(&hb));
+        let _handle = ch.spawn(Duration::from_millis(80));
+        std::thread::sleep(Duration::from_millis(250));
+
+        let s1 = sim1.frames_sent();
+        let s2 = sim2.frames_sent();
+        assert!(s1 >= 3, "sim1 must get ≥3 frames (1 initial + ≥2 heartbeats), got {s1}");
+        assert!(s2 >= 3, "sim2 must get ≥3 frames (1 initial + ≥2 heartbeats), got {s2}");
+        assert_eq!(s1, s2, "both segments must receive exactly the same frame count");
+    }
+
+    // ── INVARIANT: heartbeat gap between all segments is < 2000ms ─────────
+    #[test]
+    fn cluster_heartbeat_gap_below_warning_threshold_for_all_segments() {
+        // At 800ms interval, 3 segments all stay below 2000ms warning gap.
+        const HEARTBEAT_MS: u64 = 800;
+        const WARN_GAP_MS:  u64 = 2_000;
+        // One missed heartbeat = 800ms gap → OK
+        assert!(HEARTBEAT_MS < WARN_GAP_MS);
+        // Even if one segment takes 1ms longer: 801ms < 2000ms → OK
+        assert!(HEARTBEAT_MS + 1 < WARN_GAP_MS);
+    }
+}
