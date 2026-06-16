@@ -109,7 +109,9 @@ impl SimLoop {
             PixelColor::rgb(255, 128, 0), 200, share.clone(),
         );
 
-        let mut frame_buf = vec![PixelColor::default(); cfg.pixel_count];
+        let mut frame_buf  = vec![PixelColor::default(); cfg.pixel_count];
+        // Pre-allocated once (Inv #3 — zero-alloc hot path). Cleared with .fill() each hop.
+        let mut flash_buf  = vec![PixelColor::default(); cfg.pixel_count];
 
         // ── Simulation counters ───────────────────────────────────────────
         let mut hops_processed      = 0u64;
@@ -163,8 +165,8 @@ impl SimLoop {
             // ── Render effects ────────────────────────────────────────────
             frame_buf.fill(PixelColor::default());
             band_pulse.render(timestamp_ms, &positions, &mut frame_buf);
-            // Layer BeatFlash on top (Add blend)
-            let mut flash_buf = vec![PixelColor::default(); cfg.pixel_count];
+            // Layer BeatFlash on top (Add blend) — reuse pre-allocated flash_buf (Inv #3)
+            flash_buf.fill(PixelColor::default());
             beat_flash.render(timestamp_ms, &positions, &mut flash_buf);
             for (out, flash) in frame_buf.iter_mut().zip(&flash_buf) {
                 out.r = out.r.saturating_add(flash.r);
