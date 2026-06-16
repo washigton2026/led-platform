@@ -523,3 +523,116 @@ mod jitter_tests {
         assert_eq!(normal.beats_detected, jittered.beats_detected);
     }
 }
+
+#[cfg(test)]
+mod harmonic_log_tests {
+    use super::*;
+    use audio_core::harmonics::TONAL_THRESHOLD;
+
+    // ── CONTRACT: harmonic_ratio_log populated per hop ────────────────────
+    #[test]
+    fn harmonic_log_length_equals_hops() {
+        let sim = SimLoop::new(SimConfig::default());
+        let out = sim.run(500);
+        assert_eq!(out.harmonic_ratio_log.len() as u64, out.hops_processed,
+            "harmonic_ratio_log must have one entry per hop");
+    }
+
+    // ── CONTRACT: all ratios in [0,1] ─────────────────────────────────────
+    #[test]
+    fn harmonic_log_all_ratios_valid() {
+        let sim = SimLoop::new(SimConfig::default());
+        let out = sim.run(500);
+        for (i, &r) in out.harmonic_ratio_log.iter().enumerate() {
+            assert!(r >= 0.0 && r <= 1.0,
+                "hop {i}: harmonic_ratio {r} out of [0,1]");
+        }
+    }
+
+    // ── CONTRACT: 440Hz sine → steady-state ratio > TONAL_THRESHOLD ───────
+    #[test]
+    fn sine_steady_state_is_tonal() {
+        let sim = SimLoop::new(SimConfig {
+            tone_hz: 440.0,
+            beat_interval_ms: 0, // no impulses
+            ..SimConfig::default()
+        });
+        let out = sim.run(2_000); // 2s for EMA + window warmup
+        let half = out.harmonic_ratio_log.len() / 2;
+        let steady: Vec<f32> = out.harmonic_ratio_log[half..].to_vec();
+        let avg = steady.iter().sum::<f32>() / steady.len() as f32;
+        assert!(avg > TONAL_THRESHOLD,
+            "440Hz sine steady-state harmonic_ratio {avg:.3} must exceed {TONAL_THRESHOLD}");
+    }
+
+    // ── CONTRACT: true silence → harmonic_ratio = 0 ──────────────────────
+    // DSP NOTE: tone_hz=0.0 gives sin(0)*0.5=0.0 for every sample (true silence).
+    // Near-zero frequencies (e.g. 0.0001 Hz) are NOT silence — they are quasi-DC
+    // signals that the classifier correctly identifies as tonal (energy concentrated
+    // at low bins). Use tone_hz=0.0 for the actual silence case.
+    #[test]
+    fn silence_harmonic_ratio_is_zero() {
+        let sim = SimLoop::new(SimConfig {
+            tone_hz: 0.0, // sin(0)*0.5 = 0 for every sample — true silence
+            beat_interval_ms: 0,
+            ..SimConfig::default()
+        });
+        let out = sim.run(500);
+        // All-zero spectrum → HarmonicClassifier returns 0.0 (guarded by is_finite check)
+        let last = out.harmonic_ratio_log.last().copied().unwrap_or(1.0);
+        assert_eq!(last, 0.0,
+            "true silence (tone_hz=0) must give harmonic_ratio=0.0, got {last:.3}");
+    }
+
+    // ── GATING PROOF: with gating, fewer beats than without on sine ───────
+    // Run 2s of pure 440Hz sine. With harmonic gating (default Analyzer),
+    // the sustained sine should produce far fewer false beats than pre-gating.
+    #[test]
+    fn harmonic_gating_reduces_false_beats_on_sine() {
+        let cfg = SimConfig {
+            tone_hz: 440.0,
+            beat_interval_ms: 0, // no real beats
+            ..SimConfig::default()
+        };
+        let out = SimLoop::new(cfg).run(2_000);
+        // With gating (TONAL_GATE_MIN=0.80), tonal frames block the beat.
+        // We expect very few false-positives in the second half (steady state).
+        let half = out.hops_processed as usize / 2;
+        let steady_beats: u64 = out.scalars_log[half..].iter()
+            .filter(|s| s.beat)
+            .count() as u64;
+        assert!(steady_beats <= 5,
+            "harmonic gating must suppress sine beats in steady state; got {steady_beats}");
+    }
+
+    // ── DETERMINISM: harmonic_ratio_log is identical across two runs ──────
+    #[test]
+    fn harmonic_log_is_deterministic() {
+        let cfg = || SimConfig { tone_hz: 220.0, beat_interval_ms: 300, ..SimConfig::default() };
+        let out1 = SimLoop::new(cfg()).run(500);
+        let out2 = SimLoop::new(cfg()).run(500);
+        assert_eq!(out1.harmonic_ratio_log, out2.harmonic_ratio_log,
+            "harmonic_ratio_log must be deterministic across identical runs");
+    }
+
+    // ── CONTRACT: impulse frames lower harmonic_ratio vs pure sine ────────
+    #[test]
+    fn impulse_reduces_harmonic_ratio_vs_pure_sine() {
+        let sine_only = SimLoop::new(SimConfig {
+            tone_hz: 440.0, beat_interval_ms: 0, ..SimConfig::default()
+        }).run(1_000);
+
+        let with_impulse = SimLoop::new(SimConfig {
+            tone_hz: 440.0, beat_interval_ms: 200, ..SimConfig::default()
+        }).run(1_000);
+
+        // Average harmonic_ratio should be lower with impulses (broadband energy added)
+        let avg_sine = sine_only.harmonic_ratio_log.iter().sum::<f32>()
+            / sine_only.harmonic_ratio_log.len() as f32;
+        let avg_impl = with_impulse.harmonic_ratio_log.iter().sum::<f32>()
+            / with_impulse.harmonic_ratio_log.len() as f32;
+
+        assert!(avg_sine > avg_impl,
+            "pure sine avg ratio ({avg_sine:.3}) must exceed sine+impulse ({avg_impl:.3})");
+    }
+}
