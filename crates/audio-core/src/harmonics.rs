@@ -57,7 +57,7 @@ impl HarmonicClassifier {
     ///
     /// `sample_rate` is required to convert bins to Hz (invariant 7 — never hardcoded).
     /// Returns `(harmonic_ratio, is_tonal)`.
-    pub fn process(&mut self, spectrum: &[f32; SPECTRUM_LEN], sample_rate: u32) -> (f32, bool) {
+    pub fn process(&mut self, spectrum: &[f32; SPECTRUM_LEN], _sample_rate: u32) -> (f32, bool) {
         let total: f32 = spectrum.iter().sum();
         // Guard: zero, NaN, or Inf total → treat as silence (no harmonic content).
         if !total.is_finite() || total <= 0.0 {
@@ -106,7 +106,7 @@ impl HarmonicClassifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Analyzer, MockCaptureSource, contracts::{FFT_SIZE, SPECTRUM_LEN}};
+    use crate::{MockCaptureSource, contracts::{FFT_SIZE, SPECTRUM_LEN}};
     use std::f32::consts::TAU;
 
     fn sine_spectrum(hz: f32, sr: u32) -> [f32; SPECTRUM_LEN] {

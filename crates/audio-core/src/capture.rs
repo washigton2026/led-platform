@@ -262,7 +262,7 @@ impl MockCaptureSource {
 #[cfg(test)]
 mod mock_tests {
     use super::*;
-    use crate::contracts::{AudioFeatures, HOP_SIZE, SPECTRUM_LEN};
+    use crate::contracts::{HOP_SIZE, SPECTRUM_LEN};
     use std::f32::consts::TAU;
 
     // ── CONTRACT: MockCaptureSource feeds samples into ring ───────────────
@@ -323,9 +323,9 @@ mod mock_tests {
     fn mock_beat_impulses_detected() {
         let sr = 48_000u32;
         let hop = HOP_SIZE;
-        let hop_ms = (hop as u64 * 1_000) / sr as u64;
+        let _hop_ms = (hop as u64 * 1_000) / sr as u64;
         // Generate: 500ms silence, then alternating click/silence every 500ms
-        let mut samples = vec![0.0f32; sr as usize]; // 1s silence
+        let samples = vec![0.0f32; sr as usize]; // 1s silence
         // Add 4 clicks: broadband impulses spaced ~500ms apart
         for k in 0..4 {
             let offset = sr as usize + k * (sr as usize / 2);
@@ -391,7 +391,7 @@ mod mock_tests {
 #[cfg(test)]
 mod mock_adversarial_tests {
     use super::*;
-    use crate::{RingBuffer, contracts::{HOP_SIZE, FFT_SIZE, SPECTRUM_LEN}};
+    use crate::{RingBuffer, contracts::{HOP_SIZE, FFT_SIZE}};
     use std::sync::Arc;
     use std::f32::consts::TAU;
 
