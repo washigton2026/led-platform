@@ -79,15 +79,16 @@ mod tests {
     use std::time::Duration;
 
     fn make_v1(beat: bool, ts: u64, bass: f32) -> V1 {
-        let mut v1 = V1::default();
-        v1.timestamp_ms = ts;
-        v1.sample_rate  = 48_000;
-        v1.rms          = 0.6;
-        v1.beat         = beat;
-        v1.bass_energy  = bass;
-        v1.mid_energy   = 0.2;
-        v1.high_energy  = 0.1;
-        v1
+        V1 {
+            timestamp_ms: ts,
+            sample_rate:  48_000,
+            rms:          0.6,
+            beat,
+            bass_energy:  bass,
+            mid_energy:   0.2,
+            high_energy:  0.1,
+            ..V1::default()
+        }
     }
 
     // ── CONTRACT: bridge delivers published features to AudioShare ────────

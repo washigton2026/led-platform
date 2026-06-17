@@ -114,9 +114,9 @@ pub fn assert_cpu_gpu_parity<K: ComputeKernel + Clone>(
     ComputeEffect::new(kernel).render(time_ms, positions, &mut gpu_out);
 
     for (i, (c, g)) in cpu_out.iter().zip(&gpu_out).enumerate() {
-        let dr = (c.r as i32 - g.r as i32).abs() as u8;
-        let dg = (c.g as i32 - g.g as i32).abs() as u8;
-        let db = (c.b as i32 - g.b as i32).abs() as u8;
+        let dr = (c.r as i32 - g.r as i32).unsigned_abs() as u8;
+        let dg = (c.g as i32 - g.g as i32).unsigned_abs() as u8;
+        let db = (c.b as i32 - g.b as i32).unsigned_abs() as u8;
         assert!(dr <= tolerance && dg <= tolerance && db <= tolerance,
             "pixel {i}: CPU({},{},{}) ≠ GPU({},{},{}) Δ=({dr},{dg},{db}) > tol={tolerance}",
             c.r, c.g, c.b, g.r, g.g, g.b);
@@ -204,7 +204,7 @@ mod tests {
 #[cfg(test)]
 mod adversarial_gpu_tests {
     use super::*;
-    use crate::compute::{ComputeEffect, ComputeKernel, Plasma};
+    use crate::compute::{ComputeEffect, Plasma};
     use crate::effect::Effect;
     use crate::compute::PLASMA_WGSL;
     use led_core::PixelColor;

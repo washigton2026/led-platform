@@ -99,7 +99,7 @@ fn stability_pixels_always_valid_1000_cycles() {
         pixel_count: 200,
         ..SimConfig::default()
     });
-    for cycle in 0..CYCLES {
+    for _cycle in 0..CYCLES {
         let out = sim.run(CYCLE_DURATION_MS);
         for (i, px) in out.last_frame.iter().enumerate() {
             // u8 is always valid, but check they're written (frame non-uniform)

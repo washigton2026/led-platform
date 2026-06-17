@@ -16,8 +16,10 @@ use crate::packet::PACKET_LEN;
 
 /// A PACKET_LEN-sized buffer borrowed from a `BufferPool`.
 /// Returns itself to the pool on `Drop` — no allocator touch.
+// NOTE: buf is stored as a bare [u8; PACKET_LEN] (not Box) — the Vec<[u8; PACKET_LEN]>
+// pool keeps all buffers in one contiguous heap allocation, avoiding per-buffer boxing.
 pub struct PooledBuf<'p> {
-    buf:  Option<Box<[u8; PACKET_LEN]>>,
+    buf:  Option<[u8; PACKET_LEN]>,
     pool: &'p BufferPool,
 }
 
@@ -38,13 +40,13 @@ impl<'p> Drop for PooledBuf<'p> {
 
 /// Pre-allocated packet buffer pool. Size at `2 × max_universes` at startup.
 pub struct BufferPool {
-    bufs: Mutex<Vec<Box<[u8; PACKET_LEN]>>>,
+    bufs: Mutex<Vec<[u8; PACKET_LEN]>>,
 }
 
 impl BufferPool {
     /// Create a pool of `capacity` pre-allocated 638-byte buffers.
     pub fn new(capacity: usize) -> Self {
-        let bufs = (0..capacity).map(|_| Box::new([0u8; PACKET_LEN])).collect();
+        let bufs = (0..capacity).map(|_| [0u8; PACKET_LEN]).collect();
         Self { bufs: Mutex::new(bufs) }
     }
 
@@ -54,11 +56,11 @@ impl BufferPool {
     pub fn pull(&self) -> PooledBuf<'_> {
         let buf = self.bufs.lock().unwrap()
             .pop()
-            .unwrap_or_else(|| Box::new([0u8; PACKET_LEN]));
+            .unwrap_or([0u8; PACKET_LEN]);
         PooledBuf { buf: Some(buf), pool: self }
     }
 
-    fn push_back(&self, buf: Box<[u8; PACKET_LEN]>) {
+    fn push_back(&self, buf: [u8; PACKET_LEN]) {
         self.bufs.lock().unwrap().push(buf);
     }
 

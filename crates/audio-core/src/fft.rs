@@ -43,6 +43,10 @@ impl SpectrumAnalyzer {
             self.buffer[i] = Complex32::new(samples[i] * window[i], 0.0);
         }
         self.fft.process_with_scratch(&mut self.buffer, &mut self.scratch);
+        // Indexed loop over two different-length slices (buffer=FFT_SIZE, out=SPECTRUM_LEN).
+        // zip() would be idiomatic but adds iterator overhead that breaks timing budgets
+        // in debug builds (mock_analyze_all_realtime_speed). Suppress the lint explicitly.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..SPECTRUM_LEN {
             out[i] = self.buffer[i].norm();
         }

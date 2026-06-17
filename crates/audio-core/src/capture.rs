@@ -339,14 +339,46 @@ mod mock_tests {
         let interval = sr as usize / 2; // every 500ms
         for k in 0..8 {
             let start = sr as usize + k * interval; // start after 1s warmup
-            for i in start..(start + hop).min(total) {
-                s[i] = 0.9; // broadband click
+            // Guard required: start may exceed total for the last iterations.
+            // slice.fill() panics when start > end; the guard makes it safe.
+            let end = (start + hop).min(total);
+            if start < end {
+                s[start..end].fill(0.9); // broadband click
             }
         }
         let results = MockCaptureSource::new(sr, s).analyze_all();
         let total_beats: u32 = results.iter().map(|f| f.beat as u32).sum();
         assert!(total_beats >= 2,
             "must detect ≥2 beat clicks in 4s (got {total_beats})");
+    }
+
+    // ── REGRESSION: start > total must not panic (KB-010 — cargo fix hazard) ─
+    // cargo fix converts `for i in start..end { s[i] = v }` → `s[start..end].fill(v)`.
+    // When start > total, the original range is safely empty; the slice panics.
+    // This test guards the invariant: any hop window past the buffer end is a no-op.
+    #[test]
+    fn mock_hop_window_past_buffer_end_no_panic() {
+        let sr = 48_000u32;
+        let total = sr as usize; // 1 second of samples
+        let hop = crate::contracts::HOP_SIZE;
+        let interval = total / 2;
+
+        let mut s = vec![0.0f32; total];
+        // k=2: start = total + 2*interval = total + total > total — exercises OOB guard
+        for k in 0..4usize {
+            let start = total + k * interval; // intentionally past end
+            let end = (start + hop).min(total);
+            if start < end {
+                s[start..end].fill(0.5);
+            }
+            // Must not panic — if start >= end the guard skips safely
+        }
+        // All samples beyond `total` were ignored; the buffer is unchanged past `total`
+        assert_eq!(s.len(), total, "buffer length must not change");
+
+        // Verify it works with MockCaptureSource too (no panic)
+        let mock = MockCaptureSource::new(sr, s);
+        let _ = mock.analyze_all(); // must not panic
     }
 
     // ── CONTRACT: stereo source is downmixed to mono ──────────────────────

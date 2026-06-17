@@ -63,7 +63,7 @@ fn heartbeat_resends_last_valid_and_never_zeros() {
     let hb = Heartbeat::new();
 
     // No valid frame yet: a beat must send NOTHING — never a fabricated zero frame.
-    assert_eq!(hb.beat(&hal).unwrap(), false, "no frame yet => nothing sent");
+    assert!(!hb.beat(&hal).unwrap(), "no frame yet => nothing sent");
     assert_eq!(sim1.frames_sent(), 0, "must not blast a blackout frame");
 
     // Record a non-zero frame, then beat: the LAST VALID frame is resent.
@@ -71,7 +71,7 @@ fn heartbeat_resends_last_valid_and_never_zeros() {
     pixels[0] = PixelColor::rgb(255, 0, 0);
     hb.record(&LogicalFrame::new(pixels, 0));
 
-    assert_eq!(hb.beat(&hal).unwrap(), true, "valid frame exists => resent");
+    assert!(hb.beat(&hal).unwrap(), "valid frame exists => resent");
     assert_eq!(sim1.channel(0, 1), Some(255), "resent the real frame, not zeros");
     assert_eq!(sim1.frames_sent(), 1);
 }
@@ -132,25 +132,13 @@ fn heartbeat_gap_thresholds_match_gosl_rules() {
     const WARN_GAP_MS:  u64 = 2_000;
     const CRIT_GAP_MS:  u64 = 2_500;
 
-    // LUMYX_GOSL rule: heartbeat interval must be below warning threshold.
-    assert!(HEARTBEAT_MS < WARN_GAP_MS,
-        "HEARTBEAT_MS ({HEARTBEAT_MS}) must be < WARN_GAP_MS ({WARN_GAP_MS})");
-
-    // 1 missed interval (800ms) → well inside Ok zone.
-    assert!(HEARTBEAT_MS < WARN_GAP_MS, "one missed heartbeat must stay Ok");
-
-    // 2 missed intervals (1600ms) → still Ok.
-    assert!(HEARTBEAT_MS * 2 < WARN_GAP_MS, "two missed heartbeats must stay Ok");
-
-    // 3 missed intervals (2400ms) → Warning zone (2000-2500ms).
-    let triple = HEARTBEAT_MS * 3;
-    assert!(triple >= WARN_GAP_MS && triple < CRIT_GAP_MS,
-        "3 missed heartbeats ({triple}ms) must be in Warning zone [2000, 2500)");
-
-    // 4 missed intervals (3200ms) → Critical.
-    let quad = HEARTBEAT_MS * 4;
-    assert!(quad >= CRIT_GAP_MS,
-        "4 missed heartbeats ({quad}ms) must be Critical (≥2500ms)");
+    // Compile-time invariant checks (constant values → const assert).
+    const { assert!(HEARTBEAT_MS < WARN_GAP_MS) };
+    const { assert!(HEARTBEAT_MS < WARN_GAP_MS) };         // 1 missed
+    const { assert!(HEARTBEAT_MS * 2 < WARN_GAP_MS) };    // 2 missed → Ok
+    const { assert!(HEARTBEAT_MS * 3 >= WARN_GAP_MS) };   // 3 missed → Warning+
+    const { assert!(HEARTBEAT_MS * 3 < CRIT_GAP_MS) };    // 3 missed → below Critical
+    const { assert!(HEARTBEAT_MS * 4 >= CRIT_GAP_MS) };   // 4 missed → Critical
 }
 
 #[test]
@@ -179,30 +167,18 @@ fn gosl_heartbeat_interval_provably_safe() {
     const WARN_MS: u64 = 2_000;
     const CRIT_MS: u64 = 2_500;
 
-    // Case 1: normal operation — one interval passed
-    assert!(HB_MS < WARN_MS,
-        "one interval ({HB_MS}ms) must be below Warning threshold ({WARN_MS}ms)");
-
-    // Case 2: one tick missed (OS preemption, scheduler jitter)
-    let one_miss = HB_MS * 2;
-    assert!(one_miss < WARN_MS,
-        "one missed tick ({one_miss}ms) must still be below Warning ({WARN_MS}ms)");
-
-    // Case 3: two ticks missed (extreme jitter) → Warning but not Critical
-    let two_miss = HB_MS * 3;
-    assert!(two_miss >= WARN_MS && two_miss < CRIT_MS,
-        "two missed ticks ({two_miss}ms) must be Warning, not Critical");
-
-    // Case 4: three ticks missed → Critical (network/power event, not normal)
-    let three_miss = HB_MS * 4;
-    assert!(three_miss >= CRIT_MS,
-        "three missed ticks ({three_miss}ms) must be Critical");
+    // Compile-time invariant checks (all values are constants → const assert).
+    const { assert!(HB_MS < WARN_MS) };             // Case 1: normal operation
+    const { assert!(HB_MS * 2 < WARN_MS) };         // Case 2: one tick missed → still Ok
+    const { assert!(HB_MS * 3 >= WARN_MS) };        // Case 3: two missed → Warning+
+    const { assert!(HB_MS * 3 < CRIT_MS) };         // Case 3: two missed → below Critical
+    const { assert!(HB_MS * 4 >= CRIT_MS) };        // Case 4: three missed → Critical
 }
 
 #[test]
 fn gosl_heartbeat_thread_fires_at_correct_rate() {
     use std::time::{Duration, Instant};
-    use std::sync::atomic::{AtomicU32, Ordering};
+    
     use std::sync::Arc;
 
     // Use a counting ProtocolOutput to measure actual heartbeat rate

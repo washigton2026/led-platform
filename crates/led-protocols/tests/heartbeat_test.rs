@@ -52,7 +52,7 @@ async fn heartbeat_fires_at_800ms_interval() {
     // Wait 175 ms → expect 3 ticks (at 50/100/150 ms).
     tokio::time::sleep(Duration::from_millis(175)).await;
     let n = counter.load(Ordering::Relaxed);
-    assert!(n >= 2 && n <= 5, "expected ~3 ticks in 175 ms @ 50 ms interval, got {n}");
+    assert!((2..=5).contains(&n), "expected ~3 ticks in 175 ms @ 50 ms interval, got {n}");
 }
 
 // ── Heartbeat never sends when no frame is registered ────────────────────────

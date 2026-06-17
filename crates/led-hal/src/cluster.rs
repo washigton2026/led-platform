@@ -114,7 +114,7 @@ mod tests {
         let (sim1, hal1) = make_hal(1u16);
         let (sim2, hal2) = make_hal(2u16);
         let cluster = ClusteredHal::new(vec![hal1, hal2]);
-        let frame = LogicalFrame::new(vec![PixelColor::rgb(1, 2, 3); PIXELS], 0);
+        let _frame = LogicalFrame::new(vec![PixelColor::rgb(1, 2, 3); PIXELS], 0);
 
         for i in 0..50u64 {
             cluster.send_frame(&LogicalFrame::new(vec![PixelColor::rgb(i as u8, 0, 0); PIXELS], i)).unwrap();
@@ -332,9 +332,8 @@ mod cluster_heartbeat_tests {
         // At 800ms interval, 3 segments all stay below 2000ms warning gap.
         const HEARTBEAT_MS: u64 = 800;
         const WARN_GAP_MS:  u64 = 2_000;
-        // One missed heartbeat = 800ms gap → OK
-        assert!(HEARTBEAT_MS < WARN_GAP_MS);
-        // Even if one segment takes 1ms longer: 801ms < 2000ms → OK
-        assert!(HEARTBEAT_MS + 1 < WARN_GAP_MS);
+        // Compile-time invariant: heartbeat interval safely below warning threshold.
+        const { assert!(HEARTBEAT_MS < WARN_GAP_MS) };
+        const { assert!(HEARTBEAT_MS + 1 < WARN_GAP_MS) };
     }
 }

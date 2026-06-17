@@ -546,7 +546,7 @@ mod harmonic_log_tests {
         let sim = SimLoop::new(SimConfig::default());
         let out = sim.run(500);
         for (i, &r) in out.harmonic_ratio_log.iter().enumerate() {
-            assert!(r >= 0.0 && r <= 1.0,
+            assert!((0.0..=1.0).contains(&r),
                 "hop {i}: harmonic_ratio {r} out of [0,1]");
         }
     }

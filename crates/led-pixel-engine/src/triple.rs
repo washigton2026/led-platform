@@ -132,10 +132,8 @@ mod tests {
                 // A torn frame would mix two sequence numbers.
                 assert!(buf.iter().all(|&v| v == first), "torn frame detected");
                 reads += 1;
-            } else if done.load(Ordering::Acquire) {
-                if !c.update() {
-                    break;
-                }
+            } else if done.load(Ordering::Acquire) && !c.update() {
+                break;
             }
         }
 

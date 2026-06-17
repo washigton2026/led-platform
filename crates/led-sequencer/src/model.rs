@@ -12,9 +12,10 @@ use crate::tempo::TempoMap;
 /// Convention: the easing field lives on the **destination** keyframe — it describes how
 /// you *arrive* at that value, not how you leave the previous one. Same convention as most
 /// DAWs (e.g. After Effects graph editor).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EasingType {
     /// Constant rate of change. Default.
+    #[default]
     Linear,
     /// Slow start, fast end (cubic `t³`).
     EaseIn,
@@ -26,11 +27,7 @@ pub enum EasingType {
     Step,
 }
 
-impl Default for EasingType {
-    fn default() -> Self {
-        Self::Linear
-    }
-}
+// Default is derived via #[default] on Linear above — no manual impl needed.
 
 impl EasingType {
     /// Map raw interpolation factor `t ∈ [0,1]` through this easing curve.

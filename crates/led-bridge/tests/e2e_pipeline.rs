@@ -142,8 +142,8 @@ fn e2e_1000_frames_no_panic() {
 #[test]
 fn e2e_full_stack_latency_within_realtime_budget() {
     use std::time::Instant;
-    use led_bridge::{adapt, SimLoop};
-    use led_bridge::sim::SimConfig;
+    use led_bridge::adapt;
+    
     use led_pixel_engine::{AudioShare, Band, BandPulse, Effect, Vec3};
     use audio_core::Analyzer;
     use audio_core::contracts::HOP_SIZE;

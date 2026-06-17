@@ -69,12 +69,11 @@ async fn per_universe_sequences_increment_independently() {
         tokio::time::sleep(Duration::from_millis(40)).await;
 
         let mut buf = [0u8; 1500];
-        match tokio::time::timeout(
+        if let Ok(Ok((n, _))) = tokio::time::timeout(
             Duration::from_millis(300),
             rx.recv_from(&mut buf),
         ).await {
-            Ok(Ok((n, _))) => seqs.push(packet::sequence_of(&buf[..n])),
-            _ => {}
+            seqs.push(packet::sequence_of(&buf[..n]));
         }
     }
 
@@ -106,11 +105,8 @@ async fn watch_channel_delivers_latest_frame_when_producer_is_faster() {
     // Read ALL packets that arrived.
     let mut last_fill = 0u8;
     let mut buf = [0u8; 1500];
-    loop {
-        match tokio::time::timeout(Duration::from_millis(50), rx.recv_from(&mut buf)).await {
-            Ok(Ok((n, _))) => { last_fill = packet::dmx_slots(&buf[..n])[0]; }
-            _ => break,
-        }
+    while let Ok(Ok((n, _))) = tokio::time::timeout(Duration::from_millis(50), rx.recv_from(&mut buf)).await {
+        last_fill = packet::dmx_slots(&buf[..n])[0];
     }
 
     // The final packet should carry the most recent frame (fill = 10).

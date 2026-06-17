@@ -171,7 +171,7 @@ mod adversarial_tests {
         assert!(acn_pid_ok(&buf), "long source name must not corrupt packet");
         // Verify null termination exists within the 64-byte name field
         let name_field = &buf[44..108];
-        assert!(name_field.iter().any(|&b| b == 0), "name field must be null-terminated");
+        assert!(name_field.contains(&0u8), "name field must be null-terminated");
     }
 
     // ── FUZZ: empty source name ────────────────────────────────────────────
@@ -256,7 +256,8 @@ mod chaos_tests {
         pkt[114] ^= 0xFF;
         let u = universe_of(&pkt);
         // Must not panic — result is undefined but should be a valid u16
-        assert!(u <= 65535, "universe read must not overflow: got {u}");
+        // u16 is always ≤ 65535 by type; just verify no panic occurred
+        let _ = u; // universe_of() must not panic on corrupt input
     }
 
     // ── CHAOS: packet truncation — short buffer ───────────────────────────

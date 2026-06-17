@@ -79,6 +79,8 @@ impl BeatDetector {
     ///   stricter subset of onsets, at most one per `refractory` frames.
     pub fn process(&mut self, spectrum: &[f32; SPECTRUM_LEN]) -> (bool, bool, f32) {
         let mut flux = 0.0f32;
+        // Keep indexed loop: zip() adds debug-mode overhead that breaks timing budgets.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..SPECTRUM_LEN {
             let d = spectrum[i] - self.prev[i];
             if d > 0.0 {
@@ -382,10 +384,10 @@ mod regression_v3 {
         // At 48kHz / HOP_SIZE=256, each frame is ~5.3ms
         // SUSTAIN_GATE=20 = ~106ms of sustained signal before activating
         // SUSTAIN_MULTIPLIER=3.5 raises the threshold 3.5× above normal
-        assert!(SUSTAIN_GATE >= 10, "SUSTAIN_GATE must be ≥10 frames (~50ms)");
-        assert!(SUSTAIN_GATE <= 100, "SUSTAIN_GATE must be ≤100 frames (~530ms)");
-        assert!(SUSTAIN_MULTIPLIER >= 2.0, "SUSTAIN_MULTIPLIER must be ≥2×");
-        assert!(SUSTAIN_MULTIPLIER <= 10.0, "SUSTAIN_MULTIPLIER must be ≤10×");
+        const { assert!(SUSTAIN_GATE >= 10, "SUSTAIN_GATE must be ≥10 frames (~50ms)") };
+        const { assert!(SUSTAIN_GATE <= 100, "SUSTAIN_GATE must be ≤100 frames (~530ms)") };
+        const { assert!(SUSTAIN_MULTIPLIER >= 2.0, "SUSTAIN_MULTIPLIER must be ≥2×") };
+        const { assert!(SUSTAIN_MULTIPLIER <= 10.0, "SUSTAIN_MULTIPLIER must be ≤10×") };
     }
 
     // ── INTEGRATION: 440Hz sine produces fewer beats with v3 than v1 ──────

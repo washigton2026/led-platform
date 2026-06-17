@@ -229,7 +229,7 @@ mod tests {
         let mut spectrum = [0.0f32; SPECTRUM_LEN];
         spectrum[5] = f32::INFINITY;
         let (ratio, _) = hc.process(&spectrum, 48_000);
-        assert!(ratio >= 0.0 && ratio <= 1.0,
+        assert!((0.0..=1.0).contains(&ratio),
             "ratio must be clamped to [0,1] even with Inf spectrum (got {ratio})");
     }
 

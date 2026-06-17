@@ -93,23 +93,25 @@ mod tests {
     use audio_core::contracts::{AudioFeatures as V1, SPECTRUM_LEN};
 
     fn make_v1(beat: bool, ts: u64, bass: f32) -> V1 {
-        let mut v1 = V1::default();
-        v1.timestamp_ms   = ts;
-        v1.sample_rate    = 48_000;
-        v1.rms            = 0.5;
-        v1.peak           = 0.8;
-        v1.beat           = beat;
-        v1.onset          = beat;
-        v1.bpm            = 120.0;
-        v1.bass_energy    = bass;
-        v1.mid_energy     = 0.3;
-        v1.high_energy    = 0.1;
-        v1.spectral_flux  = 0.05;
-        // Fill spectrum with a recognisable pattern
-        for (i, s) in v1.spectrum.iter_mut().enumerate() {
+        let mut spec = [0.0f32; SPECTRUM_LEN];
+        for (i, s) in spec.iter_mut().enumerate() {
             *s = i as f32 / SPECTRUM_LEN as f32;
         }
-        v1
+        V1 {
+            timestamp_ms:  ts,
+            sample_rate:   48_000,
+            rms:           0.5,
+            peak:          0.8,
+            beat,
+            onset:         beat,
+            bpm:           120.0,
+            bass_energy:   bass,
+            mid_energy:    0.3,
+            high_energy:   0.1,
+            spectral_flux: 0.05,
+            spectrum:      spec,
+            ..V1::default()
+        }
     }
 
     // ── CONTRACT: every v0 field matches the expected v1 source ──────────
@@ -173,11 +175,15 @@ mod tests {
     // ── FUZZ: adapt with all-NaN v1 — no panic ───────────────────────────
     #[test]
     fn adapt_nan_values_no_panic() {
-        let mut v1 = V1::default();
-        v1.rms = f32::NAN;
-        v1.bass_energy = f32::INFINITY;
-        v1.mid_energy = f32::NEG_INFINITY;
-        v1.spectrum.fill(f32::NAN);
+        let mut spec = [f32::NAN; SPECTRUM_LEN];
+        spec[0] = f32::NAN;
+        let v1 = V1 {
+            rms: f32::NAN,
+            bass_energy: f32::INFINITY,
+            mid_energy: f32::NEG_INFINITY,
+            spectrum: spec,
+            ..V1::default()
+        };
         let v0 = adapt(&v1);
         assert!(v0.rms.is_nan());
         assert!(v0.bass.is_infinite());
