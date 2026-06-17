@@ -122,6 +122,39 @@ clustering, WiFi-forbidden enforcement at transport layer.
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
 
+### 2026-06-17 — LOW-1: cargo fix panic + clippy -D warnings + cargo-audit + ledger
+
+**Done.**
+
+cargo fix introduced two bugs fixed in this cycle:
+
+[BUG-A KB-010] `capture.rs` — `slice.fill()` panic when `start > total`. cargo fix converted
+a safe empty-range indexed loop into `s[start..end].fill(v)`. k=7: start=216000 > total=192000
+→ panic. Guard `if start < end` added. Regression test: `mock_hop_window_past_buffer_end_no_panic`.
+
+[BUG-B KB-009] `fft.rs` + `beat.rs` — `zip()` iterators added by cargo fix are 3-5× slower
+in debug builds, breaking wall-clock budget tests (`mock_analyze_all_realtime_speed` <1s,
+`classifier_10k_frames_fast` <2000ms). Reverted to indexed loops + `#[allow(clippy::needless_range_loop)]`
+with explanatory comment. Confirmed: tests pass in 0.02s in release (indexed loop wins both modes).
+
+Both bugs proven as regressions (not pre-existing): git stash + test → PASS on clean HEAD,
+FAIL with changes → PASS after fix.
+
+All workspace clippy `-D warnings` resolved (13 files). cargo-audit 0.22.2 installed via
+Homebrew; 205 deps scanned, 0 vulnerabilities, 1 warning (paste 1.0.15 unmaintained,
+RUSTSEC-2024-0436, no CVE — acceptable). `docs/technical-debt-ledger.md` created (canonical
+TD tracker); `docs/knowledge-base.md` created (KB-009, KB-010 permanent failure records).
+
+**Invariants verified.** 80 audio-core tests green (including new regression test).
+Clippy workspace -D warnings = 0. cargo audit = 0 vulns.
+
+**Pending.** TD-003 (8 thread::sleep in tests, MEDIUM-3). TD-004 (wgpu→Metal, MEDIUM-1).
+
+**Decisions.** cargo-audit installed via Homebrew bottle (no compile, 14MB). Ledger is
+the file `docs/technical-debt-ledger.md` going forward — not conversation-only.
+TD-003 NOT closed: the 8 sleep() calls in tests are untouched; what was fixed in this
+cycle is a different set of timing regressions (KB-009, now TD-009).
+
 ### 2026-06-16 — CI Cycles 6-8: clustering, CPAL mock, harmonic gating, GPU, E2E script
 
 **Done.**
