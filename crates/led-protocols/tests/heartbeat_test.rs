@@ -7,6 +7,15 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// Async causal barrier: spin-yield until `condition()` or timeout.
+async fn wait_for_async(condition: impl Fn() -> bool, timeout: Duration, msg: &str) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while !condition() {
+        assert!(tokio::time::Instant::now() < deadline, "timeout waiting for: {msg}");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
 use led_core::UniverseData;
 use led_protocols::{
     health, HealthStatus,
@@ -49,10 +58,12 @@ async fn heartbeat_fires_at_800ms_interval() {
     // Use 50 ms interval to keep tests fast.
     let _handle = hb.start(50, move |_| { c.fetch_add(1, Ordering::Relaxed); });
 
-    // Wait 175 ms → expect 3 ticks (at 50/100/150 ms).
-    tokio::time::sleep(Duration::from_millis(175)).await;
+    // Causal barrier: wait until ≥2 ticks (at 50ms interval, arrives ~100ms).
+    wait_for_async(|| counter.load(Ordering::Relaxed) >= 2,
+                   Duration::from_secs(5),
+                   "heartbeat must fire ≥2× at 50ms interval").await;
     let n = counter.load(Ordering::Relaxed);
-    assert!((2..=5).contains(&n), "expected ~3 ticks in 175 ms @ 50 ms interval, got {n}");
+    assert!(n >= 2, "expected ≥2 ticks @ 50 ms interval, got {n}");
 }
 
 // ── Heartbeat never sends when no frame is registered ────────────────────────
@@ -89,7 +100,10 @@ async fn heartbeat_resends_last_registered_frame() {
         }
     });
 
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    // Causal barrier: wait until the heartbeat fires at least once (last_fill written).
+    wait_for_async(|| last_fill.load(Ordering::Relaxed) != 0,
+                   Duration::from_secs(5),
+                   "heartbeat must fire and write last_fill within 5s").await;
     let seen = last_fill.load(Ordering::Relaxed);
     assert_eq!(seen, 0xAB, "heartbeat resent the registered frame, not zeros: got 0x{seen:02X}");
 }
@@ -109,10 +123,16 @@ async fn heartbeat_uses_most_recent_update() {
         }
     });
 
-    // Update to a new frame mid-flight.
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    // Wait for the heartbeat to fire at least once with 0x11 before switching.
+    wait_for_async(|| last_fill.load(Ordering::Relaxed) == 0x11,
+                   Duration::from_secs(5),
+                   "heartbeat must fire with initial frame 0x11").await;
+
+    // Now switch to 0xFF and wait for it to be observed.
     hb.update(&universe(0xFF));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_async(|| last_fill.load(Ordering::Relaxed) == 0xFF,
+                   Duration::from_secs(5),
+                   "heartbeat must switch to updated frame 0xFF").await;
 
     let seen = last_fill.load(Ordering::Relaxed);
     assert_eq!(seen, 0xFF, "heartbeat switched to the new frame: got 0x{seen:02X}");

@@ -3,7 +3,7 @@
 Canonical source of truth for all tracked debt items. One entry per TD-ID.
 Updates: edit this file + commit. Session ledger (in-chat) must not diverge.
 
-Last updated: 2026-06-17 (LOW-1 close)
+Last updated: 2026-06-18 (HIGH-3 close)
 
 ---
 
@@ -163,3 +163,16 @@ note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
 | TD-ID  | Severity | Title (short)                          | Milestone |
 |--------|----------|----------------------------------------|-----------|
 | TD-004 | High     | wgpu→Metal block on startup            | MEDIUM-1  |
+
+## Note — tokio async sleeps in led-protocols (NOT part of TD-003)
+
+```yaml
+scope:  led-protocols/tests/heartbeat_test.rs, parallel_send.rs
+status: 5 of 7 converted to causal barriers (HIGH-3 continuation, 2026-06-18)
+        1 kept as-is: heartbeat_silent_before_first_update:69 — TYPE B
+        (asserts ABSENCE of events; timing window is the test's intent)
+distinction: |
+  These are tokio::time::sleep (async cooperative yield), not thread::sleep
+  (OS thread block). A different risk profile from TD-003. Converted where
+  beneficial; the one Type B is documented and acceptable.
+```

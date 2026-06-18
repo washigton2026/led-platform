@@ -122,6 +122,31 @@ clustering, WiFi-forbidden enforcement at transport layer.
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
 
+### 2026-06-18 — HIGH-3: TEST-SLEEP-001 — 8 thread::sleep → causal barriers
+
+**Done.**
+
+All 8 unconditional `thread::sleep` calls in integration tests replaced with causal
+spin-barriers (wait on `frames_sent() >= N` with 5s deadline + 1ms poll backoff).
+Classification: all 8 were Type A (countable event, spy device available). Zero Type B found.
+
+Wall-clock removed from critical path: ~1810ms total (350+500+150+120+120+120+250+200ms)
+→ <10ms per barrier. Suite: 311 passed, 0 failed. Clippy -D warnings: 0.
+
+Bonus fix: `contract.rs` test had `_s1` (unused spy device); now used as the event source
+for the `frames_sent >= 4` assertion, making the test meaningful instead of trivially
+asserting elapsed arithmetic.
+
+**Invariants verified.** 311 tests green; causal barriers are deterministic (no false
+flakiness from system load); timeout errors are diagnostic ("timeout: N/M events") not silent.
+
+**Pending.** TD-004 (wgpu→Metal, MEDIUM-1 dedicated session). Tokio async sleeps in
+led-protocols tests are cooperative yields (acceptable pattern in async runtimes — different
+from the blocking thread::sleep of TD-003).
+
+**Decisions.** TD-003 closed. Residual `sleep(1ms)` in spin-loop bodies is poll backoff,
+not a fixed delay — correct by design.
+
 ### 2026-06-17 — LOW-1: cargo fix panic + clippy -D warnings + cargo-audit + ledger
 
 **Done.**

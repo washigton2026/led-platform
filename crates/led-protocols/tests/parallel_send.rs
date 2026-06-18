@@ -62,12 +62,11 @@ async fn per_universe_sequences_increment_independently() {
     let mut sender = ParallelSender::new([0xBB; 16], "seq-test");
     sender.add_universe(5, addr).await.unwrap();
 
-    // Push 3 frames with a gap so the task has time to send between each.
+    // Push 3 frames; recv_timeout(300ms) is itself the causal barrier — sleep removed.
     let mut seqs = Vec::new();
     for _ in 0..3 {
         sender.push_frame(&[make_universe(5, 1)]);
-        tokio::time::sleep(Duration::from_millis(40)).await;
-
+        // No sleep needed: recv_timeout below waits up to 300ms for the packet.
         let mut buf = [0u8; 1500];
         if let Ok(Ok((n, _))) = tokio::time::timeout(
             Duration::from_millis(300),
@@ -100,11 +99,14 @@ async fn watch_channel_delivers_latest_frame_when_producer_is_faster() {
         sender.push_frame(&[make_universe(7, v)]);
     }
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // Read ALL packets that arrived.
+    // Causal: wait for the first packet to arrive (up to 2s), then drain the rest quickly.
     let mut last_fill = 0u8;
     let mut buf = [0u8; 1500];
+    // First packet: longer timeout to let the async sender task start.
+    if let Ok(Ok((n, _))) = tokio::time::timeout(Duration::from_secs(2), rx.recv_from(&mut buf)).await {
+        last_fill = packet::dmx_slots(&buf[..n])[0];
+    }
+    // Drain any further packets with a short timeout.
     while let Ok(Ok((n, _))) = tokio::time::timeout(Duration::from_millis(50), rx.recv_from(&mut buf)).await {
         last_fill = packet::dmx_slots(&buf[..n])[0];
     }
