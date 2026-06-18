@@ -145,14 +145,6 @@ note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
 
 | TD-ID  | Title (short)                         | Closed     | Commit   |
 |--------|---------------------------------------|------------|----------|
-| TD-007 | cargo-audit not installed             | 2026-06-17 | LOW-1    |
-| TD-008 | flash_buf alloc in render loop        | 2026-06-17 | e858fa8  |
-| TD-009 | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
-
-## Closed items — summary table
-
-| TD-ID  | Title (short)                         | Closed     | Commit   |
-|--------|---------------------------------------|------------|----------|
 | TD-003 | 8 thread::sleep in tests              | 2026-06-18 | 845e010  |
 | TD-007 | cargo-audit not installed             | 2026-06-17 | LOW-1    |
 | TD-008 | flash_buf alloc in render loop        | 2026-06-17 | e858fa8  |

@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (296 tests)
+cargo test --workspace                  # all suites (311 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -83,7 +83,7 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 
 ## Status (keep current)
 
-10 lib crates + `led-demo` binary + `led-bridge` integration crate · **296 tests green** · zero warnings.
+10 lib crates + `led-demo` binary + `led-bridge` integration crate · **311 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 
