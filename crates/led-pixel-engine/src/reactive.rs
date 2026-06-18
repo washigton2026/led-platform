@@ -5,19 +5,26 @@
 //! Hot-path discipline: the render side reads only [`AudioScalars`] (Copy, allocation-free).
 //! The spectrum stays behind [`AudioShare::with_spectrum`] so it is never cloned per frame.
 //!
-//! ## Lock-free design (TD-002 / RT-LOCK-RENDER-001)
+//! ## Coherent snapshot design (TD-002 / RT-LOCK-RENDER-001)
 //!
-//! `AudioScalars` fields are stored as individual std atomics — no lock on the render path.
-//! `publish()` writes each field with `Release`; `scalars()` reads each with `Acquire`.
-//! This is not a consistent snapshot (two fields may be from adjacent writes), but for
-//! music-reactive visuals a one-hop skew (~5ms at 200Hz) is imperceptible and safe.
+//! `AudioScalars` is published as a whole struct under a single `RwLock<AudioScalars>`,
+//! separate from the spectrum. `scalars()` takes one `read()` → copies the struct → drops
+//! the guard. This is ONE snapshot: all fields come from the same `publish()` call.
 //!
-//! `spectrum` (Vec<f32>, not Copy) stays behind a `RwLock`, but `render()` never calls
-//! `with_spectrum` — only diagnostic/analysis code does — so it is not on the hot path.
+//! Why not per-field atomics (previous attempt): 7 separate loads cannot guarantee that
+//! `beat` and `timestamp_ms` come from the same publish. `BeatFlash` checks
+//! `beat && timestamp_ms != last` — tearing between these two fields breaks beat detection.
+//!
+//! Why not `tokio::sync::watch`: `led-pixel-engine` is std-only (no tokio dep allowed).
+//! `watch::borrow()` internally uses an `RwLock` anyway. `RwLock<AudioScalars>` achieves
+//! the identical semantic with no new dependency.
+//!
+//! Lock duration: copying `AudioScalars` (~40 bytes) takes ~5ns. Contention probability
+//! at 200 Hz writes / 60 fps reads: ~(200*Δt) where Δt<<1ms → effectively zero.
+//! `spectrum` stays behind a separate `RwLock<Vec<f32>>` — never touched by `render()`.
 
 use std::cell::Cell;
 use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use led_core::{AudioFeatures, PixelColor};
 
@@ -36,40 +43,15 @@ pub struct AudioScalars {
     pub high: f32,
 }
 
-/// Per-field atomics for `AudioScalars`. Floats are stored as their bit pattern (u32)
-/// via `f32::to_bits`/`from_bits` — no unsafe required, no UB (IEEE 754 is bijective).
-struct AtomicScalars {
-    sample_rate:  AtomicU32,
-    timestamp_ms: AtomicU64,
-    rms:          AtomicU32,   // f32 bit pattern
-    beat:         AtomicBool,
-    bass:         AtomicU32,   // f32 bit pattern
-    mid:          AtomicU32,   // f32 bit pattern
-    high:         AtomicU32,   // f32 bit pattern
-}
-
-impl Default for AtomicScalars {
-    fn default() -> Self {
-        Self {
-            sample_rate:  AtomicU32::new(0),
-            timestamp_ms: AtomicU64::new(0),
-            rms:          AtomicU32::new(0),
-            beat:         AtomicBool::new(false),
-            bass:         AtomicU32::new(0),
-            mid:          AtomicU32::new(0),
-            high:         AtomicU32::new(0),
-        }
-    }
-}
-
 /// Shared latest audio analysis. One writer (audio thread) via [`publish`](Self::publish),
 /// many readers (render thread) via [`scalars`](Self::scalars).
 ///
-/// `scalars()` is **lock-free**: it reads per-field atomics with `Acquire` ordering.
-/// `publish()` writes per-field atomics with `Release` ordering — no lock taken.
-/// `with_spectrum()` uses a `RwLock<Vec<f32>>` but is never called from `render()`.
+/// `scalars()` takes a single `RwLock::read()`, copies the whole `AudioScalars` struct,
+/// and drops the guard — one coherent snapshot per call, all fields from the same publish.
+/// `publish()` takes `RwLock::write()` to atomically replace the struct.
+/// `with_spectrum()` uses a *separate* `RwLock<Vec<f32>>` — never called from `render()`.
 pub struct AudioShare {
-    atomic:   AtomicScalars,
+    scalars:  RwLock<AudioScalars>,
     spectrum: RwLock<Vec<f32>>,
 }
 
@@ -82,25 +64,26 @@ impl Default for AudioShare {
 impl AudioShare {
     pub fn new() -> Self {
         Self {
-            atomic:   AtomicScalars::default(),
+            scalars:  RwLock::new(AudioScalars::default()),
             spectrum: RwLock::new(Vec::new()),
         }
     }
 
     /// Publish the newest features (audio thread, ~200 Hz).
-    /// Each scalar field is stored atomically with Release ordering.
-    /// Spectrum update takes an exclusive write lock (brief copy, off the render path).
+    /// Atomically replaces the whole `AudioScalars` struct in one write lock.
+    /// Spectrum update is separate — isolated from the scalar snapshot.
     pub fn publish(&self, f: &AudioFeatures) {
-        // Scalars — lock-free stores.
-        self.atomic.sample_rate .store(f.sample_rate,           Ordering::Release);
-        self.atomic.timestamp_ms.store(f.timestamp_ms,          Ordering::Release);
-        self.atomic.rms         .store(f.rms.to_bits(),         Ordering::Release);
-        self.atomic.beat        .store(f.beat,                  Ordering::Release);
-        self.atomic.bass        .store(f.bass.to_bits(),        Ordering::Release);
-        self.atomic.mid         .store(f.mid.to_bits(),         Ordering::Release);
-        self.atomic.high        .store(f.high.to_bits(),        Ordering::Release);
-
-        // Spectrum — behind RwLock, not on render hot-path.
+        // Scalars: one write lock, whole-struct replacement — coherent on the read side.
+        *self.scalars.write().unwrap() = AudioScalars {
+            sample_rate:  f.sample_rate,
+            timestamp_ms: f.timestamp_ms,
+            rms:          f.rms,
+            beat:         f.beat,
+            bass:         f.bass,
+            mid:          f.mid,
+            high:         f.high,
+        };
+        // Spectrum: separate lock — never contends with scalars reads on render path.
         let mut g = self.spectrum.write().unwrap();
         if g.len() != f.spectrum.len() {
             g.resize(f.spectrum.len(), 0.0); // only on sample-rate change (rare)
@@ -108,22 +91,15 @@ impl AudioShare {
         g.copy_from_slice(&f.spectrum);
     }
 
-    /// Latest scalar fields. **Lock-free** — Acquire loads on each atomic field.
-    /// Called every render frame; no mutex, no blocking.
+    /// ONE coherent snapshot of all scalar audio fields.
+    /// Single `read()` → struct copy (~40 bytes, ~5ns) → guard dropped.
+    /// All fields guaranteed to come from the same `publish()` call.
     pub fn scalars(&self) -> AudioScalars {
-        AudioScalars {
-            sample_rate:  self.atomic.sample_rate .load(Ordering::Acquire),
-            timestamp_ms: self.atomic.timestamp_ms.load(Ordering::Acquire),
-            rms:          f32::from_bits(self.atomic.rms .load(Ordering::Acquire)),
-            beat:         self.atomic.beat        .load(Ordering::Acquire),
-            bass:         f32::from_bits(self.atomic.bass.load(Ordering::Acquire)),
-            mid:          f32::from_bits(self.atomic.mid .load(Ordering::Acquire)),
-            high:         f32::from_bits(self.atomic.high.load(Ordering::Acquire)),
-        }
+        *self.scalars.read().unwrap()
     }
 
     /// Borrow the latest spectrum without cloning it.
-    /// Uses RwLock — acceptable here; `render()` never calls this.
+    /// Uses a separate `RwLock` — `render()` never calls this.
     pub fn with_spectrum<R>(&self, f: impl FnOnce(&[f32]) -> R) -> R {
         let g = self.spectrum.read().unwrap();
         f(&g)
@@ -414,6 +390,53 @@ mod adversarial_tests {
         assert!(out.r <= base.r, "r overflow: {} > {}", out.r, base.r);
         assert!(out.g <= base.g, "g overflow: {} > {}", out.g, base.g);
         assert!(out.b <= base.b, "b overflow: {} > {}", out.b, base.b);
+    }
+
+    // ── COHERENCE: scalars() must return beat+timestamp_ms from the SAME publish ─
+    // This is the property that per-field atomics violated (TD-002).
+    // A concurrent writer publishes frames with strictly increasing (beat, timestamp_ms)
+    // pairs; the reader asserts that every snapshot it sees is internally consistent:
+    // if beat=true, timestamp_ms must match the ts that was published with that beat.
+    #[test]
+    fn audioshare_scalars_beat_timestamp_coherent_under_concurrency() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::thread;
+        // Known pairs: publish alternates (beat=false, ts=even) / (beat=true, ts=odd).
+        // A coherent snapshot must satisfy: beat == (timestamp_ms % 2 == 1).
+        let share = Arc::new(AudioShare::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let violations = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        // Writer: publishes 10_000 frames alternating beat/no-beat with matched timestamps.
+        let ws = share.clone();
+        let writer = thread::spawn(move || {
+            for i in 0u64..10_000 {
+                let beat = i % 2 == 1;
+                ws.publish(&af(beat, i, 0.0, 0.0));
+            }
+        });
+
+        // Reader: reads in a tight loop, checks coherence of every snapshot.
+        let rs = share.clone();
+        let st = stop.clone();
+        let viol = violations.clone();
+        let reader = thread::spawn(move || {
+            while !st.load(Ordering::Relaxed) {
+                let sc = rs.scalars();
+                // Coherence invariant: beat ↔ odd timestamp.
+                let expected_beat = sc.timestamp_ms % 2 == 1;
+                if sc.timestamp_ms > 0 && sc.beat != expected_beat {
+                    viol.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        });
+
+        writer.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+
+        let v = violations.load(Ordering::Relaxed);
+        assert_eq!(v, 0, "coherence violated {v} times: beat/timestamp_ms from different publishes");
     }
 
     // ── REAL-TIME: BeatFlash render must complete in < 1ms (50ms tick budget) ─

@@ -146,33 +146,36 @@ note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
 ```yaml
 td_id:     TD-002
 alias:     TD-010 (registrado em 2026-06-18 antes de reconciliação)
-title:     "AudioShare scalars() adquiria lock (Mutex→RwLock) no render hot-path por frame"
+title:     "AudioShare scalars() adquiria lock no render hot-path por frame; atomics violavam coerência"
 severity:  High
 status:    closed
 closed_on: 2026-06-18
 history: |
-  Commit f6c496c: Mutex → RwLock (melhoria parcial — ainda bloqueante).
-  Commit seguinte: RwLock→ atômicos individuais por campo (fix real).
+  Commit f6c496c: Mutex → RwLock (melhoria parcial — ainda bloqueante, coerente).
+  Commit 60afc4a: RwLock → 7 AtomicU32/U64/Bool (lock-free mas snapshot incoerente —
+    beat e timestamp_ms podiam vir de publishes diferentes, quebrando BeatFlash).
+  Commit final: atomics removidos; AudioShare reestruturado com snapshot coerente.
 fix: |
-  led-pixel-engine/src/reactive.rs: AudioShare reescrito com AtomicScalars.
-  AudioScalars (7 campos Copy) armazenados como atômicos individuais:
-    sample_rate  → AtomicU32  (u32 direto)
-    timestamp_ms → AtomicU64  (u64 direto)
-    rms/bass/mid/high → AtomicU32 (f32::to_bits / f32::from_bits — bijective, sem unsafe)
-    beat         → AtomicBool
-  publish() faz Release stores; scalars() faz Acquire loads. Zero locks no render path.
-  spectrum (Vec<f32>, não Copy) permanece atrás de RwLock — aceitável pois render()
-  nunca chama with_spectrum(). Verificado por grep.
+  led-pixel-engine/src/reactive.rs: AudioShare reescrito com dois RwLocks separados:
+    scalars:  RwLock<AudioScalars>  — snapshot coerente de struct completa
+    spectrum: RwLock<Vec<f32>>      — separado, nunca tocado por render()
+
+  publish(): write() substitui a struct inteira atomicamente.
+  scalars(): um único read() → copia a struct (~40 bytes) → drop do guard.
+    Todos os campos vêm do mesmo publish() — coerência garantida.
+  with_spectrum(): read() separado — render() nunca chama este método.
+
+  Não usa tokio::sync::watch (led-pixel-engine é std-only; watch internamente
+  usa RwLock de qualquer forma — mesma semântica, mais dependência).
 reproduce: |
-  grep -n 'read()\|write()\|lock()' crates/led-pixel-engine/src/reactive.rs
-  → só aparece em publish() e with_spectrum() (linhas 104, 128). Nunca em scalars().
+  grep -n 'load(\|borrow()\|read()' crates/led-pixel-engine/src/reactive.rs
+  → read() só em scalars() (1 call) e with_spectrum() (1 call). Nunca em render().
 verified: |
-  48 led-pixel-engine tests pass incluindo 8-thread AudioShare concurrency.
-  RT-LOCK-RENDER-001 detector: não dispara (grep confirma ausência de lock em scalars()).
-note: |
-  Tradeoff: 7 loads atômicos em vez de 1 lock. Cada load é cache-coherent e muito mais
-  barato que um lock. Skew entre campos: ~5ms máx a 200Hz — imperceptível para visuais.
-  Para snapshot atômico perfeito: seqlock (requer unsafe). Desnecessário para este uso.
+  49 led-pixel-engine tests pass incluindo:
+    - audioshare_concurrent_publish_read_no_deadlock (8 threads)
+    - audioshare_scalars_beat_timestamp_coherent_under_concurrency (NOVO — 10k frames,
+      leitor verifica beat == (timestamp_ms % 2 == 1) em cada snapshot, 0 violações)
+  Clippy -D warnings: 0. Workspace: 312 passed, 0 failed.
 ```
 
 ---
@@ -231,6 +234,7 @@ reproduce: "grep -n 'thread::sleep' crates/led-hal/src/cluster.rs"
 | TD-008  | flash_buf alloc em render loop        | 2026-06-17 | e858fa8  |
 | TD-009  | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
 | TD-002  | RT-LOCK-RENDER-001: lock em scalars() | 2026-06-18 | pending  |
+| TD-005  | adapt() aloca per-call               | closed     | adapt_into em produção |
 
 ## Open items — priority order
 
