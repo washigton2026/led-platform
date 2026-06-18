@@ -21,27 +21,32 @@ Last updated: 2026-06-17 (LOW-1 close)
 td_id:     TD-003
 title:     "8 thread::sleep calls in integration tests make suite timing-sensitive"
 severity:  High
-status:    open
-source:    AEGS audit (HIGH-1 cycle)
-type:      test-reliability / flakiness
-locations:
-  - crates/led-bridge/tests/e2e_pipeline.rs:213      # sleep 250ms
-  - crates/led-bridge/tests/multi_system.rs:232      # sleep 200ms
-  - crates/led-hal/tests/contract.rs:114             # sleep 350ms
-  - crates/led-hal/tests/contract.rs:198             # sleep 500ms
-  - crates/led-hal/tests/lifecycle.rs:55             # sleep 150ms
-  - crates/led-pixel-engine/tests/audio_bridge.rs:70 # sleep 120ms
-  - crates/led-pixel-engine/tests/pipeline.rs:26     # sleep 120ms
-  - crates/led-sequencer/tests/pipeline_drive.rs:28  # sleep 120ms
-fix:       Replace each sleep with event/channel wait (timeout-guarded).
-           Correct pattern: recv_timeout(Duration::from_millis(N)) or
-           spin-loop on AtomicBool with deadline.
-milestone: MEDIUM-3
+status:    closed
+closed_on: 2026-06-18 (commit 845e010 — HIGH-3)
+fix: |
+  All 8 classified as Type A (countable event with spy device available).
+  Converted to causal spin-barrier: wait on frames_sent() >= N with 5s deadline
+  + 1ms poll. Zero Type B (settling without countable signal) found.
+
+  Conversions:
+    lifecycle.rs     sleep(150ms) → wait_for(sim.frames_sent ≥ 3, 5s)
+    contract.rs:114  sleep(350ms) → wait_for(sim1.frames_sent ≥ 2, 5s)
+    contract.rs:198  sleep(500ms) → wait_for(s1.frames_sent ≥ 4, 5s)
+                     (also fixed: _s1 was an unused spy device — now used)
+    pipeline_drive   sleep(120ms) → spin sim.frames_sent ≥ 1
+    pipeline.rs      sleep(120ms) → spin sim.frames_sent ≥ 1
+    audio_bridge.rs  sleep(120ms) → spin sim.frames_sent ≥ 1
+    e2e_pipeline.rs  sleep(250ms) → spin sim_dev.frames_sent ≥ 3
+    multi_system.rs  sleep(200ms) → spin sim_dev.frames_sent ≥ 2
+
+  Residual sleep(1ms) in each spin-loop body is a poll backoff, not a fixed delay.
+  Wall-clock removed from critical path: ~1810ms → <10ms per barrier.
+
+suite:     311 passed, 0 failed. Clippy -D warnings: 0.
 note: |
   DO NOT CONFUSE with TD-009 (KB-009): the 2 wall-clock budget tests
   (mock_analyze_all_realtime_speed, classifier_10k_frames_fast) that regressed
-  due to zip() iterator overhead were fixed in LOW-1 and are NOT part of TD-003.
-  TD-003 is strictly the 8 unconditional sleep() calls above.
+  due to zip() iterator overhead were fixed in LOW-1. Different issue.
 ```
 
 ---
@@ -144,9 +149,17 @@ note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
 | TD-008 | flash_buf alloc in render loop        | 2026-06-17 | e858fa8  |
 | TD-009 | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
 
+## Closed items — summary table
+
+| TD-ID  | Title (short)                         | Closed     | Commit   |
+|--------|---------------------------------------|------------|----------|
+| TD-003 | 8 thread::sleep in tests              | 2026-06-18 | 845e010  |
+| TD-007 | cargo-audit not installed             | 2026-06-17 | LOW-1    |
+| TD-008 | flash_buf alloc in render loop        | 2026-06-17 | e858fa8  |
+| TD-009 | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
+
 ## Open items — priority order
 
 | TD-ID  | Severity | Title (short)                          | Milestone |
 |--------|----------|----------------------------------------|-----------|
-| TD-003 | High     | 8 thread::sleep in tests               | MEDIUM-3  |
 | TD-004 | High     | wgpu→Metal block on startup            | MEDIUM-1  |
