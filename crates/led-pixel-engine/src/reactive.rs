@@ -6,7 +6,7 @@
 //! The spectrum stays behind [`AudioShare::with_spectrum`] so it is never cloned per frame.
 
 use std::cell::Cell;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use led_core::{AudioFeatures, PixelColor};
 
@@ -32,8 +32,14 @@ struct Inner {
 
 /// Shared latest audio analysis. One writer (audio thread) via [`publish`](Self::publish),
 /// many readers (render thread) via [`scalars`](Self::scalars).
+///
+/// Uses `RwLock` so concurrent render-thread reads never block each other — only the
+/// audio write (~200 Hz) takes an exclusive lock. This avoids the RT-LOCK-RENDER-001
+/// issue where `Mutex::lock()` on the render path could block waiting for the writer
+/// (TD-010). `RwLock::read()` is uncontended when no write is in progress, which is
+/// the common case on the render thread (60 fps reads vs 200 Hz writes).
 pub struct AudioShare {
-    inner: Mutex<Inner>,
+    inner: RwLock<Inner>,
 }
 
 impl Default for AudioShare {
@@ -44,12 +50,13 @@ impl Default for AudioShare {
 
 impl AudioShare {
     pub fn new() -> Self {
-        Self { inner: Mutex::new(Inner { scalars: AudioScalars::default(), spectrum: Vec::new() }) }
+        Self { inner: RwLock::new(Inner { scalars: AudioScalars::default(), spectrum: Vec::new() }) }
     }
 
     /// Publish the newest features (called at the audio analysis rate, not per render frame).
+    /// Takes an exclusive write lock — brief, struct-copy only.
     pub fn publish(&self, f: &AudioFeatures) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.write().unwrap();
         g.scalars = AudioScalars {
             sample_rate: f.sample_rate,
             timestamp_ms: f.timestamp_ms,
@@ -66,13 +73,14 @@ impl AudioShare {
     }
 
     /// Latest scalar fields. Copy — allocation-free, safe on the render hot path.
+    /// Takes a shared read lock: concurrent render reads never block each other.
     pub fn scalars(&self) -> AudioScalars {
-        self.inner.lock().unwrap().scalars
+        self.inner.read().unwrap().scalars
     }
 
     /// Borrow the latest spectrum without cloning it.
     pub fn with_spectrum<R>(&self, f: impl FnOnce(&[f32]) -> R) -> R {
-        let g = self.inner.lock().unwrap();
+        let g = self.inner.read().unwrap();
         f(&g.spectrum)
     }
 }

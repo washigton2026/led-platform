@@ -249,7 +249,15 @@ mod cluster_heartbeat_tests {
     use super::*;
     use crate::{CompiledLayout, DeviceSpec, Hal, Heartbeat, RgbOrder, SimulatorDevice};
     use led_core::{DeviceDriver, LogicalFrame, PixelColor};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    fn wait_for(condition: impl Fn() -> bool, timeout: Duration, msg: &str) {
+        let deadline = Instant::now() + timeout;
+        while !condition() {
+            assert!(Instant::now() < deadline, "timeout waiting for: {msg}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 
     const PIXELS: usize = 20;
 
@@ -317,7 +325,12 @@ mod cluster_heartbeat_tests {
 
         let ch = ClusterHeartbeat::new(Arc::clone(&cluster), Arc::clone(&hb));
         let _handle = ch.spawn(Duration::from_millis(80));
-        std::thread::sleep(Duration::from_millis(250));
+
+        // Causal barrier: wait until BOTH sims have ≥3 frames (1 initial + ≥2 heartbeats).
+        // Previously a fixed sleep(250ms) — the 9th unconverted sleep from TD-003.
+        wait_for(|| sim1.frames_sent() >= 3 && sim2.frames_sent() >= 3,
+                 Duration::from_secs(5),
+                 "both sims must receive ≥3 frames at 80ms heartbeat interval");
 
         let s1 = sim1.frames_sent();
         let s2 = sim2.frames_sent();

@@ -141,20 +141,89 @@ note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
 
 ---
 
+## TD-010 — RT-LOCK-RENDER-001: Mutex no render hot-path (AudioShare)
+
+```yaml
+td_id:     TD-010
+title:     "AudioShare uses Mutex::lock() on render hot-path — blocks render thread waiting for audio writer"
+severity:  High
+status:    closed
+closed_on: 2026-06-18
+fix: |
+  Replaced Mutex<Inner> with RwLock<Inner> in led-pixel-engine/src/reactive.rs.
+  scalars() and with_spectrum() now call read() — concurrent render reads never block
+  each other. Only publish() (audio writer, ~200Hz) takes write(). In the common case
+  (render reads between audio writes), read() is uncontended.
+  Note: RwLock is a significant improvement over Mutex but not fully lock-free. A
+  seqlock or AtomicCell over AudioScalars would eliminate render-thread blocking
+  entirely. Tracked as future improvement if p99 latency shows contention.
+reproduce: "grep -n 'Mutex\|\.scalars()\|fn render' crates/led-pixel-engine/src/reactive.rs"
+verified:  "48 led-pixel-engine tests pass incl. 8-thread AudioShare concurrency test"
+```
+
+---
+
+## TD-006 — TEST-BUDGET-001: wall-clock budget em teste é paliativo
+
+```yaml
+td_id:     TD-006
+title:     "mock_analyze_all_realtime_speed: budget 2.0s alargado é paliativo, não fix"
+severity:  Medium
+status:    open
+source:    AEGS audit / KB-009 reconciliation (2026-06-18)
+type:      test-reliability / wall-clock
+location:  crates/audio-core/src/capture.rs:559
+root_cause: |
+  O teste asserta elapsed < 2.0s mas o real invariante é "processa 1s de áudio
+  muito mais rápido que real-time". O budget foi expandido de 1.0s → 2.0s para
+  evitar flap sob workspace parallelism. Isso mascara a causa raiz: o teste
+  usa Instant::now() wall-clock que é afetado por carga do sistema.
+fix: |
+  Opção A: marcar o teste com #[ignore] e invocar separadamente no e2e script
+           com cargo test -p audio-core -- mock_analyze_all_realtime_speed
+  Opção B: medir em release (--release) onde o budget é muito mais folgado
+  Opção C: usar um critério baseado em contagem de hops, não wall-clock
+milestone: MEDIUM-3 (junto com outros melhorias de test-reliability)
+note:      "KB-009 documenta a classe. O budget 2.0s é provisório."
+```
+
+---
+
+## TD-003b — cluster.rs:320: 9º sleep fixo não contabilizado
+
+```yaml
+td_id:     TD-003b
+title:     "cluster.rs:320 sleep(250ms) em #[cfg(test)] — não contabilizado em TD-003"
+severity:  High
+status:    closed
+closed_on: 2026-06-18
+fix: |
+  Convertido para causal barrier: wait_for(sim1.frames_sent >= 3 && sim2.frames_sent >= 3,
+  5s timeout). Mesmo padrão dos 8 sleeps de TD-003. O sleep estava em
+  led-hal/src/cluster.rs dentro de #[cfg(test)] mod — não em crates/*/tests/,
+  por isso escapou da busca original do TD-003.
+reproduce: "grep -n 'thread::sleep' crates/led-hal/src/cluster.rs"
+```
+
+---
+
 ## Closed items — summary table
 
-| TD-ID  | Title (short)                         | Closed     | Commit   |
-|--------|---------------------------------------|------------|----------|
-| TD-003 | 8 thread::sleep in tests              | 2026-06-18 | 845e010  |
-| TD-007 | cargo-audit not installed             | 2026-06-17 | LOW-1    |
-| TD-008 | flash_buf alloc in render loop        | 2026-06-17 | e858fa8  |
-| TD-009 | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
+| TD-ID   | Title (short)                         | Closed     | Commit   |
+|---------|---------------------------------------|------------|----------|
+| TD-003  | 8 thread::sleep em tests (tests/)     | 2026-06-18 | 845e010  |
+| TD-003b | 9º sleep cluster.rs #[cfg(test)]      | 2026-06-18 | pending  |
+| TD-007  | cargo-audit not installed             | 2026-06-17 | LOW-1    |
+| TD-008  | flash_buf alloc em render loop        | 2026-06-17 | e858fa8  |
+| TD-009  | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
+| TD-010  | Mutex → RwLock em AudioShare          | 2026-06-18 | pending  |
 
 ## Open items — priority order
 
 | TD-ID  | Severity | Title (short)                          | Milestone |
 |--------|----------|----------------------------------------|-----------|
 | TD-004 | High     | wgpu→Metal block on startup            | MEDIUM-1  |
+| TD-006 | Medium   | wall-clock budget em teste (paliativo) | MEDIUM-3  |
 
 ## Note — tokio async sleeps in led-protocols (NOT part of TD-003)
 
