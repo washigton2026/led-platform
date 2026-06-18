@@ -141,24 +141,38 @@ note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
 
 ---
 
-## TD-010 — RT-LOCK-RENDER-001: Mutex no render hot-path (AudioShare)
+## TD-002 / TD-010 — RT-LOCK-RENDER-001: lock no render hot-path (AudioShare)
 
 ```yaml
-td_id:     TD-010
-title:     "AudioShare uses Mutex::lock() on render hot-path — blocks render thread waiting for audio writer"
+td_id:     TD-002
+alias:     TD-010 (registrado em 2026-06-18 antes de reconciliação)
+title:     "AudioShare scalars() adquiria lock (Mutex→RwLock) no render hot-path por frame"
 severity:  High
 status:    closed
 closed_on: 2026-06-18
+history: |
+  Commit f6c496c: Mutex → RwLock (melhoria parcial — ainda bloqueante).
+  Commit seguinte: RwLock→ atômicos individuais por campo (fix real).
 fix: |
-  Replaced Mutex<Inner> with RwLock<Inner> in led-pixel-engine/src/reactive.rs.
-  scalars() and with_spectrum() now call read() — concurrent render reads never block
-  each other. Only publish() (audio writer, ~200Hz) takes write(). In the common case
-  (render reads between audio writes), read() is uncontended.
-  Note: RwLock is a significant improvement over Mutex but not fully lock-free. A
-  seqlock or AtomicCell over AudioScalars would eliminate render-thread blocking
-  entirely. Tracked as future improvement if p99 latency shows contention.
-reproduce: "grep -n 'Mutex\|\.scalars()\|fn render' crates/led-pixel-engine/src/reactive.rs"
-verified:  "48 led-pixel-engine tests pass incl. 8-thread AudioShare concurrency test"
+  led-pixel-engine/src/reactive.rs: AudioShare reescrito com AtomicScalars.
+  AudioScalars (7 campos Copy) armazenados como atômicos individuais:
+    sample_rate  → AtomicU32  (u32 direto)
+    timestamp_ms → AtomicU64  (u64 direto)
+    rms/bass/mid/high → AtomicU32 (f32::to_bits / f32::from_bits — bijective, sem unsafe)
+    beat         → AtomicBool
+  publish() faz Release stores; scalars() faz Acquire loads. Zero locks no render path.
+  spectrum (Vec<f32>, não Copy) permanece atrás de RwLock — aceitável pois render()
+  nunca chama with_spectrum(). Verificado por grep.
+reproduce: |
+  grep -n 'read()\|write()\|lock()' crates/led-pixel-engine/src/reactive.rs
+  → só aparece em publish() e with_spectrum() (linhas 104, 128). Nunca em scalars().
+verified: |
+  48 led-pixel-engine tests pass incluindo 8-thread AudioShare concurrency.
+  RT-LOCK-RENDER-001 detector: não dispara (grep confirma ausência de lock em scalars()).
+note: |
+  Tradeoff: 7 loads atômicos em vez de 1 lock. Cada load é cache-coherent e muito mais
+  barato que um lock. Skew entre campos: ~5ms máx a 200Hz — imperceptível para visuais.
+  Para snapshot atômico perfeito: seqlock (requer unsafe). Desnecessário para este uso.
 ```
 
 ---
@@ -216,7 +230,7 @@ reproduce: "grep -n 'thread::sleep' crates/led-hal/src/cluster.rs"
 | TD-007  | cargo-audit not installed             | 2026-06-17 | LOW-1    |
 | TD-008  | flash_buf alloc em render loop        | 2026-06-17 | e858fa8  |
 | TD-009  | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
-| TD-010  | Mutex → RwLock em AudioShare          | 2026-06-18 | pending  |
+| TD-002  | RT-LOCK-RENDER-001: lock em scalars() | 2026-06-18 | pending  |
 
 ## Open items — priority order
 

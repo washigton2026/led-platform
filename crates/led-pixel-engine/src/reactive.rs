@@ -4,9 +4,20 @@
 //!
 //! Hot-path discipline: the render side reads only [`AudioScalars`] (Copy, allocation-free).
 //! The spectrum stays behind [`AudioShare::with_spectrum`] so it is never cloned per frame.
+//!
+//! ## Lock-free design (TD-002 / RT-LOCK-RENDER-001)
+//!
+//! `AudioScalars` fields are stored as individual std atomics — no lock on the render path.
+//! `publish()` writes each field with `Release`; `scalars()` reads each with `Acquire`.
+//! This is not a consistent snapshot (two fields may be from adjacent writes), but for
+//! music-reactive visuals a one-hop skew (~5ms at 200Hz) is imperceptible and safe.
+//!
+//! `spectrum` (Vec<f32>, not Copy) stays behind a `RwLock`, but `render()` never calls
+//! `with_spectrum` — only diagnostic/analysis code does — so it is not on the hot path.
 
 use std::cell::Cell;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use led_core::{AudioFeatures, PixelColor};
 
@@ -25,21 +36,41 @@ pub struct AudioScalars {
     pub high: f32,
 }
 
-struct Inner {
-    scalars: AudioScalars,
-    spectrum: Vec<f32>,
+/// Per-field atomics for `AudioScalars`. Floats are stored as their bit pattern (u32)
+/// via `f32::to_bits`/`from_bits` — no unsafe required, no UB (IEEE 754 is bijective).
+struct AtomicScalars {
+    sample_rate:  AtomicU32,
+    timestamp_ms: AtomicU64,
+    rms:          AtomicU32,   // f32 bit pattern
+    beat:         AtomicBool,
+    bass:         AtomicU32,   // f32 bit pattern
+    mid:          AtomicU32,   // f32 bit pattern
+    high:         AtomicU32,   // f32 bit pattern
+}
+
+impl Default for AtomicScalars {
+    fn default() -> Self {
+        Self {
+            sample_rate:  AtomicU32::new(0),
+            timestamp_ms: AtomicU64::new(0),
+            rms:          AtomicU32::new(0),
+            beat:         AtomicBool::new(false),
+            bass:         AtomicU32::new(0),
+            mid:          AtomicU32::new(0),
+            high:         AtomicU32::new(0),
+        }
+    }
 }
 
 /// Shared latest audio analysis. One writer (audio thread) via [`publish`](Self::publish),
 /// many readers (render thread) via [`scalars`](Self::scalars).
 ///
-/// Uses `RwLock` so concurrent render-thread reads never block each other — only the
-/// audio write (~200 Hz) takes an exclusive lock. This avoids the RT-LOCK-RENDER-001
-/// issue where `Mutex::lock()` on the render path could block waiting for the writer
-/// (TD-010). `RwLock::read()` is uncontended when no write is in progress, which is
-/// the common case on the render thread (60 fps reads vs 200 Hz writes).
+/// `scalars()` is **lock-free**: it reads per-field atomics with `Acquire` ordering.
+/// `publish()` writes per-field atomics with `Release` ordering — no lock taken.
+/// `with_spectrum()` uses a `RwLock<Vec<f32>>` but is never called from `render()`.
 pub struct AudioShare {
-    inner: RwLock<Inner>,
+    atomic:   AtomicScalars,
+    spectrum: RwLock<Vec<f32>>,
 }
 
 impl Default for AudioShare {
@@ -50,38 +81,52 @@ impl Default for AudioShare {
 
 impl AudioShare {
     pub fn new() -> Self {
-        Self { inner: RwLock::new(Inner { scalars: AudioScalars::default(), spectrum: Vec::new() }) }
-    }
-
-    /// Publish the newest features (called at the audio analysis rate, not per render frame).
-    /// Takes an exclusive write lock — brief, struct-copy only.
-    pub fn publish(&self, f: &AudioFeatures) {
-        let mut g = self.inner.write().unwrap();
-        g.scalars = AudioScalars {
-            sample_rate: f.sample_rate,
-            timestamp_ms: f.timestamp_ms,
-            rms: f.rms,
-            beat: f.beat,
-            bass: f.bass,
-            mid: f.mid,
-            high: f.high,
-        };
-        if g.spectrum.len() != f.spectrum.len() {
-            g.spectrum.resize(f.spectrum.len(), 0.0); // only on size change (rare)
+        Self {
+            atomic:   AtomicScalars::default(),
+            spectrum: RwLock::new(Vec::new()),
         }
-        g.spectrum.copy_from_slice(&f.spectrum);
     }
 
-    /// Latest scalar fields. Copy — allocation-free, safe on the render hot path.
-    /// Takes a shared read lock: concurrent render reads never block each other.
+    /// Publish the newest features (audio thread, ~200 Hz).
+    /// Each scalar field is stored atomically with Release ordering.
+    /// Spectrum update takes an exclusive write lock (brief copy, off the render path).
+    pub fn publish(&self, f: &AudioFeatures) {
+        // Scalars — lock-free stores.
+        self.atomic.sample_rate .store(f.sample_rate,           Ordering::Release);
+        self.atomic.timestamp_ms.store(f.timestamp_ms,          Ordering::Release);
+        self.atomic.rms         .store(f.rms.to_bits(),         Ordering::Release);
+        self.atomic.beat        .store(f.beat,                  Ordering::Release);
+        self.atomic.bass        .store(f.bass.to_bits(),        Ordering::Release);
+        self.atomic.mid         .store(f.mid.to_bits(),         Ordering::Release);
+        self.atomic.high        .store(f.high.to_bits(),        Ordering::Release);
+
+        // Spectrum — behind RwLock, not on render hot-path.
+        let mut g = self.spectrum.write().unwrap();
+        if g.len() != f.spectrum.len() {
+            g.resize(f.spectrum.len(), 0.0); // only on sample-rate change (rare)
+        }
+        g.copy_from_slice(&f.spectrum);
+    }
+
+    /// Latest scalar fields. **Lock-free** — Acquire loads on each atomic field.
+    /// Called every render frame; no mutex, no blocking.
     pub fn scalars(&self) -> AudioScalars {
-        self.inner.read().unwrap().scalars
+        AudioScalars {
+            sample_rate:  self.atomic.sample_rate .load(Ordering::Acquire),
+            timestamp_ms: self.atomic.timestamp_ms.load(Ordering::Acquire),
+            rms:          f32::from_bits(self.atomic.rms .load(Ordering::Acquire)),
+            beat:         self.atomic.beat        .load(Ordering::Acquire),
+            bass:         f32::from_bits(self.atomic.bass.load(Ordering::Acquire)),
+            mid:          f32::from_bits(self.atomic.mid .load(Ordering::Acquire)),
+            high:         f32::from_bits(self.atomic.high.load(Ordering::Acquire)),
+        }
     }
 
     /// Borrow the latest spectrum without cloning it.
+    /// Uses RwLock — acceptable here; `render()` never calls this.
     pub fn with_spectrum<R>(&self, f: impl FnOnce(&[f32]) -> R) -> R {
-        let g = self.inner.read().unwrap();
-        f(&g.spectrum)
+        let g = self.spectrum.read().unwrap();
+        f(&g)
     }
 }
 
