@@ -2,7 +2,7 @@
 //! triple buffer → HAL → device, across two threads.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use led_core::{CompiledLayout, DeviceDriver, DeviceSpec, PixelColor, ProtocolOutput, RgbOrder};
 use led_hal::{Hal, SimulatorDevice};
@@ -25,7 +25,13 @@ fn timeline_drives_render_send_pipeline() {
     );
 
     let handle = spawn(Box::new(timeline), vec![Vec3::ZERO; N], out, 200);
-    std::thread::sleep(Duration::from_millis(120));
+
+    // Causal barrier: wait for ≥1 real frame instead of sleeping 120ms.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sim.frames_sent() < 1 {
+        assert!(Instant::now() < deadline, "timeout: no frame reached the device within 5s");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     handle.stop();
 
     assert!(sim.frames_sent() >= 1, "no frames reached the device");

@@ -2,7 +2,7 @@
 //! the triple buffer hands them off, the HAL maps + fans out to a device. End to end.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use led_core::{CompiledLayout, DeviceDriver, DeviceSpec, ProtocolOutput, RgbOrder};
 use led_hal::{Hal, SimulatorDevice};
@@ -23,7 +23,12 @@ fn render_send_pipeline_drives_a_device() {
     let positions = vec![Vec3::ZERO; N];
     let handle = spawn(Box::new(SolidColor(PixelColor::rgb(255, 0, 0))), positions, out, 200);
 
-    std::thread::sleep(Duration::from_millis(120));
+    // Causal barrier: wait for ≥1 real frame instead of sleeping 120ms.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sim.frames_sent() < 1 {
+        assert!(Instant::now() < deadline, "timeout: no frame reached the device within 5s");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     handle.stop(); // stops + joins both threads, with a final drain
 
     // Frames flowed, and the device shows the rendered color (RGB order: pixel 0 → ch 0..3).

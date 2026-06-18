@@ -3,7 +3,7 @@
 
 use std::f32::consts::PI;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use led_audio::Analyzer;
 use led_core::{
@@ -67,7 +67,13 @@ fn reactive_effect_runs_through_the_pipeline_to_a_device() {
 
     let fx = BandPulse::new(PixelColor::rgb(255, 0, 0), Band::Bass, 1.0, share.clone());
     let handle = spawn(Box::new(fx), vec![Vec3::ZERO; N], out, 200);
-    std::thread::sleep(Duration::from_millis(120));
+
+    // Causal barrier: wait for ≥1 real frame instead of sleeping 120ms.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sim.frames_sent() < 1 {
+        assert!(Instant::now() < deadline, "timeout: no audio-reactive frame reached device within 5s");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     handle.stop();
 
     assert!(sim.frames_sent() >= 1, "frames reached the device");

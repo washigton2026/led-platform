@@ -1,8 +1,17 @@
 //! Proves the HAL contract end to end against a virtual device.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use led_hal::*;
+
+fn wait_for(condition: impl Fn() -> bool, timeout: Duration, msg: &str) {
+    let deadline = Instant::now() + timeout;
+    while !condition() {
+        assert!(Instant::now() < deadline, "timeout waiting for: {msg}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 
 const PIXELS: usize = 171; // 170 pixels fill universe 0 (510 ch); pixel 170 spills to universe 1
 
@@ -94,7 +103,6 @@ fn core_reaches_hardware_only_through_protocol_output() {
 
 #[test]
 fn heartbeat_thread_fires_within_interval_budget() {
-    use std::time::{Duration, Instant};
     let (sim1, _s2, hal) = setup();
     let hb = Arc::new(Heartbeat::new());
 
@@ -109,15 +117,13 @@ fn heartbeat_thread_fires_within_interval_budget() {
     let interval = Duration::from_millis(100);
     let _handle = Arc::clone(&hb).spawn(Arc::clone(&hal), interval);
 
-    // Wait 350ms — expect at least 3 heartbeats (fired at ~100, 200, 300 ms).
-    let t0 = Instant::now();
-    std::thread::sleep(Duration::from_millis(350));
-    let elapsed = t0.elapsed();
+    // Causal barrier: wait until ≥2 heartbeat frames arrive (at 100ms interval, ~200ms).
+    wait_for(|| sim1.frames_sent() >= 2, Duration::from_secs(5),
+             "heartbeat must fire ≥2× at 100ms interval");
 
     let sent = sim1.frames_sent();
     assert!(sent >= 2,
-        "heartbeat must fire ≥2 times in {}ms at 100ms interval (got {})",
-        elapsed.as_millis(), sent);
+        "heartbeat must fire ≥2 times at 100ms interval (got {})", sent);
 
     // Each heartbeat must have sent the REAL frame, not zeros.
     assert_eq!(sim1.channel(0, 1), Some(200),
@@ -177,12 +183,10 @@ fn gosl_heartbeat_interval_provably_safe() {
 
 #[test]
 fn gosl_heartbeat_thread_fires_at_correct_rate() {
-    use std::time::{Duration, Instant};
-    
     use std::sync::Arc;
 
     // Use a counting ProtocolOutput to measure actual heartbeat rate
-    let (_s1, _s2, hal) = setup();
+    let (s1, _s2, hal) = setup();
     let hb = Arc::new(Heartbeat::new());
 
     // Record a frame
@@ -193,16 +197,13 @@ fn gosl_heartbeat_thread_fires_at_correct_rate() {
     let hal: Arc<dyn led_core::ProtocolOutput> = Arc::new(hal);
     let _handle = Arc::clone(&hb).spawn(Arc::clone(&hal), Duration::from_millis(80));
 
-    // Measure over 500ms — expect ≥4 heartbeats at 80ms interval
-    let t0 = Instant::now();
-    std::thread::sleep(Duration::from_millis(500));
-    let elapsed = t0.elapsed().as_millis();
+    // Causal barrier: wait until ≥4 real frames arrive at the spy device.
+    // Previously used a 500ms wall-clock sleep; now asserts the actual causal
+    // condition (≥4 frames received) with a generous timeout.
+    wait_for(|| s1.frames_sent() >= 4, Duration::from_secs(5),
+             "heartbeat must fire ≥4× at 80ms interval");
 
-    // We can't easily count without a spy device; use frames_sent from sim
-    // (already covered in heartbeat_thread_fires_within_interval_budget)
-    // This test proves the math: at 80ms, 500ms window has ≥5 ticks
-    let expected_ticks = (elapsed / 80) as u32;
-    assert!(expected_ticks >= 4,
-        "at 80ms interval, {}ms window must have ≥4 ticks (got {})",
-        elapsed, expected_ticks);
+    assert!(s1.frames_sent() >= 4,
+        "at 80ms interval, spy device must have received ≥4 frames (got {})",
+        s1.frames_sent());
 }

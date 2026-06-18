@@ -32,6 +32,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use led_bridge::sim::{SimConfig, SimLoop};
 use led_core::{LogicalFrame, PixelColor, ProtocolOutput};
@@ -189,7 +190,6 @@ fn e2e_full_stack_latency_within_realtime_budget() {
 #[test]
 fn e2e_heartbeat_resends_last_sim_frame() {
     use led_hal::Heartbeat;
-    use std::time::Duration;
 
     let sim_out = SimLoop::new(SimConfig {
         tone_hz: 100.0,
@@ -209,8 +209,14 @@ fn e2e_heartbeat_resends_last_sim_frame() {
     // Spawn heartbeat at 80ms interval
     let _handle = Arc::clone(&hb).spawn(Arc::clone(&hal), Duration::from_millis(80));
 
-    // Wait 250ms — expect at least 2 heartbeat resends
-    std::thread::sleep(Duration::from_millis(250));
+    // Causal barrier: wait until ≥3 total frames (1 manual + ≥2 heartbeats) arrive.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sim_dev.frames_sent() < 3 {
+        assert!(Instant::now() < deadline,
+            "timeout: expected ≥3 frames (1 manual + ≥2 heartbeats), got {}",
+            sim_dev.frames_sent());
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let total = sim_dev.frames_sent();
     assert!(total >= 3, // 1 manual + ≥2 heartbeats
         "must have ≥3 frames (1 manual + ≥2 heartbeats), got {total}");

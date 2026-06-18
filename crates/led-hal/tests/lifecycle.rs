@@ -1,9 +1,19 @@
 //! Proves the IDevice management plane and the independent heartbeat thread.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use led_hal::*;
+
+/// Spin-wait until `condition()` is true or `timeout` elapses.
+/// 1ms poll keeps CPU load low while removing the fixed sleep bias.
+fn wait_for(condition: impl Fn() -> bool, timeout: Duration, msg: &str) {
+    let deadline = Instant::now() + timeout;
+    while !condition() {
+        assert!(Instant::now() < deadline, "timeout waiting for: {msg}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 
 fn one_device() -> (Arc<SimulatorDevice>, Hal) {
     let layout = CompiledLayout::linear(100, &[DeviceSpec { id: 1, universes: 1 }], RgbOrder::Rgb);
@@ -52,7 +62,10 @@ fn heartbeat_thread_keeps_sending_the_last_valid_frame() {
     hb.record(&LogicalFrame::new(pixels, 0));
 
     let handle = hb.clone().spawn(out, Duration::from_millis(20));
-    std::thread::sleep(Duration::from_millis(150));
+
+    // Causal barrier: wait until ≥3 heartbeat frames arrive instead of sleeping.
+    wait_for(|| sim.frames_sent() >= 3, Duration::from_secs(5),
+             "heartbeat must fire ≥3× at 20ms interval");
     handle.stop();
 
     let n = sim.frames_sent();

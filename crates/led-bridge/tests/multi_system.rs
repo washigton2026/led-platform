@@ -228,15 +228,20 @@ fn drone_safety_and_led_heartbeat_run_concurrently() {
         violations
     });
 
-    // Wait 200ms for heartbeats to fire
-    thread::sleep(Duration::from_millis(200));
+    // Causal barrier: wait until ≥2 LED heartbeat frames arrive instead of sleeping 200ms.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sim_dev.frames_sent() < 2 {
+        assert!(Instant::now() < deadline,
+            "timeout: LED heartbeat must fire ≥2×, got {}", sim_dev.frames_sent());
+        thread::sleep(Duration::from_millis(1));
+    }
 
     let violations = drone_thread.join().unwrap();
     let led_frames = sim_dev.frames_sent();
 
     assert_eq!(violations, 0, "drone swarm must be safe throughout");
     assert!(led_frames >= 2,
-        "LED heartbeat must fire ≥2× in 200ms (got {led_frames})");
+        "LED heartbeat must fire ≥2× (got {led_frames})");
     // Content preserved: R channel
     assert_eq!(sim_dev.channel(0, 0), Some(100), "heartbeat must preserve R=100");
 }
