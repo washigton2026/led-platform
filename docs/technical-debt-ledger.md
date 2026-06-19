@@ -3,7 +3,7 @@
 Canonical source of truth for all tracked debt items. One entry per TD-ID.
 Updates: edit this file + commit. Session ledger (in-chat) must not diverge.
 
-Last updated: 2026-06-18 (HIGH-3 close)
+Last updated: 2026-06-19 (TD-002 closed — ArcSwap)
 
 ---
 
