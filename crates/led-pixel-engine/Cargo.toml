@@ -7,6 +7,11 @@ description = "The render core: effects → per-pixel colors in logical space, w
 
 [dependencies]
 led-core = { path = "../led-core" }
+# RT-LOCK-RENDER-001 (TD-002): scalars() on the render hot-path needs lock-free
+# reads AND a coherent snapshot of AudioScalars (all fields from the same publish).
+# arc-swap provides ArcSwap<T> — store() is one atomic pointer swap; load() is
+# one atomic load, no lock, no blocking. No unsafe in user code.
+arc-swap = "1"
 
 # GPU executor — hardware-gated; only activates when `--features gpu` is passed.
 # Requires a physical GPU + wgpu-compatible driver. CI runs without this feature.

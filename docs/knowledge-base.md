@@ -82,3 +82,56 @@ notes:        |
   Future reviewers must not remove the allow without re-running the timing
   tests in release mode to verify correctness.
 ```
+
+---
+
+## KB-011 — AudioFeatures cross-thread: snapshot coerente obrigatório
+
+```yaml
+kb_id:        KB-011
+bug_class:    "Cross-thread AudioFeatures lida campo-a-campo viola coerência semântica"
+root_cause:   |
+  AudioScalars contém campos semanticamente acoplados:
+    beat: bool  +  timestamp_ms: u64
+  BeatFlash verifica: `beat && timestamp_ms != last_beat_ts`
+  Se beat e timestamp_ms chegam de publishes DIFERENTES (tearing), o detector
+  de "novo beat" misfires: pode disparar flash extra ou perder beat.
+
+  Instâncias que falharam neste projeto:
+  1. Per-field atomics (60afc4a): 7 loads separados = incoerente.
+     beat@publish_N+1, timestamp_ms@publish_N → falsa identidade de beat.
+  2. RwLock<AudioScalars> (57f7722): coerente, mas adquiria lock no render
+     hot-path por frame (RT-LOCK-RENDER-001 ainda disparava).
+
+prevented_by: |
+  Publicar AudioScalars SEMPRE como struct inteira via transporte atômico:
+    - ArcSwap<AudioScalars>: store() = um swap atômico de ponteiro;
+      load() = um load atômico, sem lock, sem tearing. (solução adotada)
+    - tokio::sync::watch<AudioScalars>: borrow() retorna guard coerente
+      (mas usa RwLock internamente; adequado se tokio já for dep do crate).
+  NUNCA armazenar campos de AudioScalars em atomics separados — mesmo que
+  cada campo individualmente seja correto, a combinação pode ser incoerente.
+
+detector:     |
+  Test: led-pixel-engine::reactive::adversarial_tests::
+        audioshare_scalars_beat_timestamp_coherent_under_concurrency
+  Publica 10k frames alternando beat=true/false com timestamp_ms par/ímpar.
+  Leitor verifica invariante: beat == (timestamp_ms % 2 == 1) em cada snapshot.
+  Qualquer tearing entre os dois campos viola o invariante → teste falha.
+  Com per-field atomics: ~5000 violações em 10k frames.
+  Com ArcSwap: 0 violações.
+
+grep_detector: |
+  grep -n 'load(\|borrow()' crates/led-pixel-engine/src/reactive.rs
+  → dentro de scalars(): deve ser 1 chamada, sem read()/write()/lock().
+  N loads separados = KB-011 violation.
+
+first_seen:   2026-06-19
+linked_debt:  TD-002 (RT-LOCK-RENDER-001)
+status:       permanent
+notes:        |
+  A regra generaliza além de AudioScalars: qualquer struct cujos campos têm
+  invariante semântico entre si (ex.: (sequence_num, payload), (beat, ts))
+  deve ser publicada como unidade atômica. Campos individuais podem ser
+  atômicos apenas se forem semanticamente independentes.
+```

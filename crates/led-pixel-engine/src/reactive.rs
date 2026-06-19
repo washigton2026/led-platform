@@ -5,27 +5,28 @@
 //! Hot-path discipline: the render side reads only [`AudioScalars`] (Copy, allocation-free).
 //! The spectrum stays behind [`AudioShare::with_spectrum`] so it is never cloned per frame.
 //!
-//! ## Coherent snapshot design (TD-002 / RT-LOCK-RENDER-001)
+//! ## ArcSwap design — lock-free + coherent (TD-002 / RT-LOCK-RENDER-001)
 //!
-//! `AudioScalars` is published as a whole struct under a single `RwLock<AudioScalars>`,
-//! separate from the spectrum. `scalars()` takes one `read()` → copies the struct → drops
-//! the guard. This is ONE snapshot: all fields come from the same `publish()` call.
+//! `AudioScalars` scalars are published as an `Arc<AudioScalars>` via `ArcSwap`.
 //!
-//! Why not per-field atomics (previous attempt): 7 separate loads cannot guarantee that
-//! `beat` and `timestamp_ms` come from the same publish. `BeatFlash` checks
-//! `beat && timestamp_ms != last` — tearing between these two fields breaks beat detection.
+//! - `publish()` (audio thread, ~200 Hz): `self.scalars.store(Arc::new(AudioScalars{..}))`
+//!   — one atomic pointer swap, the whole struct at once.
+//! - `scalars()` (render thread, every frame): `*self.scalars.load()` — one atomic load,
+//!   no lock, no blocking, returns a coherent copy of ALL fields from the same publish.
 //!
-//! Why not `tokio::sync::watch`: `led-pixel-engine` is std-only (no tokio dep allowed).
-//! `watch::borrow()` internally uses an `RwLock` anyway. `RwLock<AudioScalars>` achieves
-//! the identical semantic with no new dependency.
+//! Why ArcSwap over previous attempts:
+//!   - Per-field atomics (60afc4a): lock-free but INCOHERENT — beat and timestamp_ms
+//!     could come from different publishes; broke BeatFlash detection.
+//!   - RwLock<AudioScalars> (57f7722): coherent but acquires a lock per render frame;
+//!     RT-LOCK-RENDER-001 still fired.
+//!   - ArcSwap (this): lock-free AND coherent — closes both properties together.
 //!
-//! Lock duration: copying `AudioScalars` (~40 bytes) takes ~5ns. Contention probability
-//! at 200 Hz writes / 60 fps reads: ~(200*Δt) where Δt<<1ms → effectively zero.
-//! `spectrum` stays behind a separate `RwLock<Vec<f32>>` — never touched by `render()`.
+//! `spectrum` (Vec<f32>) stays behind a `RwLock` — never called from `render()`.
 
 use std::cell::Cell;
 use std::sync::{Arc, RwLock};
 
+use arc_swap::ArcSwap;
 use led_core::{AudioFeatures, PixelColor};
 
 use crate::color;
@@ -46,12 +47,13 @@ pub struct AudioScalars {
 /// Shared latest audio analysis. One writer (audio thread) via [`publish`](Self::publish),
 /// many readers (render thread) via [`scalars`](Self::scalars).
 ///
-/// `scalars()` takes a single `RwLock::read()`, copies the whole `AudioScalars` struct,
-/// and drops the guard — one coherent snapshot per call, all fields from the same publish.
-/// `publish()` takes `RwLock::write()` to atomically replace the struct.
-/// `with_spectrum()` uses a *separate* `RwLock<Vec<f32>>` — never called from `render()`.
+/// `scalars()` is **lock-free and coherent**: one `ArcSwap::load()` returns an atomic
+/// pointer to the latest `AudioScalars` struct; dereferencing copies all 7 fields at once
+/// from a single published snapshot. No lock acquired on the render path.
+///
+/// `with_spectrum()` uses a separate `RwLock<Vec<f32>>` — never called from `render()`.
 pub struct AudioShare {
-    scalars:  RwLock<AudioScalars>,
+    scalars:  ArcSwap<AudioScalars>,
     spectrum: RwLock<Vec<f32>>,
 }
 
@@ -64,17 +66,16 @@ impl Default for AudioShare {
 impl AudioShare {
     pub fn new() -> Self {
         Self {
-            scalars:  RwLock::new(AudioScalars::default()),
+            scalars:  ArcSwap::from_pointee(AudioScalars::default()),
             spectrum: RwLock::new(Vec::new()),
         }
     }
 
     /// Publish the newest features (audio thread, ~200 Hz).
-    /// Atomically replaces the whole `AudioScalars` struct in one write lock.
-    /// Spectrum update is separate — isolated from the scalar snapshot.
+    /// One atomic pointer swap — publishes the whole AudioScalars struct at once.
+    /// Spectrum update uses a separate RwLock (off render hot-path).
     pub fn publish(&self, f: &AudioFeatures) {
-        // Scalars: one write lock, whole-struct replacement — coherent on the read side.
-        *self.scalars.write().unwrap() = AudioScalars {
+        self.scalars.store(Arc::new(AudioScalars {
             sample_rate:  f.sample_rate,
             timestamp_ms: f.timestamp_ms,
             rms:          f.rms,
@@ -82,27 +83,24 @@ impl AudioShare {
             bass:         f.bass,
             mid:          f.mid,
             high:         f.high,
-        };
-        // Spectrum: separate lock — never contends with scalars reads on render path.
+        }));
         let mut g = self.spectrum.write().unwrap();
         if g.len() != f.spectrum.len() {
-            g.resize(f.spectrum.len(), 0.0); // only on sample-rate change (rare)
+            g.resize(f.spectrum.len(), 0.0);
         }
         g.copy_from_slice(&f.spectrum);
     }
 
-    /// ONE coherent snapshot of all scalar audio fields.
-    /// Single `read()` → struct copy (~40 bytes, ~5ns) → guard dropped.
-    /// All fields guaranteed to come from the same `publish()` call.
+    /// Latest scalar fields. **Lock-free and coherent.**
+    /// One atomic `load()` — all fields from the same `publish()` call, no lock.
     pub fn scalars(&self) -> AudioScalars {
-        *self.scalars.read().unwrap()
+        *self.scalars.load().as_ref()
     }
 
     /// Borrow the latest spectrum without cloning it.
-    /// Uses a separate `RwLock` — `render()` never calls this.
+    /// Uses RwLock — `render()` never calls this.
     pub fn with_spectrum<R>(&self, f: impl FnOnce(&[f32]) -> R) -> R {
-        let g = self.spectrum.read().unwrap();
-        f(&g)
+        f(&self.spectrum.read().unwrap())
     }
 }
 
