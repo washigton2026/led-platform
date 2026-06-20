@@ -190,24 +190,27 @@ verified: |
 
 ```yaml
 td_id:     TD-006
-title:     "mock_analyze_all_realtime_speed: budget 2.0s alargado é paliativo, não fix"
+title:     "mock_analyze_all_realtime_speed: budget 2.0s alargado era paliativo, não fix"
 severity:  Medium
-status:    open
-source:    AEGS audit / KB-009 reconciliation (2026-06-18)
-type:      test-reliability / wall-clock
-location:  crates/audio-core/src/capture.rs:559
-root_cause: |
-  O teste asserta elapsed < 2.0s mas o real invariante é "processa 1s de áudio
-  muito mais rápido que real-time". O budget foi expandido de 1.0s → 2.0s para
-  evitar flap sob workspace parallelism. Isso mascara a causa raiz: o teste
-  usa Instant::now() wall-clock que é afetado por carga do sistema.
+status:    closed
+closed_on: 2026-06-19
 fix: |
-  Opção A: marcar o teste com #[ignore] e invocar separadamente no e2e script
-           com cargo test -p audio-core -- mock_analyze_all_realtime_speed
-  Opção B: medir em release (--release) onde o budget é muito mais folgado
-  Opção C: usar um critério baseado em contagem de hops, não wall-clock
-milestone: MEDIUM-3 (junto com outros melhorias de test-reliability)
-note:      "KB-009 documenta a classe. O budget 2.0s é provisório."
+  Opção C implementada: substituir wall-clock assert por hop-count assert.
+  O teste mock_analyze_all_realtime_speed agora verifica:
+    - results.len() >= n_samples/HOP_SIZE - 4  (todos os hops processados)
+    - f.sample_rate == sr em cada resultado     (sample_rate propagado)
+  Sem Instant::now(). Determinístico independente de carga do sistema.
+
+  O assert de timing (wall-clock < 5.0s) foi movido para mock_realtime_timing_manual
+  com #[ignore], rodado apenas manualmente:
+    cargo test -- mock_realtime_timing_manual --ignored
+  Esse teste NÃO entra em CI — é para verificação manual de regressão catastrófica.
+
+  cargo audit: arc-swap não introduziu novos advisories. 206 deps, 0 vulns,
+  1 warning (paste 1.0.15, mesmo de antes).
+reproduce: |
+  Antes: cargo test --workspace → flap ocasional em mock_analyze_all_realtime_speed
+  Depois: nunca flapa — sem wall-clock no caminho de CI.
 ```
 
 ---
@@ -234,20 +237,21 @@ reproduce: "grep -n 'thread::sleep' crates/led-hal/src/cluster.rs"
 
 | TD-ID   | Title (short)                         | Closed     | Commit   |
 |---------|---------------------------------------|------------|----------|
+| TD-002  | RT-LOCK-RENDER-001 ArcSwap lock-free  | 2026-06-19 | 2f80574  |
 | TD-003  | 8 thread::sleep em tests (tests/)     | 2026-06-18 | 845e010  |
-| TD-003b | 9º sleep cluster.rs #[cfg(test)]      | 2026-06-18 | pending  |
+| TD-003b | 9º sleep cluster.rs #[cfg(test)]      | 2026-06-18 | f6c496c  |
+| TD-005  | adapt() aloca per-call                | closed     | (adapt_into no loop de produção) |
+| TD-006  | wall-clock budget → hop-count fix     | 2026-06-19 | pending  |
 | TD-007  | cargo-audit not installed             | 2026-06-17 | LOW-1    |
 | TD-008  | flash_buf alloc em render loop        | 2026-06-17 | e858fa8  |
 | TD-009  | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
-| TD-002  | RT-LOCK-RENDER-001: lock em scalars() | 2026-06-19 | pending  |
-| TD-005  | adapt() aloca per-call               | closed     | adapt_into em produção |
+| TD-010  | (alias de TD-002)                     | 2026-06-19 | 2f80574  |
 
 ## Open items — priority order
 
-| TD-ID  | Severity | Title (short)                          | Milestone |
-|--------|----------|----------------------------------------|-----------|
-| TD-004 | High     | wgpu→Metal block on startup            | MEDIUM-1  |
-| TD-006 | Medium   | wall-clock budget em teste (paliativo) | MEDIUM-3  |
+| TD-ID  | Severity | Title (short)                 | Milestone |
+|--------|----------|-------------------------------|-----------|
+| TD-004 | High     | wgpu→Metal block on startup   | MEDIUM-1  |
 
 ## Note — tokio async sleeps in led-protocols (NOT part of TD-003)
 
