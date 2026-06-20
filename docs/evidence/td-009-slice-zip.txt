@@ -1,0 +1,16 @@
+# TD-009 evidence — slice.fill panic guard + zip timing revert
+# git-hash: 6b535bbc1916b17f35c55d6b7aa9157852aca657
+# Generated: 2026-06-19
+
+## KB-010: panic guard test:
+test capture::mock_tests::mock_hop_window_past_buffer_end_no_panic ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.11s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+## KB-009: timing tests pass (zip reverted to indexed loop):
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test harmonics::tests::classifier_10k_frames_fast ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 77 filtered out; finished in 0.34s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s

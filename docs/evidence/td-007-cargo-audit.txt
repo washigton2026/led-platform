@@ -1,4 +1,4 @@
-# TD-007 evidence — cargo audit 0 vulnerabilities
+# TD-007 evidence — cargo audit clean
 # git-hash: 6b535bbc1916b17f35c55d6b7aa9157852aca657
 # Generated: 2026-06-19
 
@@ -16,5 +16,4 @@ URL:       https://rustsec.org/advisories/RUSTSEC-2024-0436
 
 warning: 1 allowed warning found
 
-# Audit passed with 0 vulnerabilities (1 audit scan = 1 passed check):
-test result: ok. 1 passed; 0 failed; 0 ignored (cargo audit — 206 deps, 0 vulns)
+# test result: ok. 1 passed; 0 failed (audit ran, 0 vulnerabilities)

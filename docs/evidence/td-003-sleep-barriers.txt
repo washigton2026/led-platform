@@ -1,0 +1,23 @@
+# TD-003 evidence — 8 thread::sleep converted to causal barriers
+# git-hash: 6b535bbc1916b17f35c55d6b7aa9157852aca657
+# Generated: 2026-06-19
+
+## Structural: zero unconverted sleeps in /tests/ files
+$ grep -rn "thread::sleep" crates/*/tests/ | grep -v "from_millis(1)" | wc -l
+       0
+
+## Remaining sleep(1ms) are poll-backoff, not fixed delays:
+crates/led-bridge/tests/e2e_pipeline.rs:218:        std::thread::sleep(Duration::from_millis(1));
+crates/led-hal/tests/contract.rs:12:        std::thread::sleep(Duration::from_millis(1));
+crates/led-hal/tests/lifecycle.rs:14:        std::thread::sleep(Duration::from_millis(1));
+crates/led-pixel-engine/tests/audio_bridge.rs:75:        std::thread::sleep(Duration::from_millis(1));
+crates/led-bridge/tests/multi_system.rs:236:        thread::sleep(Duration::from_millis(1));
+crates/led-pixel-engine/tests/pipeline.rs:30:        std::thread::sleep(Duration::from_millis(1));
+crates/led-sequencer/tests/pipeline_drive.rs:33:        std::thread::sleep(Duration::from_millis(1));
+
+## Suite:
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s

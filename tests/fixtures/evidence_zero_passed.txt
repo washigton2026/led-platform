@@ -1,0 +1,4 @@
+# Evidence fixture — zero passed (KB-012: Miri N=0 pattern)
+# gate MUST reject this
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s

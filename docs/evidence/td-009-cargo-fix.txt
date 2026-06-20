@@ -1,9 +1,10 @@
-# TD-009 evidence — cargo fix panic + zip timing tests
+# TD-009 evidence — cargo fix panic guard + zip timing revert
+# git-hash: 6b535bbc1916b17f35c55d6b7aa9157852aca657
 # Generated: 2026-06-19
+
 test capture::mock_tests::mock_hop_window_past_buffer_end_no_panic ... ok
 test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
 test capture::mock_tests::mock_beat_impulses_detected ... ok
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 76 filtered out; finished in 0.40s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 76 filtered out; finished in 0.33s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
-result: ok — panic guard + timing tests pass
