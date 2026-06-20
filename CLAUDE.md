@@ -86,6 +86,7 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 10 lib crates + `led-demo` binary + `led-bridge` integration crate · **312 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
+Governance: `scripts/audit_gate.py` (KB-012) — all 8 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b runs gate on every CI pass.
 
 Built: HAL core + mapping, layout (MegaTree/matrix-serpentine) + mapper, E1.31 driver,
 render core (effects + triple buffer + render→send pipeline), async heartbeat, `IDevice`
@@ -121,6 +122,42 @@ clustering, WiFi-forbidden enforcement at transport layer.
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-19 — Governance: KB-012 + audit_gate + TD-006 hop-count + lumyx-e2e Phase 5b
+
+**Done.**
+
+KB-012 registered: "False-green gate — verification that passes without exercising the
+property it claims." Root cause: non-falsifiable gates have no described run that would
+make them FAIL. Two instances this session: `>= 183` slack (absorbed variance) and
+Miri N=0 (ran nothing).
+
+`scripts/audit_gate.py` (new, hardened):
+- Enforces `evidence_ref` + `negative_control` on every `status: closed` TD
+- Requires N>0 in `N passed; 0 failed` — explicitly rejects "0 passed" (Miri N=0)
+- `required_test:` field: named test must appear by name in evidence file
+- `source_files:` + `git-hash` in artefact → stale evidence detection
+- `pending-verification`: valid within `review_by`, Critical past deadline
+
+`tests/test_audit_gate.py` (new — gate's own negative control, 9/9 PASS):
+  bad-ledger → exit 1 (3 Criticals: no-evidence, 0-passed, empty-negctrl)
+  good-ledger → exit 0 (all 8 closed TDs verified)
+
+`lumyx-e2e.sh Phase 5b` added: runs audit_gate + gate self-tests on every CI pass.
+
+TD-006 (hop-count): `assert_eq!(187)` — Scenario A confirmed (10/10 runs = 187 exact).
+  Falsifiable: reproves if `len == 186`. Was `>= 183` (non-falsifiable, KB-012).
+
+`docs/evidence/`: committed artefacts for all 7 closed TDs with `git-hash:` headers.
+
+**Invariants verified.** Gate self-tests 9/9. Real ledger: 0 Critical. 312 tests green.
+
+**Pending.** MEDIUM-1: TD-004 (wgpu→Metal). Miri reactive 8-thread test (resource limit).
+
+**Decisions.** evidence_ref + negative_control are mandatory fields for `closed` by
+construction (gate rejects without them). `pending-verification` is a first-class status —
+not `closed`, not `open`. Two fields only (KB-012: each field must pay its place by
+catching a real error from this session).
 
 ### 2026-06-19 — TD-002: RT-LOCK-RENDER-001 — ArcSwap lock-free + coherent
 
