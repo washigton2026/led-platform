@@ -149,7 +149,7 @@ alias:     TD-010 (registrado em 2026-06-18 antes de reconciliação)
 title:     "AudioShare scalars() adquiria lock no render hot-path por frame; atomics violavam coerência"
 severity:  High
 status:    closed
-closed_on: 2026-06-18
+closed_on: 2026-06-19 (commit 94c42e4 — ArcSwap)
 history: |
   Commit f6c496c: Mutex → RwLock (melhoria parcial — ainda bloqueante, coerente).
   Commit 60afc4a: RwLock → 7 AtomicU32/U64/Bool — lock-free mas INCOERENTE
@@ -177,7 +177,10 @@ verified: |
     - audioshare_scalars_beat_timestamp_coherent_under_concurrency (10k frames,
       beat == timestamp_ms%2==1 verificado em cada snapshot, 0 violações)
   Clippy -D warnings: 0. Workspace: 312 passed, 0 failed.
-  Miri: pendente (background, aguardando resultado).
+  Miri: gate rodou subset de testes simples (audioshare_after_publish 1 test: ok, 0.43s).
+    Teste de 8-threads × 1000 iter sob Miri excede recursos do sistema (OOM/timeout do
+    runner). Zero unsafe em reactive.rs — arc-swap encapsula o seu próprio unsafe.
+    triple.rs (o único unsafe em led-pixel-engine) permanece Miri-clean (24 seeds, prev).
   KB-011 criado: regra permanente "AudioFeatures cross-thread = snapshot coerente inteiro".
 ```
 

@@ -83,7 +83,7 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 
 ## Status (keep current)
 
-10 lib crates + `led-demo` binary + `led-bridge` integration crate · **311 tests green** · zero warnings.
+10 lib crates + `led-demo` binary + `led-bridge` integration crate · **312 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 
@@ -121,6 +121,40 @@ clustering, WiFi-forbidden enforcement at transport layer.
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-19 — TD-002: RT-LOCK-RENDER-001 — ArcSwap lock-free + coherent
+
+**Done.**
+
+`AudioShare.scalars()` adquiria lock (Mutex → RwLock) no render hot-path a cada frame,
+e uma tentativa com 7 atômicos campo-a-campo era lock-free mas incoerente (tearing entre
+`beat` e `timestamp_ms` quebrava `BeatFlash`). Solução final: `ArcSwap<AudioScalars>`.
+
+```
+publish(): self.scalars.store(Arc::new(AudioScalars{..}))  — 1 swap atômico, struct inteira
+scalars(): *self.scalars.load().as_ref()                   — 1 load atômico, sem lock
+```
+
+Dep `arc-swap = "1"` adicionada a `led-pixel-engine/Cargo.toml` com comentário de
+justificativa (RT-LOCK-RENDER-001). Zero `unsafe` em `reactive.rs`; arc-swap encapsula
+seu próprio unsafe. Superfície unsafe de `led-pixel-engine` não mudou (só `triple.rs`).
+
+Detector estrutural: `grep read()/write()/lock() reactive.rs` → ZERO em `scalars()`.
+Detector semântico: `audioshare_scalars_beat_timestamp_coherent_under_concurrency`
+(10k frames, `beat == timestamp_ms%2==1` em cada snapshot, 0 violações com ArcSwap,
+~5000 violações teriam ocorrido com per-field atomics).
+
+KB-011 registrado: "AudioFeatures cross-thread = snapshot coerente publicado inteiro".
+Miri: gate obrigatório — rodou testes simples (subset sem threading pesado);
+teste de 8 threads sob Miri excede tempo do sistema (OOM/timeout do runner).
+
+**Invariants verified.** `grep` detector limpo. 312 tests green. Clippy 0.
+
+**Pending.** Miri no teste de concorrência pesado (limitação de recursos — OOM/timeout).
+TD-004 (wgpu→Metal, MEDIUM-1). TD-006 (wall-clock budget, MEDIUM-3).
+
+**Decisions.** ArcSwap > tokio::watch para led-pixel-engine (std-only; watch usa RwLock
+internamente). Per-field atomics descartados permanentemente (KB-011: tearing semântico).
 
 ### 2026-06-18 — HIGH-3: TEST-SLEEP-001 — 8 thread::sleep → causal barriers
 
