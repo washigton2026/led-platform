@@ -1,0 +1,15 @@
+# TD-003 evidence — no fixed thread::sleep in test files
+# Generated: 2026-06-19
+# negative_control: any sleep(Nms) with N>1 in crates/*/tests/ would appear here
+
+## Remaining sleeps in /tests/ (must all be 1ms poll backoff):
+crates/led-hal/tests/contract.rs:12:        std::thread::sleep(Duration::from_millis(1));
+crates/led-hal/tests/lifecycle.rs:14:        std::thread::sleep(Duration::from_millis(1));
+crates/led-sequencer/tests/pipeline_drive.rs:33:        std::thread::sleep(Duration::from_millis(1));
+crates/led-bridge/tests/e2e_pipeline.rs:218:        std::thread::sleep(Duration::from_millis(1));
+crates/led-bridge/tests/multi_system.rs:236:        thread::sleep(Duration::from_millis(1));
+crates/led-pixel-engine/tests/audio_bridge.rs:75:        std::thread::sleep(Duration::from_millis(1));
+crates/led-pixel-engine/tests/pipeline.rs:30:        std::thread::sleep(Duration::from_millis(1));
+
+## Verification: all remaining sleeps are 1ms (poll backoff, not fixed delay):
+result: ok — zero sleeps > 1ms in test files

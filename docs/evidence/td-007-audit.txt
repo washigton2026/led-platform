@@ -1,0 +1,13 @@
+# TD-007 evidence — cargo audit result
+# Generated: 2026-06-19
+
+Crate:     paste
+Version:   1.0.15
+Warning:   unmaintained
+Title:     paste - no longer maintained
+Date:      2024-10-07
+ID:        RUSTSEC-2024-0436
+URL:       https://rustsec.org/advisories/RUSTSEC-2024-0436
+
+
+result: ok — 0 vulnerabilities

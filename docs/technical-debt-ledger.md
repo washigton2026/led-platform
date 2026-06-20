@@ -8,10 +8,16 @@ Last updated: 2026-06-19 (TD-002 closed — ArcSwap)
 ---
 
 ## Status legend
-- `open`       — unfixed, work required
-- `diagnosed`  — root cause known, not yet fixed
-- `closed`     — permanently fixed + detector added (test/lint/CI)
-- `wontfix`    — acknowledged, intentionally deferred
+- `open`                 — unfixed, work required
+- `diagnosed`            — root cause known, not yet fixed
+- `closed`               — permanently fixed; requires evidence_ref + negative_control (KB-012)
+- `pending-verification` — fix implemented; evidence gate not yet passed (blocks merge)
+- `wontfix`              — acknowledged, intentionally deferred
+
+## Closure schema (enforced by scripts/audit_gate.py — KB-012)
+Every `closed` TD MUST have:
+  evidence_ref:     path to committed artefact proving the fix (test output, grep, etc.)
+  negative_control: description of the run that would FAIL if the fix were absent
 
 ---
 
@@ -43,6 +49,10 @@ fix: |
   Wall-clock removed from critical path: ~1810ms → <10ms per barrier.
 
 suite:     311 passed, 0 failed. Clippy -D warnings: 0.
+evidence_ref:     docs/evidence/td-003-sleeps.txt
+negative_control: |
+  grep -rn 'thread::sleep' crates/*/tests/ | grep -v 'millis(1)' deve retornar ZERO linhas.
+  Qualquer sleep(Nms) com N>1 em /tests/ REPROVA — o artefato de evidência seria não-vazio.
 note: |
   DO NOT CONFUSE with TD-009 (KB-009): the 2 wall-clock budget tests
   (mock_analyze_all_realtime_speed, classifier_10k_frames_fast) that regressed
@@ -95,6 +105,11 @@ audit_result:
   vulnerabilities: 0
   warnings:        1
   warning_detail:  "paste 1.0.15 — RUSTSEC-2024-0436 (unmaintained, no CVE)"
+evidence_ref:     docs/evidence/td-007-audit.txt
+negative_control: |
+  cargo audit retornando qualquer linha 'error[' ou 'CRITICAL' REPROVA.
+  O artefato mostra '0 vulnerabilities' + 'warning: 1 allowed warning found'.
+  Um novo advisory de severidade High/Critical quebraria o gate em lumyx-e2e.sh.
 ```
 
 ---
@@ -110,6 +125,11 @@ closed_on: 2026-06-17 (commit e858fa8)
 fix: |
   Moved flash_buf out of render loop into GPU struct field.
   Eliminates per-frame heap alloc on the hot path.
+evidence_ref:     docs/evidence/td-008-flash-buf.txt
+negative_control: |
+  Reintrodução de 'vec![...]' ou 'Vec::new()' para flash_buf DENTRO do loop de hop
+  em led-bridge/src/sim.rs apareceria no grep. O artefato mostra alocação na linha 114
+  (antes do loop) e reutilização nas linhas 169-171 (dentro do loop).
 ```
 
 ---
@@ -137,6 +157,11 @@ subtasks:
     introduzidas pelo fix deste ciclo, não por carga do sistema.
 kb_links:  [KB-009, KB-010]
 note:      "Permanent rule in docs/knowledge-base.md. Tests are the detectors."
+evidence_ref:     docs/evidence/td-009-cargo-fix.txt
+negative_control: |
+  mock_beat_impulses_detected REPROVA se o panic guard for removido (start>total).
+  mock_hop_window_past_buffer_end_no_panic REPROVA se o guard for removido.
+  classifier_10k_frames_fast REPROVA se zip() for reintroduzido em fft.rs/beat.rs.
 ```
 
 ---
@@ -182,6 +207,12 @@ verified: |
     runner). Zero unsafe em reactive.rs — arc-swap encapsula o seu próprio unsafe.
     triple.rs (o único unsafe em led-pixel-engine) permanece Miri-clean (24 seeds, prev).
   KB-011 criado: regra permanente "AudioFeatures cross-thread = snapshot coerente inteiro".
+evidence_ref:     docs/evidence/td-002-arcswap.txt
+negative_control: |
+  Para RT-LOCK-RENDER-001: grep -n 'read()\|lock()' reactive.rs dentro de scalars()
+  deve retornar ZERO linhas. Qualquer linha retornada REPROVA (detector regride).
+  Para coerência: com per-field atomics, audioshare_scalars_beat_timestamp_coherent_under_concurrency
+  retornaria ~5000 violações em 10k frames. ArcSwap = 0 violações. Teste reprova se > 0.
 ```
 
 ---
@@ -208,9 +239,14 @@ fix: |
 
   cargo audit: arc-swap não introduziu novos advisories. 206 deps, 0 vulns,
   1 warning (paste 1.0.15, mesmo de antes).
+  Cenário A confirmado: 10/10 runs = 187 hops exatos (assert_eq, não >=).
+evidence_ref:     docs/evidence/td-006-hop-count-10runs.txt
+negative_control: |
+  assert_eq!(results.len(), 187) reprova se len == 186 (um hop perdido).
+  O assert anterior (>= 183) não reprovaria com 184 hops — era não-falsificável (KB-012).
 reproduce: |
   Antes: cargo test --workspace → flap ocasional em mock_analyze_all_realtime_speed
-  Depois: nunca flapa — sem wall-clock no caminho de CI.
+  Depois: nunca flapa — sem wall-clock no caminho de CI. assert_eq é falsificável.
 ```
 
 ---
@@ -229,6 +265,10 @@ fix: |
   led-hal/src/cluster.rs dentro de #[cfg(test)] mod — não em crates/*/tests/,
   por isso escapou da busca original do TD-003.
 reproduce: "grep -n 'thread::sleep' crates/led-hal/src/cluster.rs"
+evidence_ref:     docs/evidence/td-003b-cluster-sleep.txt
+negative_control: |
+  grep -n 'thread::sleep' crates/led-hal/src/cluster.rs | grep -v 'millis(1)'
+  deve retornar ZERO linhas. Qualquer sleep(Nms) com N>1 REPROVA.
 ```
 
 ---

@@ -1,0 +1,35 @@
+# TD-006 evidence — 10 consecutive runs of mock_analyze_all_realtime_speed
+# Generated: 2026-06-19
+# Assert: assert_eq!(results.len(), 187) — falsifiable, reprova se len==186
+
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.12s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.11s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.10s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.12s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.11s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.11s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.26s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.12s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.11s
+---
+test capture::mock_adversarial_tests::mock_analyze_all_realtime_speed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.10s
+---
+

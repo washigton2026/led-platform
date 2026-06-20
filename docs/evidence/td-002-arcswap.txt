@@ -1,0 +1,21 @@
+# TD-002 evidence — ArcSwap structural check + coherence test
+# Generated: 2026-06-19
+
+## Structural check: no lock in scalars()
+$ grep -n "read()\|write()\|lock()\|borrow()" crates/led-pixel-engine/src/reactive.rs | grep -v "//"
+87:        let mut g = self.spectrum.write().unwrap();
+103:        f(&self.spectrum.read().unwrap())
+275:    fn audioshare_concurrent_publish_read_no_deadlock() {
+
+## scalars() implementation:
+    pub fn scalars(&self) -> AudioScalars {
+        *self.scalars.load().as_ref()
+    }
+
+
+## Coherence test result:
+test reactive::adversarial_tests::audioshare_scalars_beat_timestamp_coherent_under_concurrency ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.03s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

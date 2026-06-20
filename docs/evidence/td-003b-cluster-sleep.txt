@@ -1,0 +1,12 @@
+# TD-003b evidence — 9th sleep in cluster.rs converted
+# Generated: 2026-06-19
+# negative_control: sleep(Nms) with N>1 in cluster.rs src/ would appear here
+
+## Remaining sleeps in cluster.rs (must be only 1ms poll in wait_for helper):
+258:            std::thread::sleep(Duration::from_millis(1));
+
+## Test: cluster_heartbeat_thread_fires_on_all_segments (causal barrier, 5s timeout):
+test cluster::cluster_heartbeat_tests::cluster_heartbeat_thread_fires_on_all_segments ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.25s
+
+result: ok — only sleep(1ms) poll backoff remains; causal barrier verified passing

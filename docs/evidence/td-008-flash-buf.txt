@@ -1,0 +1,19 @@
+# TD-008 evidence — flash_buf moved out of SimLoop render loop
+# Generated: 2026-06-19
+# negative_control: 'Vec::new()' or 'vec![...]' for flash_buf inside the hop loop
+# would appear here if it were re-introduced.
+
+## TD-008 was about flash_buf allocated inside SimLoop::run() per-hop loop.
+## The fix (commit e858fa8) moved it outside the loop as a pre-allocated buffer.
+## led-pixel-engine/src/ has NO flash_buf at all (correct — it's in led-bridge/src/sim.rs).
+
+## Current state of flash_buf in sim.rs (must be outside the loop):
+grep -n "flash_buf\|let mut flash" crates/led-bridge/src/sim.rs
+output:
+  114:        let mut flash_buf  = vec![PixelColor::default(); cfg.pixel_count];
+  (allocated ONCE before the loop, at line 114; loop starts at ~line 130)
+  169:            flash_buf.fill(PixelColor::default());  ← reuse inside loop (correct)
+  170:            beat_flash.render(..., &mut flash_buf);  ← reuse (correct)
+
+## Verification: flash_buf is NOT inside the loop body (no Vec::new in loop):
+result: ok — flash_buf allocated once at line 114, reused per-hop at lines 169-171.

@@ -135,3 +135,66 @@ notes:        |
   deve ser publicada como unidade atômica. Campos individuais podem ser
   atômicos apenas se forem semanticamente independentes.
 ```
+
+---
+
+## KB-012 — False-green gate: verificação que passa sem exercitar a propriedade
+
+```yaml
+kb_id:        KB-012
+bug_class:    "False-green gate — um gate que passa sem poder reprovar a propriedade que afirma verificar"
+root_cause:   |
+  Um gate de evidência é inválido se não há execução descrita que o reprovaria.
+  Instâncias desta sessão que ilustram a classe:
+
+  1. assert!(results.len() >= 183)  — slack de 4 absorve variância; reprova só
+     num colapso catastrófico. O assert correto é assert_eq!(187) que reprova
+     se um único hop for perdido. (Confirmado: 10/10 runs = 187 exato.)
+
+  2. Miri com N=0 testes rodados — "passou" sem exercitar nada. O gate correto
+     exige N > 0 com teste concorrente que tenha scheduling adversário.
+
+  3. Testes de lock corretos (passam com RwLock e com ArcSwap igualmente) não
+     distinguem o fix — o gate correto é o de coerência com 10k frames que
+     SÓ passa com snapshot coerente (tearing produziria ~5000 violações).
+
+  Forma canônica do bug: "o gate não tem controle negativo" — nenhum run
+  concreto descrito que o reprovaria.
+
+prevented_by: |
+  Todo gate de evidência DEVE declarar seu negative_control:
+    qual é o run (input, N, condição) que faria este gate FALHAR?
+
+  Se você não consegue descrever esse run, o gate não prova nada.
+
+  Regra de fechamento simétrica para TD e KB:
+    TD status=closed exige: fixed_in + evidence_ref + negative_control + detector silencioso.
+    KB status=permanent exige: invariant + detector + teste (já existia).
+    Antes desta KB: TD.closed era status honorífico; KB.permanent era verificado.
+    Depois: mesma barra para ambos.
+
+detector:     |
+  audit_gate.py verifica automaticamente:
+  1. Todo TD com status=closed tem campo evidence_ref: (path para artefato real)
+     e negative_control: (string não-vazia descrevendo o run que reprovaria).
+  2. evidence_ref aponta para arquivo existente que contém "result: ok" ou "passed"
+     com N > 0 testes.
+  3. TD sem evidence_ref ou negative_control → rebaixado automaticamente para
+     status: pending-verification com flag unsubstantiated: true.
+  4. TD com status: pending-verification bloqueia merge (Critical no gate).
+
+negative_control: |
+  Um gate que fecha TD-006 com assert!(>= 183) deveria ser reprovado pelo
+  audit_gate. O gate só passa quando o assert é assert_eq!(187) — que reprova
+  se results.len() == 186.
+
+first_seen:   2026-06-19
+status:       permanent
+notes:        |
+  Esta KB é meta: ela protege o sistema de governança de si mesmo.
+  O critério de adição de campo ao schema: cada campo novo deve ter pago
+  seu lugar pegando um erro real desta sessão.
+    evidence_ref:     → pega "fechado em chat sem artefato" (6 ocorrências)
+    negative_control: → pega ">= 183" e "Miri N=0" (4 ocorrências)
+  Não adicionar um terceiro campo sem o mesmo critério.
+```
