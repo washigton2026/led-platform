@@ -17,6 +17,7 @@ pub mod cluster;
 pub mod engine;
 pub mod hal;
 pub mod heartbeat;
+pub mod network_guard;
 pub mod sim;
 
 // Re-export the shared seams so `led_hal::*` and downstream code have one import surface.
@@ -26,4 +27,5 @@ pub use cluster::{ClusteredHal, ClusterHeartbeat, SharedCluster};
 pub use engine::Core;
 pub use hal::Hal;
 pub use heartbeat::{Heartbeat, HeartbeatHandle};
+pub use network_guard::{NetworkGuard, NetworkPolicyError, PermissiveGuard, WifiBlockGuard};
 pub use sim::SimulatorDevice;

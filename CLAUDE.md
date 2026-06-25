@@ -83,7 +83,7 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 
 ## Status (keep current)
 
-10 lib crates + `led-demo` binary + `led-bridge` integration crate · **312 tests green** · zero warnings.
+10 lib crates + `led-demo` binary + `led-bridge` integration crate · **326 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 8 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b runs gate on every CI pass.
@@ -106,8 +106,10 @@ Audio→LED bridge (`led-bridge`, new in Cycle 3-4): `adapt`/`adapt_into` (v1→
 SineGen→Analyzer→adapt→AudioShare→effects→pixels). End-to-end pipeline verified via
 `led-bridge/tests/e2e_pipeline.rs` (7 tests, full HAL stack).
 
-Not built yet: real wgpu GPU executor (`gpu` feature, needs hardware), multi-device
-clustering, WiFi-forbidden enforcement at transport layer.
+Not built yet: real wgpu GPU executor (`gpu` feature, needs hardware).
+Built: WiFi-forbidden enforcement (`led-hal/src/network_guard.rs`) — `NetworkGuard` trait
++ `WifiBlockGuard` (macOS: `networksetup` + `ifconfig status: active`; Linux: `/sys/class/net/wl*/operstate`)
++ `PermissiveGuard` (tests/simulator). 14 tests, platform-specific probes, typed `NetworkPolicyError`.
 
 ## Conventions
 
@@ -122,6 +124,41 @@ clustering, WiFi-forbidden enforcement at transport layer.
 ## Session changelog
 
 Newest first. One entry per session (`/changelog`): Done · Invariants verified · Pending · Decisions.
+
+### 2026-06-25 — WiFi-forbidden enforcement + LUMYX Engineering Council
+
+**Done.**
+
+*WiFi enforcement (`led-hal/src/network_guard.rs`):*
+`NetworkGuard` trait (object-safe, `Send + Sync`) + `NetworkPolicyError` (typed: `WifiActive{interfaces}` /
+`ProbeUnavailable{reason}`) + `WifiBlockGuard` (macOS: `networksetup -listallhardwareports` → extract
+Wi-Fi device names → `ifconfig <iface>` → check `status: active`; Linux: `/sys/class/net/wl*/operstate` →
+`up`; other: `ProbeUnavailable`) + `PermissiveGuard` (always passes — tests/simulator/non-hardware).
+`parse_macos_wifi_interfaces` recognises both "Wi-Fi" and "AirPort" port names.
+All exported from `led_hal::*`. 14 tests (5 common + 5 macOS-only + 4 error/trait). Zero warnings.
+
+*LUMYX Engineering Council (`~/lumyx-skills/`):*
+18 skills created and packaged to `dist/` (18 × `.skill`, 0 validation failures).
+10-level hierarchy, 15 essential members. Each skill: `NetworkGuard` trait (agent principal +
+subagents + perguntas obrigatórias + gates de bloqueio). Framework de 15 categorias de perguntas
+embedded (arquitetura, determinismo, performance, concorrência, DSP, render, sequencer,
+protocolos, segurança, qualidade, TD closure, PR review, governança de agentes,
+anti-alucinação de IA, evolução CEO). Protocolo de consenso: 1 BLOQUEIO veta qualquer mudança.
+
+**Invariants verified.** `cargo build --workspace --all-targets` zero warnings.
+326 tests green (312 previous + 14 new network_guard). `WifiBlockGuard` does not panic on
+macOS (typed result always returned). `PermissiveGuard` always `Ok(())`. `NetworkGuard`
+is object-safe (compiles as `Box<dyn NetworkGuard>`). Error display includes `CRITICAL`
+/ `WARNING` prefix per LUMYX Hardware Rules.
+
+**Pending.** TD-004 (wgpu→Metal, MEDIUM-1). Miri reactive 8-thread test (resource limit).
+2 remaining tokio async sleeps in led-protocols (Type B — testing absence of events,
+legitimate use of sleep). Real wgpu GPU executor.
+
+**Decisions.** `WifiBlockGuard::check()` returns `ProbeUnavailable` (not panic) on
+unsupported platforms — allows non-hardware environments to proceed with a warning.
+Enforcement is at show-start (one call before first frame), not per-frame — zero hot-path
+overhead. `PermissiveGuard` is the correct choice for `SimulatorDevice` deployments.
 
 ### 2026-06-19 — Governance: KB-012 + audit_gate + TD-006 hop-count + lumyx-e2e Phase 5b
 
