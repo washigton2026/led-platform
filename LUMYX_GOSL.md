@@ -56,7 +56,7 @@ returned Ok") is green.
 
 - The shared seam types (master §3) are respected and unbroken: `LogicalFrame`,
   `ProtocolOutput`, `DeviceDriver`/`IDevice`, `CompiledLayout`, `AudioFeatures`,
-  `ShowIntent`, `LayoutIntent`, `SharedContext`.
+  `ShowIntent`.
 - Each side of a seam remains **testable in isolation** against a fake (e.g. a
   `SimulatorDevice`).
 - Any change to a seam type is **deliberate, made in one place**, and reflected on both
@@ -96,11 +96,11 @@ enforce it.
 
 ### `/seam` — audit the contracts between layers
 Checks the §3 seam types — `LogicalFrame`, `AudioFeatures`, `ShowIntent`, `ProtocolOutput`
-(plus `DeviceDriver`/`CompiledLayout`/`LayoutIntent`/`SharedContext`) — and asserts **no
+(plus `DeviceDriver`/`CompiledLayout`) — and asserts **no
 layer leaks its details into another**:
 - nothing above the HAL references a universe, channel, socket, or RGB order;
 - `AudioFeatures` carries `sample_rate` *with* the data — no global rate is assumed;
-- the AI layer emits only a validated `ShowIntent`/`LayoutIntent`, never raw effects/channels;
+- the AI layer emits only a validated `ShowIntent`, never raw effects/channels;
 - each side of a seam compiles and tests against a fake of the other.
 → Enforces **Gate 4**. A leak is a failure even if everything compiles.
 

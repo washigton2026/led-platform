@@ -13,6 +13,8 @@ use crate::bpm::BpmTracker;
 use crate::contracts::{AudioFeatures, FFT_SIZE, HOP_SIZE, SPECTRUM_LEN};
 use crate::fft::SpectrumAnalyzer;
 use crate::harmonics::HarmonicClassifier;
+use crate::instrument::InstrumentClassifier;
+use crate::section::SectionDetector;
 use crate::window::hann_window;
 
 /// Spectral rolloff threshold (data-contracts.md: "frequency below which 85% of energy
@@ -30,7 +32,12 @@ pub struct Analyzer {
     bpm: BpmTracker,
     /// Harmonic content classifier — runs on every spectrum, gates beat false-positives
     /// in tonal (sustained) frames.
-    harmonic: HarmonicClassifier,
+    harmonic:  HarmonicClassifier,
+    /// Musical section detector — heuristic, energy + beat-density based.
+    /// After the warm-up window, `musical_section` is always `Some(...)`.
+    section:     SectionDetector,
+    /// Instrument / timbral event classifier.
+    instrument:  InstrumentClassifier,
 }
 
 impl Analyzer {
@@ -45,7 +52,9 @@ impl Analyzer {
             spectrum_analyzer: SpectrumAnalyzer::new(),
             beat: BeatDetector::new(),
             bpm: BpmTracker::new(),
-            harmonic: HarmonicClassifier::new(),
+            harmonic:   HarmonicClassifier::new(),
+            section:    SectionDetector::new(),
+            instrument: InstrumentClassifier::new(),
         }
     }
 
@@ -81,18 +90,30 @@ impl Analyzer {
         // suppress the beat signal. Windowing artifacts on non-integer bins create flux
         // spikes in tonal frames that look like beats but aren't musical onsets.
         // Gate threshold: harmonic_ratio >= TONAL_GATE_MIN suppresses beat.
-        let (harmonic_ratio, is_tonal) = self.harmonic.process(&spectrum, sr);
+        let (harmonic_ratio, is_tonal) = self.harmonic.process(&spectrum, sr); let _ = is_tonal;
         // Gate only very clean sustained tones (pure sine ≈ 0.9).
         // Transients on top of a tone dilute the ratio to ~0.5-0.7 — must not be gated.
         const TONAL_GATE_MIN: f32 = 0.80;
         let beat = beat_raw && !(is_tonal && harmonic_ratio >= TONAL_GATE_MIN);
 
         let bpm = self.bpm.update(beat, timestamp_ms);
+        let current_rms = rms(hop);
+        let musical_section = self.section.update(current_rms, beat);
+
+        // Instrument classification: runs every hop, zero allocation.
+        let instrument_class = Some(self.instrument.classify(
+            hop,
+            &spectrum,
+            harmonic_ratio,
+            self.harmonic.f0_bin,
+            sr,
+            beat,
+        ));
 
         AudioFeatures {
             timestamp_ms,
             sample_rate: sr,
-            rms: rms(hop),
+            rms: current_rms,
             peak: peak(hop),
             beat,
             onset,
@@ -105,7 +126,8 @@ impl Analyzer {
             spectral_flux,
             harmonic_ratio,
             spectrum,
-            musical_section: None,
+            musical_section,
+            instrument_class,
         }
     }
 }
@@ -140,7 +162,10 @@ mod tests {
         // 1 kHz at 48 kHz is in the mid band.
         assert!(features.mid_energy > features.bass_energy);
         assert!(features.mid_energy > features.high_energy);
-        assert!(features.musical_section.is_none(), "realtime pipeline never sets musical_section");
+        // musical_section is None before WARMUP_HOPS; this test only runs a few hops,
+        // so it should still be None here.
+        assert!(features.musical_section.is_none(),
+            "musical_section must be None before SectionDetector warm-up completes");
     }
 
     #[test]

@@ -1,0 +1,3340 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:5084f095-c6fa-4e1d-8eab-dfb82cd71c86",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-09T21:56:14.287588+00:00",
+    "component": {
+      "type": "application",
+      "name": "lumyx-led-platform",
+      "version": "0.1.0"
+    },
+    "tools": [
+      {
+        "name": "generate_sbom.py",
+        "version": "1"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/aho-corasick@1.1.4",
+      "name": "aho-corasick",
+      "version": "1.1.4",
+      "purl": "pkg:cargo/aho-corasick@1.1.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "Unlicense OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/alsa@0.9.1",
+      "name": "alsa",
+      "version": "0.9.1",
+      "purl": "pkg:cargo/alsa@0.9.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0/MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/alsa-sys@0.3.1",
+      "name": "alsa-sys",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/alsa-sys@0.3.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/arc-swap@1.9.1",
+      "name": "arc-swap",
+      "version": "1.9.1",
+      "purl": "pkg:cargo/arc-swap@1.9.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/audio-core@0.1.0",
+      "name": "audio-core",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/audio-core@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/autocfg@1.5.1",
+      "name": "autocfg",
+      "version": "1.5.1",
+      "purl": "pkg:cargo/autocfg@1.5.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/bindgen@0.72.1",
+      "name": "bindgen",
+      "version": "0.72.1",
+      "purl": "pkg:cargo/bindgen@0.72.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/bitflags@1.3.2",
+      "name": "bitflags",
+      "version": "1.3.2",
+      "purl": "pkg:cargo/bitflags@1.3.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT/Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/bitflags@2.13.0",
+      "name": "bitflags",
+      "version": "2.13.0",
+      "purl": "pkg:cargo/bitflags@2.13.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/block-buffer@0.10.4",
+      "name": "block-buffer",
+      "version": "0.10.4",
+      "purl": "pkg:cargo/block-buffer@0.10.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/bumpalo@3.20.3",
+      "name": "bumpalo",
+      "version": "3.20.3",
+      "purl": "pkg:cargo/bumpalo@3.20.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/bytes@1.11.1",
+      "name": "bytes",
+      "version": "1.11.1",
+      "purl": "pkg:cargo/bytes@1.11.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cc@1.2.63",
+      "name": "cc",
+      "version": "1.2.63",
+      "purl": "pkg:cargo/cc@1.2.63",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cesu8@1.1.0",
+      "name": "cesu8",
+      "version": "1.1.0",
+      "purl": "pkg:cargo/cesu8@1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0/MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cexpr@0.6.0",
+      "name": "cexpr",
+      "version": "0.6.0",
+      "purl": "pkg:cargo/cexpr@0.6.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0/MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cfg-if@1.0.4",
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "purl": "pkg:cargo/cfg-if@1.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/clang-sys@1.8.1",
+      "name": "clang-sys",
+      "version": "1.8.1",
+      "purl": "pkg:cargo/clang-sys@1.8.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/color_quant@1.1.0",
+      "name": "color_quant",
+      "version": "1.1.0",
+      "purl": "pkg:cargo/color_quant@1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/combine@4.6.7",
+      "name": "combine",
+      "version": "4.6.7",
+      "purl": "pkg:cargo/combine@4.6.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/core-foundation-sys@0.8.7",
+      "name": "core-foundation-sys",
+      "version": "0.8.7",
+      "purl": "pkg:cargo/core-foundation-sys@0.8.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/coreaudio-rs@0.11.3",
+      "name": "coreaudio-rs",
+      "version": "0.11.3",
+      "purl": "pkg:cargo/coreaudio-rs@0.11.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT/Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/coreaudio-sys@0.2.18",
+      "name": "coreaudio-sys",
+      "version": "0.2.18",
+      "purl": "pkg:cargo/coreaudio-sys@0.2.18",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cpal@0.15.3",
+      "name": "cpal",
+      "version": "0.15.3",
+      "purl": "pkg:cargo/cpal@0.15.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cpufeatures@0.2.17",
+      "name": "cpufeatures",
+      "version": "0.2.17",
+      "purl": "pkg:cargo/cpufeatures@0.2.17",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/crypto-common@0.1.7",
+      "name": "crypto-common",
+      "version": "0.1.7",
+      "purl": "pkg:cargo/crypto-common@0.1.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/curve25519-dalek@4.1.3",
+      "name": "curve25519-dalek",
+      "version": "4.1.3",
+      "purl": "pkg:cargo/curve25519-dalek@4.1.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/curve25519-dalek-derive@0.1.1",
+      "name": "curve25519-dalek-derive",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/curve25519-dalek-derive@0.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT/Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/dasp_sample@0.11.0",
+      "name": "dasp_sample",
+      "version": "0.11.0",
+      "purl": "pkg:cargo/dasp_sample@0.11.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/digest@0.10.7",
+      "name": "digest",
+      "version": "0.10.7",
+      "purl": "pkg:cargo/digest@0.10.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ed25519@2.2.3",
+      "name": "ed25519",
+      "version": "2.2.3",
+      "purl": "pkg:cargo/ed25519@2.2.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ed25519-dalek@2.2.0",
+      "name": "ed25519-dalek",
+      "version": "2.2.0",
+      "purl": "pkg:cargo/ed25519-dalek@2.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/either@1.16.0",
+      "name": "either",
+      "version": "1.16.0",
+      "purl": "pkg:cargo/either@1.16.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/equivalent@1.0.2",
+      "name": "equivalent",
+      "version": "1.0.2",
+      "purl": "pkg:cargo/equivalent@1.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/fiat-crypto@0.2.9",
+      "name": "fiat-crypto",
+      "version": "0.2.9",
+      "purl": "pkg:cargo/fiat-crypto@0.2.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0 OR BSD-1-Clause"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/find-msvc-tools@0.1.9",
+      "name": "find-msvc-tools",
+      "version": "0.1.9",
+      "purl": "pkg:cargo/find-msvc-tools@0.1.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/futures-core@0.3.32",
+      "name": "futures-core",
+      "version": "0.3.32",
+      "purl": "pkg:cargo/futures-core@0.3.32",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/futures-task@0.3.32",
+      "name": "futures-task",
+      "version": "0.3.32",
+      "purl": "pkg:cargo/futures-task@0.3.32",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/futures-util@0.3.32",
+      "name": "futures-util",
+      "version": "0.3.32",
+      "purl": "pkg:cargo/futures-util@0.3.32",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/generic-array@0.14.7",
+      "name": "generic-array",
+      "version": "0.14.7",
+      "purl": "pkg:cargo/generic-array@0.14.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/getrandom@0.3.4",
+      "name": "getrandom",
+      "version": "0.3.4",
+      "purl": "pkg:cargo/getrandom@0.3.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/gif@0.13.3",
+      "name": "gif",
+      "version": "0.13.3",
+      "purl": "pkg:cargo/gif@0.13.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/glob@0.3.3",
+      "name": "glob",
+      "version": "0.3.3",
+      "purl": "pkg:cargo/glob@0.3.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/hashbrown@0.17.1",
+      "name": "hashbrown",
+      "version": "0.17.1",
+      "purl": "pkg:cargo/hashbrown@0.17.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/indexmap@2.14.0",
+      "name": "indexmap",
+      "version": "2.14.0",
+      "purl": "pkg:cargo/indexmap@2.14.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/integration-tests@0.1.0",
+      "name": "integration-tests",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/integration-tests@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/itertools@0.13.0",
+      "name": "itertools",
+      "version": "0.13.0",
+      "purl": "pkg:cargo/itertools@0.13.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/jni@0.21.1",
+      "name": "jni",
+      "version": "0.21.1",
+      "purl": "pkg:cargo/jni@0.21.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT/Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/jni-sys@0.3.1",
+      "name": "jni-sys",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/jni-sys@0.3.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/jni-sys@0.4.1",
+      "name": "jni-sys",
+      "version": "0.4.1",
+      "purl": "pkg:cargo/jni-sys@0.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/jni-sys-macros@0.4.1",
+      "name": "jni-sys-macros",
+      "version": "0.4.1",
+      "purl": "pkg:cargo/jni-sys-macros@0.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/jobserver@0.1.34",
+      "name": "jobserver",
+      "version": "0.1.34",
+      "purl": "pkg:cargo/jobserver@0.1.34",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/js-sys@0.3.100",
+      "name": "js-sys",
+      "version": "0.3.100",
+      "purl": "pkg:cargo/js-sys@0.3.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-audio@0.1.0",
+      "name": "led-audio",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-audio@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-bridge@0.1.0",
+      "name": "led-bridge",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-bridge@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-core@0.1.0",
+      "name": "led-core",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-core@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-demo@0.1.0",
+      "name": "led-demo",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-demo@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-hal@0.1.0",
+      "name": "led-hal",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-hal@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-layout@0.1.0",
+      "name": "led-layout",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-layout@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-pixel-engine@0.1.0",
+      "name": "led-pixel-engine",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-pixel-engine@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-player@0.1.0",
+      "name": "led-player",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-player@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-protocols@0.1.0",
+      "name": "led-protocols",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-protocols@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-sequencer@0.1.0",
+      "name": "led-sequencer",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-sequencer@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-show-recorder@0.1.0",
+      "name": "led-show-recorder",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-show-recorder@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/led-xlights@0.1.0",
+      "name": "led-xlights",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/led-xlights@0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/libc@0.2.186",
+      "name": "libc",
+      "version": "0.2.186",
+      "purl": "pkg:cargo/libc@0.2.186",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/libloading@0.8.9",
+      "name": "libloading",
+      "version": "0.8.9",
+      "purl": "pkg:cargo/libloading@0.8.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/log@0.4.32",
+      "name": "log",
+      "version": "0.4.32",
+      "purl": "pkg:cargo/log@0.4.32",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/mach2@0.4.3",
+      "name": "mach2",
+      "version": "0.4.3",
+      "purl": "pkg:cargo/mach2@0.4.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause OR MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/memchr@2.8.1",
+      "name": "memchr",
+      "version": "2.8.1",
+      "purl": "pkg:cargo/memchr@2.8.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Unlicense OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/minimal-lexical@0.2.1",
+      "name": "minimal-lexical",
+      "version": "0.2.1",
+      "purl": "pkg:cargo/minimal-lexical@0.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT/Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/mio@1.2.1",
+      "name": "mio",
+      "version": "1.2.1",
+      "purl": "pkg:cargo/mio@1.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ndk@0.8.0",
+      "name": "ndk",
+      "version": "0.8.0",
+      "purl": "pkg:cargo/ndk@0.8.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ndk-context@0.1.1",
+      "name": "ndk-context",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/ndk-context@0.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ndk-sys@0.5.0+25.2.9519653",
+      "name": "ndk-sys",
+      "version": "0.5.0+25.2.9519653",
+      "purl": "pkg:cargo/ndk-sys@0.5.0+25.2.9519653",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/nom@7.1.3",
+      "name": "nom",
+      "version": "7.1.3",
+      "purl": "pkg:cargo/nom@7.1.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/num-complex@0.4.6",
+      "name": "num-complex",
+      "version": "0.4.6",
+      "purl": "pkg:cargo/num-complex@0.4.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/num-derive@0.4.2",
+      "name": "num-derive",
+      "version": "0.4.2",
+      "purl": "pkg:cargo/num-derive@0.4.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/num-integer@0.1.46",
+      "name": "num-integer",
+      "version": "0.1.46",
+      "purl": "pkg:cargo/num-integer@0.1.46",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/num-traits@0.2.19",
+      "name": "num-traits",
+      "version": "0.2.19",
+      "purl": "pkg:cargo/num-traits@0.2.19",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/num_enum@0.7.6",
+      "name": "num_enum",
+      "version": "0.7.6",
+      "purl": "pkg:cargo/num_enum@0.7.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause OR MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/num_enum_derive@0.7.6",
+      "name": "num_enum_derive",
+      "version": "0.7.6",
+      "purl": "pkg:cargo/num_enum_derive@0.7.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause OR MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/oboe@0.6.1",
+      "name": "oboe",
+      "version": "0.6.1",
+      "purl": "pkg:cargo/oboe@0.6.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/oboe-sys@0.6.1",
+      "name": "oboe-sys",
+      "version": "0.6.1",
+      "purl": "pkg:cargo/oboe-sys@0.6.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/once_cell@1.21.4",
+      "name": "once_cell",
+      "version": "1.21.4",
+      "purl": "pkg:cargo/once_cell@1.21.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/pin-project-lite@0.2.17",
+      "name": "pin-project-lite",
+      "version": "0.2.17",
+      "purl": "pkg:cargo/pin-project-lite@0.2.17",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/pkg-config@0.3.33",
+      "name": "pkg-config",
+      "version": "0.3.33",
+      "purl": "pkg:cargo/pkg-config@0.3.33",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/primal-check@0.3.4",
+      "name": "primal-check",
+      "version": "0.3.4",
+      "purl": "pkg:cargo/primal-check@0.3.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/proc-macro-crate@3.5.0",
+      "name": "proc-macro-crate",
+      "version": "3.5.0",
+      "purl": "pkg:cargo/proc-macro-crate@3.5.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/proc-macro2@1.0.106",
+      "name": "proc-macro2",
+      "version": "1.0.106",
+      "purl": "pkg:cargo/proc-macro2@1.0.106",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/quote@1.0.45",
+      "name": "quote",
+      "version": "1.0.45",
+      "purl": "pkg:cargo/quote@1.0.45",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/r-efi@5.3.0",
+      "name": "r-efi",
+      "version": "5.3.0",
+      "purl": "pkg:cargo/r-efi@5.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/regex@1.12.4",
+      "name": "regex",
+      "version": "1.12.4",
+      "purl": "pkg:cargo/regex@1.12.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/regex-automata@0.4.14",
+      "name": "regex-automata",
+      "version": "0.4.14",
+      "purl": "pkg:cargo/regex-automata@0.4.14",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/regex-syntax@0.8.11",
+      "name": "regex-syntax",
+      "version": "0.8.11",
+      "purl": "pkg:cargo/regex-syntax@0.8.11",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rustc-hash@2.1.2",
+      "name": "rustc-hash",
+      "version": "2.1.2",
+      "purl": "pkg:cargo/rustc-hash@2.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rustc_version@0.4.1",
+      "name": "rustc_version",
+      "version": "0.4.1",
+      "purl": "pkg:cargo/rustc_version@0.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rustfft@6.4.1",
+      "name": "rustfft",
+      "version": "6.4.1",
+      "purl": "pkg:cargo/rustfft@6.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rustversion@1.0.22",
+      "name": "rustversion",
+      "version": "1.0.22",
+      "purl": "pkg:cargo/rustversion@1.0.22",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/same-file@1.0.6",
+      "name": "same-file",
+      "version": "1.0.6",
+      "purl": "pkg:cargo/same-file@1.0.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "Unlicense/MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/semver@1.0.28",
+      "name": "semver",
+      "version": "1.0.28",
+      "purl": "pkg:cargo/semver@1.0.28",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/serde_core@1.0.228",
+      "name": "serde_core",
+      "version": "1.0.228",
+      "purl": "pkg:cargo/serde_core@1.0.228",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/serde_derive@1.0.228",
+      "name": "serde_derive",
+      "version": "1.0.228",
+      "purl": "pkg:cargo/serde_derive@1.0.228",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/sha2@0.10.9",
+      "name": "sha2",
+      "version": "0.10.9",
+      "purl": "pkg:cargo/sha2@0.10.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/shlex@1.3.0",
+      "name": "shlex",
+      "version": "1.3.0",
+      "purl": "pkg:cargo/shlex@1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/shlex@2.0.1",
+      "name": "shlex",
+      "version": "2.0.1",
+      "purl": "pkg:cargo/shlex@2.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/signature@2.2.0",
+      "name": "signature",
+      "version": "2.2.0",
+      "purl": "pkg:cargo/signature@2.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/slab@0.4.12",
+      "name": "slab",
+      "version": "0.4.12",
+      "purl": "pkg:cargo/slab@0.4.12",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/socket2@0.6.4",
+      "name": "socket2",
+      "version": "0.6.4",
+      "purl": "pkg:cargo/socket2@0.6.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/strength_reduce@0.2.4",
+      "name": "strength_reduce",
+      "version": "0.2.4",
+      "purl": "pkg:cargo/strength_reduce@0.2.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/subtle@2.6.1",
+      "name": "subtle",
+      "version": "2.6.1",
+      "purl": "pkg:cargo/subtle@2.6.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/syn@2.0.117",
+      "name": "syn",
+      "version": "2.0.117",
+      "purl": "pkg:cargo/syn@2.0.117",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/thiserror@1.0.69",
+      "name": "thiserror",
+      "version": "1.0.69",
+      "purl": "pkg:cargo/thiserror@1.0.69",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/thiserror-impl@1.0.69",
+      "name": "thiserror-impl",
+      "version": "1.0.69",
+      "purl": "pkg:cargo/thiserror-impl@1.0.69",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/tokio@1.52.3",
+      "name": "tokio",
+      "version": "1.52.3",
+      "purl": "pkg:cargo/tokio@1.52.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/tokio-macros@2.7.0",
+      "name": "tokio-macros",
+      "version": "2.7.0",
+      "purl": "pkg:cargo/tokio-macros@2.7.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/toml_datetime@1.1.1+spec-1.1.0",
+      "name": "toml_datetime",
+      "version": "1.1.1+spec-1.1.0",
+      "purl": "pkg:cargo/toml_datetime@1.1.1+spec-1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/toml_edit@0.25.12+spec-1.1.0",
+      "name": "toml_edit",
+      "version": "0.25.12+spec-1.1.0",
+      "purl": "pkg:cargo/toml_edit@0.25.12+spec-1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/toml_parser@1.1.2+spec-1.1.0",
+      "name": "toml_parser",
+      "version": "1.1.2+spec-1.1.0",
+      "purl": "pkg:cargo/toml_parser@1.1.2+spec-1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/transpose@0.2.3",
+      "name": "transpose",
+      "version": "0.2.3",
+      "purl": "pkg:cargo/transpose@0.2.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/typenum@1.20.1",
+      "name": "typenum",
+      "version": "1.20.1",
+      "purl": "pkg:cargo/typenum@1.20.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/unicode-ident@1.0.24",
+      "name": "unicode-ident",
+      "version": "1.0.24",
+      "purl": "pkg:cargo/unicode-ident@1.0.24",
+      "licenses": [
+        {
+          "license": {
+            "id": "(MIT OR Apache-2.0) AND Unicode-3.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/version_check@0.9.5",
+      "name": "version_check",
+      "version": "0.9.5",
+      "purl": "pkg:cargo/version_check@0.9.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT/Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/walkdir@2.5.0",
+      "name": "walkdir",
+      "version": "2.5.0",
+      "purl": "pkg:cargo/walkdir@2.5.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Unlicense/MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasi@0.11.1+wasi-snapshot-preview1",
+      "name": "wasi",
+      "version": "0.11.1+wasi-snapshot-preview1",
+      "purl": "pkg:cargo/wasi@0.11.1+wasi-snapshot-preview1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasip2@1.0.3+wasi-0.2.9",
+      "name": "wasip2",
+      "version": "1.0.3+wasi-0.2.9",
+      "purl": "pkg:cargo/wasip2@1.0.3+wasi-0.2.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasm-bindgen@0.2.123",
+      "name": "wasm-bindgen",
+      "version": "0.2.123",
+      "purl": "pkg:cargo/wasm-bindgen@0.2.123",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasm-bindgen-futures@0.4.73",
+      "name": "wasm-bindgen-futures",
+      "version": "0.4.73",
+      "purl": "pkg:cargo/wasm-bindgen-futures@0.4.73",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasm-bindgen-macro@0.2.123",
+      "name": "wasm-bindgen-macro",
+      "version": "0.2.123",
+      "purl": "pkg:cargo/wasm-bindgen-macro@0.2.123",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasm-bindgen-macro-support@0.2.123",
+      "name": "wasm-bindgen-macro-support",
+      "version": "0.2.123",
+      "purl": "pkg:cargo/wasm-bindgen-macro-support@0.2.123",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wasm-bindgen-shared@0.2.123",
+      "name": "wasm-bindgen-shared",
+      "version": "0.2.123",
+      "purl": "pkg:cargo/wasm-bindgen-shared@0.2.123",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/web-sys@0.3.100",
+      "name": "web-sys",
+      "version": "0.3.100",
+      "purl": "pkg:cargo/web-sys@0.3.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/weezl@0.1.12",
+      "name": "weezl",
+      "version": "0.1.12",
+      "purl": "pkg:cargo/weezl@0.1.12",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/winapi-util@0.1.11",
+      "name": "winapi-util",
+      "version": "0.1.11",
+      "purl": "pkg:cargo/winapi-util@0.1.11",
+      "licenses": [
+        {
+          "license": {
+            "id": "Unlicense OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows@0.54.0",
+      "name": "windows",
+      "version": "0.54.0",
+      "purl": "pkg:cargo/windows@0.54.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-core@0.54.0",
+      "name": "windows-core",
+      "version": "0.54.0",
+      "purl": "pkg:cargo/windows-core@0.54.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-link@0.2.1",
+      "name": "windows-link",
+      "version": "0.2.1",
+      "purl": "pkg:cargo/windows-link@0.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-result@0.1.2",
+      "name": "windows-result",
+      "version": "0.1.2",
+      "purl": "pkg:cargo/windows-result@0.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-sys@0.45.0",
+      "name": "windows-sys",
+      "version": "0.45.0",
+      "purl": "pkg:cargo/windows-sys@0.45.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-sys@0.61.2",
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "purl": "pkg:cargo/windows-sys@0.61.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-targets@0.42.2",
+      "name": "windows-targets",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows-targets@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows-targets@0.52.6",
+      "name": "windows-targets",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows-targets@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_aarch64_gnullvm@0.42.2",
+      "name": "windows_aarch64_gnullvm",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_aarch64_gnullvm@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_aarch64_gnullvm@0.52.6",
+      "name": "windows_aarch64_gnullvm",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_aarch64_gnullvm@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_aarch64_msvc@0.42.2",
+      "name": "windows_aarch64_msvc",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_aarch64_msvc@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_aarch64_msvc@0.52.6",
+      "name": "windows_aarch64_msvc",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_aarch64_msvc@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_i686_gnu@0.42.2",
+      "name": "windows_i686_gnu",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_i686_gnu@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_i686_gnu@0.52.6",
+      "name": "windows_i686_gnu",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_i686_gnu@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_i686_gnullvm@0.52.6",
+      "name": "windows_i686_gnullvm",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_i686_gnullvm@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_i686_msvc@0.42.2",
+      "name": "windows_i686_msvc",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_i686_msvc@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_i686_msvc@0.52.6",
+      "name": "windows_i686_msvc",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_i686_msvc@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_x86_64_gnu@0.42.2",
+      "name": "windows_x86_64_gnu",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_x86_64_gnu@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_x86_64_gnu@0.52.6",
+      "name": "windows_x86_64_gnu",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_x86_64_gnu@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_x86_64_gnullvm@0.42.2",
+      "name": "windows_x86_64_gnullvm",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_x86_64_gnullvm@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_x86_64_gnullvm@0.52.6",
+      "name": "windows_x86_64_gnullvm",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_x86_64_gnullvm@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_x86_64_msvc@0.42.2",
+      "name": "windows_x86_64_msvc",
+      "version": "0.42.2",
+      "purl": "pkg:cargo/windows_x86_64_msvc@0.42.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/windows_x86_64_msvc@0.52.6",
+      "name": "windows_x86_64_msvc",
+      "version": "0.52.6",
+      "purl": "pkg:cargo/windows_x86_64_msvc@0.52.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/winnow@1.0.3",
+      "name": "winnow",
+      "version": "1.0.3",
+      "purl": "pkg:cargo/winnow@1.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/wit-bindgen@0.57.1",
+      "name": "wit-bindgen",
+      "version": "0.57.1",
+      "purl": "pkg:cargo/wit-bindgen@0.57.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "scope": "required",
+      "properties": [
+        {
+          "name": "lumyx:origin",
+          "value": "crates.io"
+        }
+      ]
+    }
+  ]
+}

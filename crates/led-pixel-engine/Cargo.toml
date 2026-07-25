@@ -18,10 +18,19 @@ arc-swap = "1"
 # The CPU ComputeEffect is the always-available reference; this feature adds a
 # wgpu dispatcher that runs the same WGSL kernel on the GPU.
 [features]
-gpu = ["wgpu"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 
 [dependencies.wgpu]
 version = "22"
+optional = true
+
+[dependencies.pollster]
+version = "0.3"
+optional = true
+
+[dependencies.bytemuck]
+version = "1"
+features = ["derive"]
 optional = true
 
 [dev-dependencies]

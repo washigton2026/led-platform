@@ -1,0 +1,13 @@
+[package]
+name = "led-show-recorder"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Records LogicalFrame + AudioFeatures streams to a compact binary file for deterministic offline replay."
+
+[dependencies]
+# Ed25519 replay/snapshot signing (missão Production-Ready: replay assinado).
+# no_std-capable, pure-Rust, audited curve implementation; no RNG feature — key
+# seeds come from the OS via std (see signing.rs).
+ed25519-dalek = { version = "2", default-features = false, features = ["fast"] }
+led-core = { path = "../led-core" }

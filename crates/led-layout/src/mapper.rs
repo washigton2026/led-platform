@@ -25,7 +25,7 @@ impl LayoutMapper {
                 universe += 1;
                 channel = 0;
             }
-            out.push(PixelPhysical { device, universe, channel, order });
+            out.push(PixelPhysical { device, universe, channel, format: order.into() });
             channel += 3;
         }
         out

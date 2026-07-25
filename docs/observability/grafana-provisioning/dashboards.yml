@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: lumyx
+    folder: LUMYX
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

@@ -8,7 +8,9 @@
 pub mod mapper;
 pub mod model;
 pub mod props;
+pub mod rig;
 
 pub use mapper::LayoutMapper;
 pub use model::{GroupId, Layout, PixelLogical};
 pub use props::LayoutBuilder;
+pub use rig::{build_rig, PlacedStrip, RigPlan, RigTemplate, StripTemplate};

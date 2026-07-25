@@ -3,7 +3,7 @@
 Canonical source of truth for all tracked debt items. One entry per TD-ID.
 Updates: edit this file + commit. Session ledger (in-chat) must not diverge.
 
-Last updated: 2026-06-19 (TD-002 closed — ArcSwap)
+Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
 
 ---
 
@@ -67,7 +67,8 @@ note: |
 td_id:     TD-004
 title:     "led-pixel-engine GPU path hangs: wgpu request_device blocks on Metal"
 severity:  High
-status:    diagnosed
+status:    closed
+closed_on: 2026-06-26
 source:    LOW-1 investigation
 type:      runtime / startup
 root_cause: |
@@ -75,14 +76,29 @@ root_cause: |
   main thread. On macOS 14+ without an active CAMetalLayer, the
   MTLCreateSystemDefaultDevice() call blocks indefinitely waiting for the
   WindowServer connection. Reproduces 100% in headless CI, intermittently
-  under load on dev machines.
-chain:     wgpu 0.19 → metal-rs 0.28 → objc2-metal → block_on(request_device)
+  under load on dev machines. Affected wgpu 0.19.
 fix: |
-  Option A: spawn wgpu init on a dedicated thread, timeout 2s, fall back
-            to software (wgpu::Backends::GL or CPU path).
-  Option B: gate GPU crate behind `feature = "gpu"`, always off in CI.
-  Option C: upgrade wgpu ≥0.20 (fixes Metal headless init).
-milestone: MEDIUM-1 (22→29 Jun, dedicated session — DO NOT TOUCH outside that)
+  Option C applied: wgpu already upgraded to 22.1.0 (which includes the
+  Metal headless fix from wgpu 0.20+). Confirmed: GpuContext::try_init()
+  returns without hanging on macOS headless (no CAMetalLayer needed).
+
+  Additionally implemented the real GPU executor (gpu_executor.rs) that was
+  previously only a design doc (references/gpu-compute.md):
+  - GpuContext::try_init() — adapter init, returns None gracefully if no GPU
+  - GpuPlasmaExecutor — pre-allocated buffers, per-frame dispatch, readback
+  - 3 GPU-path tests: init_does_not_hang, parity_with_cpu, deterministic
+  - Tests skip gracefully (eprintln + return) when no GPU adapter available
+
+  CPU fallback (ComputeEffect) always present — GPU is additive only.
+  Feature gate `gpu` keeps CI green on hardware-less builds.
+
+wgpu_version: "22.1.0"
+evidence_ref: docs/evidence/td-004-wgpu-metal-fix.txt
+negative_control: |
+  `cargo test -p led-pixel-engine --features gpu -- gpu_executor::tests::gpu_executor_init_does_not_hang`
+  deve passar (não travar) em qualquer ambiente. Se wgpu voltar ao comportamento de 0.19,
+  o teste travaria indefinidamente — um timeout de CI detectaria a regressão.
+  O artefato mostra "3 passed; 0 failed" em 0.20s.
 ```
 
 ---

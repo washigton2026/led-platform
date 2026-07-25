@@ -11,6 +11,10 @@ members = [
     "crates/led-demo",
     "crates/audio-core",
     "crates/led-bridge",
+    "crates/led-show-recorder",
+    "crates/led-xlights",
+    "crates/led-player",
+    "integration-tests",
 ]
 
 [workspace.package]

@@ -138,6 +138,7 @@ fn audioshare_under_concurrent_led_and_audio_threads() {
                 bass: (i as f32 * 0.002).min(1.0),
                 mid: 0.3, high: 0.1,
                 spectrum: vec![0.0; 512],
+                musical_section: None, instrument_class: None,
             });
             std::hint::spin_loop(); // yield briefly
         }

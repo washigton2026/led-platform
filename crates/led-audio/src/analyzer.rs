@@ -47,6 +47,8 @@ impl Analyzer {
             mid,
             high,
             spectrum,
+            musical_section:  None, // led-audio is the simple DSP crate; SectionDetector lives in audio-core
+            instrument_class: None, // same: InstrumentClassifier lives in audio-core
         }
     }
 }

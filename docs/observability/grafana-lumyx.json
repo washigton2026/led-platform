@@ -1,0 +1,104 @@
+{
+  "title": "LUMYX — Show Operations",
+  "uid": "lumyx-show-ops",
+  "schemaVersion": 39,
+  "tags": ["lumyx", "led", "show"],
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "15s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Frame delivery rate (SLO ≥ 99.9%)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0.99,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.995 },
+              { "color": "green", "value": 0.999 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(lumyx_drops_total[5m])) / sum(rate(lumyx_frames_total[5m])))",
+          "legendFormat": "delivery"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Send latency p99 (SLO < 5ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 6, "y": 0, "w": 9, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.005 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "lumyx_frame_latency_seconds{quantile=\"0.99\"}",
+          "legendFormat": "{{node}} p99"
+        },
+        {
+          "expr": "lumyx_frame_latency_seconds{quantile=\"0.5\"}",
+          "legendFormat": "{{node}} p50"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Frames per second (per node)",
+      "type": "timeseries",
+      "gridPos": { "x": 15, "y": 0, "w": 9, "h": 5 },
+      "fieldConfig": { "defaults": { "unit": "fps" } },
+      "targets": [
+        {
+          "expr": "rate(lumyx_frames_total[1m])",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Drops (error budget burn)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 5 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "increase(lumyx_drops_total[5m])",
+          "legendFormat": "{{node}} drops/5m"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Beats detected (audio liveness)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 5 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "rate(lumyx_beats_total[1m]) * 60",
+          "legendFormat": "{{node}} beats/min"
+        }
+      ]
+    }
+  ]
+}

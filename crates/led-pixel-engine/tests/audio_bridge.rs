@@ -63,6 +63,7 @@ fn reactive_effect_runs_through_the_pipeline_to_a_device() {
         mid: 0.0,
         high: 0.0,
         spectrum: vec![0.0; 16],
+        musical_section: None, instrument_class: None,
     });
 
     let fx = BandPulse::new(PixelColor::rgb(255, 0, 0), Band::Bass, 1.0, share.clone());

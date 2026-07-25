@@ -1,0 +1,57 @@
+# LUMYX — Prometheus alert rules (espelham os SLOs de docs/observability/SLO.md
+# e as regras in-process de AlertEngine::lumyx_standard()).
+groups:
+  - name: lumyx-show-slos
+    rules:
+      # SLO 1 — entrega de frames ≥ 99,9% (burn rate multi-window)
+      - alert: LumyxFrameDeliveryFastBurn
+        expr: >
+          (sum(rate(lumyx_drops_total[5m])) / sum(rate(lumyx_frames_total[5m])))
+          > 14.4 * 0.001
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Queda rápida de entrega de frames (fast burn 5m)"
+          description: "Drop rate acima de 14,4× o error budget — palco em risco agora."
+
+      - alert: LumyxFrameDeliverySlowBurn
+        expr: >
+          (sum(rate(lumyx_drops_total[30m])) / sum(rate(lumyx_frames_total[30m])))
+          > 6 * 0.001
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Erosão lenta do error budget de entrega (slow burn 30m)"
+
+      # SLO 2 — latência p99 de envio < 5 ms (release)
+      - alert: LumyxSendLatencyP99High
+        expr: lumyx_frame_latency_seconds{quantile="0.99"} > 0.005
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "p99 de envio acima de 5ms em {{ $labels.node }}"
+          description: "Acima do budget da camada HAL — investigar alloc/lock no hot path."
+
+      # SLO 4 — o show parou de emitir (nenhum frame novo)
+      - alert: LumyxShowStalled
+        expr: rate(lumyx_frames_total[1m]) == 0
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Nenhum frame emitido por {{ $labels.node }} há 3 minutos"
+          description: >
+            Heartbeat in-process protege o controlador (nunca zeros), mas o
+            show está parado — verificar player/sequencer.
+
+      # Scrape saudável — o exportador caiu
+      - alert: LumyxMetricsDown
+        expr: up{job="lumyx"} == 0
+        for: 2m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Endpoint /metrics do LUMYX fora do ar"

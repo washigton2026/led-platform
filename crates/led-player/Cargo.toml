@@ -1,0 +1,13 @@
+[package]
+name = "led-player"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "LUMYX show player: plays .lumyx recordings in real time to a ProtocolOutput (simulator or ArtNet/sACN hardware), with manifest verification and a timeline inspector."
+publish = false
+
+[dependencies]
+led-core          = { path = "../led-core" }
+led-hal           = { path = "../led-hal" }
+led-protocols     = { path = "../led-protocols" }
+led-show-recorder = { path = "../led-show-recorder" }

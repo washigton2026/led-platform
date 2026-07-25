@@ -52,13 +52,17 @@ pub mod capture;
 pub mod contracts;
 pub mod fft;
 pub mod harmonics;
+pub mod instrument;
 pub mod pipeline;
 pub mod ring_buffer;
+pub mod section;
 pub mod window;
 
 pub use analyzer::Analyzer;
 pub use capture::{AudioCoreError, CaptureStream, MockCaptureSource};
 pub use contracts::{AudioFeatures, MusicalSection, FFT_SIZE, HOP_SIZE, SPECTRUM_LEN};
 pub use harmonics::{HarmonicClassifier, TONAL_THRESHOLD};
+pub use instrument::{InstrumentClass, InstrumentClassifier};
 pub use pipeline::AudioPipeline;
 pub use ring_buffer::RingBuffer;
+pub use section::SectionDetector;

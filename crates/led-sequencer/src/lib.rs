@@ -9,11 +9,17 @@
 //! - [`timeline`] — the composition algorithm: fades, opacity keyframes (with easing),
 //!   blend modes, marker metadata.
 
+pub mod live_tempo;
 pub mod model;
+pub mod section_clip;
+pub mod show_intent;
 pub mod tempo;
 pub mod timeline;
 
+pub use live_tempo::LiveTempoMap;
 pub use model::{BlendMode, Clip, EasingType, Keyframe, MarkerKind, TimeMarker, Track};
+pub use section_clip::{SectionClip, SectionReceiver};
+pub use show_intent::{ShowIntent, ShowIntentError, ShowIntentGenerator, ShowStyle};
 pub use tempo::TempoMap;
 pub use timeline::Timeline;
 

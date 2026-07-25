@@ -6,8 +6,14 @@ license.workspace = true
 description = "Renders a short LED show to a watchable GIF — exercises layout + sequencer + compute effects + beat-sync."
 
 [dependencies]
-led-core = { path = "../led-core" }
-led-layout = { path = "../led-layout" }
-led-sequencer = { path = "../led-sequencer" }
+led-core        = { path = "../led-core" }
+led-hal         = { path = "../led-hal" }
+led-layout      = { path = "../led-layout" }
+led-sequencer   = { path = "../led-sequencer" }
 led-pixel-engine = { path = "../led-pixel-engine" }
+led-show-recorder = { path = "../led-show-recorder" }
+led-xlights       = { path = "../led-xlights" }
 gif = "0.13"
+
+[features]
+gpu = ["led-pixel-engine/gpu"]

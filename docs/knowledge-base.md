@@ -198,3 +198,49 @@ notes:        |
     negative_control: → pega ">= 183" e "Miri N=0" (4 ocorrências)
   Não adicionar um terceiro campo sem o mesmo critério.
 ```
+
+## KB-013 — pipefail + `grep -q` = SIGPIPE falso-vermelho (e set -e = falso-verde)
+
+```yaml
+id: KB-013
+title: Gates de shell que morrem cedo mentem nas duas direções
+symptom: |
+  lumyx-e2e.sh reportou 19-21 FAILs com a suíte cargo 100% verde; noutra
+  rodada, morreu na Phase 1 com exit 0 aparente (mascarado por "| tail").
+root_cause: |
+  (a) set -e mata o script na primeira atribuição var=$(cmd) que falha —
+      o contrato do script é "contar falhas e reportar no fim"; morte
+      silenciosa + pipe no chamador = FALSO-VERDE.
+  (b) pipefail + `cmd | grep -q`: grep fecha o pipe no primeiro match; cmd
+      leva SIGPIPE (141); pipeline "falha" mesmo com o gate satisfeito =
+      FALSO-VERMELHO em qualquer crate com saída longa após o match.
+  (c) grep -P (PCRE) não existe no BSD grep do macOS → extração vazia.
+rule: |
+  Scripts de gate usam `set -u` apenas. Pipelines terminam no comando cujo
+  status É o gate. Extrações usam sed -E (portável). O exit code do script
+  é a ÚNICA fonte de verdade — nunca ler o veredicto por pipe.
+first_seen:   2026-07-09
+status:       permanent
+```
+
+## KB-014 — Hex sem aspas em emissor de JSON manual
+
+```yaml
+id: KB-014
+title: format!("{:#018x}") direto em JSON produz documento inválido
+symptom: |
+  show_report.json rejeitado por json.load ("hash":0x2fb1... não é JSON).
+  3 emissores tinham o mesmo bug: ReplayManifest::to_json,
+  ShowInfo::to_json (led-player), Provenance::to_json (led-core).
+root_cause: |
+  JSON não tem literais hex. Emissores de JSON escritos à mão com format!
+  não passam por nenhum validador — o teste unitário checava substrings
+  ("\"hash\":") que também casavam com o formato inválido.
+rule: |
+  Todo valor hex em JSON manual é string com aspas: "hash":"0x...".
+  Teste de emissor JSON deve validar parseabilidade real (o gate P10d faz
+  json.load de verdade — foi ele que pegou) ou, no mínimo, assertar o
+  padrão com aspas: contains("\"hash\":\"0x").
+first_seen:   2026-07-09
+status:       permanent
+```

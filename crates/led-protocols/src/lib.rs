@@ -15,23 +15,33 @@
 //! | [`heartbeat`] | 800 ms keep-alive; `HealthStatus`; never sends zeros |
 //! | [`pool`] | Pre-allocated 638-byte buffer pool for zero-alloc hot paths |
 //!
+//! | [`ddp`]    | DDP (Distributed Display Protocol) — WLED advanced mode, pixel streaming |
+//!
 //! ## Non-negotiable rules (SKILL.md / LUMYX_GOSL)
-//! - Sequence numbers are **per-universe**, wrapping — never a shared global counter.
-//! - One universe per UDP datagram.
+//! - Sequence numbers are **per-universe** (sACN/Art-Net) or **per-device** (DDP), wrapping — never a shared global counter.
+//! - One universe per UDP datagram (sACN/Art-Net).
+//! - DDP payload ≤ 1462 bytes per packet; auto-fragment for larger segments.
 //! - Keep-alive fires at ≤ 800 ms regardless of sequencer state. A zeroed frame is not a heartbeat.
 //! - Source conflict checked at startup; refuses to send on overlap, naming the other IP.
 //! - WiFi is **unsupported** for live shows (cabled only).
 //! - Zero allocations on the send path (pre-sized buffers).
 
 pub mod artnet;
+pub mod ddp;
 pub mod device;
 pub mod heartbeat;
 pub mod packet;
 pub mod pool;
+pub mod router;
 pub mod sender;
 
-pub use artnet::{find_conflicts, ArtPollReply, ConflictReport};
+pub use artnet::{
+    discover_controllers, presence, DiscoveryResult,
+    build_art_dmx, find_conflicts, parse_art_dmx, ArtNetDevice, ArtPollReply, ConflictReport,
+};
+pub use ddp::{build_ddp_packet, build_ddp_packet_bytes, parse_ddp_packet, DdpDevice, DdpPacket, DDP_MAX_PAYLOAD, DDP_MAX_PIXELS, DDP_PORT};
 pub use device::{multicast_addr, SacnDevice};
 pub use heartbeat::{health, HealthStatus, Heartbeat, HEARTBEAT_MS};
 pub use pool::BufferPool;
+pub use router::{DdpBackend, ProtocolBackend, RouteEntry, RouterDevice, SacnBackend};
 pub use sender::{FrameSlice, ParallelSender, UniverseState};

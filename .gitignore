@@ -2,3 +2,15 @@
 **/*.rs.bk
 .DS_Store
 target-install/
+
+# Release artifacts + signing keys (private seed NEVER committed)
+release/
+
+# Generated show artifacts — regenerable outputs, not source. Kept out of the baseline
+# so the SHA stays lean (robot_sequence.lumyx alone is ~73 MB). The code that produces
+# them is the source of truth (led-demo / led-show-recorder examples).
+*.lumyx
+*.gif
+
+# Ephemeral Claude Code agent worktrees (scratch — never part of the product).
+.claude/worktrees/

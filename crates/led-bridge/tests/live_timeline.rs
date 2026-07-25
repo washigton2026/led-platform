@@ -59,6 +59,7 @@ fn collect_beats(duration_ms: u64, beat_ms: u64) -> (Vec<(u64, bool)>, u64) {
     let mut v0 = V0 {
         sample_rate: 0, timestamp_ms: 0, rms: 0.0, beat: false,
         bass: 0.0, mid: 0.0, high: 0.0, spectrum: Vec::new(),
+        musical_section: None, instrument_class: None,
     };
     let hop_dur_ms = (HOP_SIZE as u64 * 1_000) / SR as u64;
     let total_hops = duration_ms / hop_dur_ms;

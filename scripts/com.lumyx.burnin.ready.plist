@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LUMYX 72h/168h burn-in as a persistent launchd job (survives terminal close
+  and logout; the ONLY correct way to run a multi-day burn-in on macOS).
+
+  Install:
+    cp scripts/com.lumyx.burnin.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.lumyx.burnin.plist
+  Watch:
+    tail -f ~/led-platform/burnin-*.jsonl
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.lumyx.burnin.plist
+
+  Edit the "72" below to "168" for the week-long run. Point --ddp/--artnet at a
+  real controller to make it a HARDWARE burn-in (the certification-grade run).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lumyx.burnin</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/gabrielabambam/led-platform/scripts/burnin.sh</string>
+        <string>72</string>
+        <string>/Users/gabrielabambam/led-platform/robot_sequence.lumyx</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/gabrielabambam/led-platform</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/gabrielabambam/led-platform/burnin-launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/gabrielabambam/led-platform/burnin-launchd.err</string>
+</dict>
+</plist>

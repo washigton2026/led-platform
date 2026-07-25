@@ -71,6 +71,11 @@ pub struct AudioFeatures {
 
     // MUSICAL CONTEXT — offline-only, always None from this realtime pipeline.
     pub musical_section: Option<MusicalSection>,
+
+    // TIMBRAL CONTEXT (v1.3 — added with InstrumentClassifier)
+    /// Heuristic instrument / event class for this frame.
+    /// `None` before the classifier is wired; `Some(...)` when `InstrumentClassifier` is active.
+    pub instrument_class: Option<crate::instrument::InstrumentClass>,
 }
 
 impl Default for AudioFeatures {
@@ -94,6 +99,7 @@ impl Default for AudioFeatures {
             harmonic_ratio: 0.0,
             spectrum: [0.0; SPECTRUM_LEN],
             musical_section: None,
+            instrument_class: None,
         }
     }
 }
@@ -208,11 +214,15 @@ mod adversarial_tests {
         assert_eq!(last.bpm, 128.0, "bpm must survive 10k copies");
     }
 
-    // ── CONTRACT: musical_section always None from realtime pipeline ───────
+    // ── CONTRACT: musical_section is None before warm-up, Some after ─────────
+    // (Supersedes the old "always None" invariant — SectionDetector now provides
+    // real-time classification after WARMUP_HOPS hops.)
     #[test]
-    fn realtime_pipeline_musical_section_is_none() {
+    fn default_musical_section_is_none() {
+        // Default/zero AudioFeatures (pre-warm-up sentinel) must be None.
         let f = AudioFeatures::default();
-        assert!(f.musical_section.is_none(), "realtime pipeline must never set musical_section");
+        assert!(f.musical_section.is_none(),
+            "default AudioFeatures (pre-warmup) must have musical_section = None");
     }
 
     // ── TIMING: timestamp_ms must monotonically increase in a stream ───────

@@ -257,6 +257,38 @@ impl MockCaptureSource {
         }
         results
     }
+
+    /// Run the full pipeline loop (ring → Analyzer → `tokio::sync::watch`) synchronously
+    /// and return the last `AudioFeatures` that was sent on the channel.
+    ///
+    /// This lets tests exercise the complete capture→DSP→watch path without real hardware.
+    /// Returns `None` if no hops could be produced from the mock samples.
+    pub fn run_pipeline_sync(&self) -> Option<crate::contracts::AudioFeatures> {
+        use crate::{Analyzer, contracts::HOP_SIZE, ring_buffer::RingBuffer};
+        let raw = self.samples.len() + HOP_SIZE * 4;
+        let cap = raw.next_power_of_two();
+        let ring = Arc::new(RingBuffer::new(cap));
+        push_downmixed_f32(&ring, &self.samples, self.channels);
+
+        let (tx, mut rx) = tokio::sync::watch::channel(crate::contracts::AudioFeatures::default());
+        let mut analyzer = Analyzer::new(self.sample_rate);
+        let mut hop_buf  = [0.0f32; HOP_SIZE];
+        let mut ts       = 0u64;
+        let hop_ms       = (HOP_SIZE as u64 * 1_000) / self.sample_rate as u64;
+        let mut count    = 0usize;
+
+        while ring.pop_exact(&mut hop_buf) {
+            let features = analyzer.process_hop(&hop_buf, ts);
+            let _ = tx.send(features);
+            ts += hop_ms;
+            count += 1;
+        }
+
+        if count == 0 { return None; }
+        // Clone the latest value out of the watch channel before dropping `rx`.
+        let latest = rx.borrow_and_update().clone();
+        Some(latest)
+    }
 }
 
 #[cfg(test)]
@@ -590,5 +622,82 @@ mod mock_adversarial_tests {
         let elapsed = t0.elapsed();
         assert!(elapsed.as_secs_f64() < 5.0,
             "1s audio took {:.3}s — catastrophic regression (budget 5.0s debug)", elapsed.as_secs_f64());
+    }
+
+    // ── run_pipeline_sync: full capture→DSP→watch loop ────────────────────
+
+    #[test]
+    fn pipeline_sync_returns_some_on_valid_samples() {
+        let samples = vec![0.1f32; 44_100]; // 1s at 44100Hz
+        let result = MockCaptureSource::new(44_100, samples).run_pipeline_sync();
+        assert!(result.is_some(), "must produce at least one AudioFeatures");
+    }
+
+    #[test]
+    fn pipeline_sync_returns_none_on_empty_samples() {
+        let result = MockCaptureSource::new(44_100, vec![]).run_pipeline_sync();
+        assert!(result.is_none(), "empty samples → no hops → None");
+    }
+
+    #[test]
+    fn pipeline_sync_sample_rate_travels_to_watch() {
+        let sr = 48_000u32;
+        let samples = vec![0.0f32; sr as usize];
+        let last = MockCaptureSource::new(sr, samples).run_pipeline_sync().unwrap();
+        assert_eq!(last.sample_rate, sr, "sample_rate must travel through watch channel");
+    }
+
+    #[test]
+    fn pipeline_sync_timestamp_monotone_via_analyze_all() {
+        // analyze_all is the underlying DSP path; verify timestamps are monotone
+        let samples = vec![0.0f32; 44_100];
+        let results = MockCaptureSource::new(44_100, samples).analyze_all();
+        assert!(results.len() > 1, "must produce multiple hops");
+        for w in results.windows(2) {
+            assert!(w[1].timestamp_ms >= w[0].timestamp_ms,
+                "timestamps must be monotone: {} → {}", w[0].timestamp_ms, w[1].timestamp_ms);
+        }
+    }
+
+    #[test]
+    fn pipeline_sync_beat_detected_on_impulse_sequence() {
+        // Periodic impulses should trigger beat detection
+        let sr = 44_100u32;
+        let beat_period = sr / 2; // 120 BPM
+        let n = sr as usize * 4;  // 4 seconds
+        let mut samples = vec![0.0f32; n];
+        for i in (0..n).step_by(beat_period as usize) {
+            // Impulse burst over one hop
+            let end = (i + 256).min(n);
+            for s in samples[i..end].iter_mut() { *s = 0.9; }
+        }
+        let results = MockCaptureSource::new(sr, samples).analyze_all();
+        let beat_count = results.iter().filter(|f| f.beat).count();
+        // After SectionDetector warm-up and beat detector, should fire multiple times
+        assert!(beat_count >= 1,
+            "impulse sequence must trigger at least 1 beat detection, got {beat_count}");
+    }
+
+    #[test]
+    fn pipeline_sync_musical_section_some_after_warmup() {
+        // After WARMUP_HOPS=100 hops, musical_section should be Some(...)
+        // 100 hops × 256 samples / 44100 Hz ≈ 580ms minimum audio
+        let sr = 44_100u32;
+        let n = sr as usize * 3; // 3 seconds — well past warmup
+        let samples = vec![0.2f32; n]; // constant moderate energy
+        let results = MockCaptureSource::new(sr, samples).analyze_all();
+
+        // Find first Some(musical_section)
+        let first_some = results.iter().position(|f| f.musical_section.is_some());
+        assert!(
+            first_some.is_some(),
+            "musical_section must become Some after warm-up; got None in all {} hops", results.len()
+        );
+        // All subsequent should also be Some (once warm, stays warm)
+        let idx = first_some.unwrap();
+        for f in &results[idx..] {
+            assert!(f.musical_section.is_some(),
+                "musical_section must not revert to None after warm-up");
+        }
     }
 }

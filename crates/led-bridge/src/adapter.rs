@@ -14,6 +14,7 @@
 //! | `spectrum[0..SPECTRUM_LEN]`| `spectrum` (Vec)      | copy fixed array → Vec slice |
 //! | `peak`, `onset`, `bpm`     | *(dropped)*           | v0 has no field for these    |
 //! | `harmonic_ratio`           | *(available via fn)*  | use `harmonic_ratio(v1)`     |
+//! | `musical_section`          | `musical_section`     | mapped via `map_section()`   |
 //!
 //! ## harmonic_ratio availability
 //!
@@ -31,8 +32,41 @@
 //! For the bridge thread this is fine: the `AudioShare::publish` call copies out of the
 //! Vec immediately, so no heap pressure accumulates.
 
-use audio_core::contracts::AudioFeatures as V1;
-use led_core::AudioFeatures as V0;
+use audio_core::contracts::{AudioFeatures as V1, MusicalSection as V1Section};
+use audio_core::instrument::InstrumentClass as V1Inst;
+use led_core::{AudioFeatures as V0, InstrumentClass as V0Inst, MusicalSection as V0Section};
+
+/// Map `audio_core::InstrumentClass` (v1) to `led_core::InstrumentClass` (v0).
+#[inline]
+pub fn map_instrument(c: V1Inst) -> V0Inst {
+    match c {
+        V1Inst::Kick    => V0Inst::Kick,
+        V1Inst::Snare   => V0Inst::Snare,
+        V1Inst::HiHat   => V0Inst::HiHat,
+        V1Inst::Bass    => V0Inst::Bass,
+        V1Inst::Melody  => V0Inst::Melody,
+        V1Inst::Chord   => V0Inst::Chord,
+        V1Inst::Noise   => V0Inst::Noise,
+        V1Inst::Silence => V0Inst::Silence,
+        V1Inst::Unknown => V0Inst::Unknown,
+    }
+}
+
+/// Map `audio_core::MusicalSection` (v1) to `led_core::MusicalSection` (v0).
+/// Both enums are structurally identical — this is a zero-cost name-space bridge.
+#[inline]
+pub fn map_section(s: V1Section) -> V0Section {
+    match s {
+        V1Section::Intro   => V0Section::Intro,
+        V1Section::Verse   => V0Section::Verse,
+        V1Section::Chorus  => V0Section::Chorus,
+        V1Section::Bridge  => V0Section::Bridge,
+        V1Section::Drop    => V0Section::Drop,
+        V1Section::Build   => V0Section::Build,
+        V1Section::Outro   => V0Section::Outro,
+        V1Section::Unknown => V0Section::Unknown,
+    }
+}
 
 /// Convert `audio_core::AudioFeatures` (v1, `Copy`) to `led_core::AudioFeatures` (v0).
 ///
@@ -41,14 +75,16 @@ use led_core::AudioFeatures as V0;
 #[inline]
 pub fn adapt(v1: &V1) -> V0 {
     V0 {
-        sample_rate:  v1.sample_rate,
-        timestamp_ms: v1.timestamp_ms,
-        rms:          v1.rms,
-        beat:         v1.beat,
-        bass:         v1.bass_energy,
-        mid:          v1.mid_energy,
-        high:         v1.high_energy,
-        spectrum:     v1.spectrum.to_vec(),
+        sample_rate:     v1.sample_rate,
+        timestamp_ms:    v1.timestamp_ms,
+        rms:             v1.rms,
+        beat:            v1.beat,
+        bass:            v1.bass_energy,
+        mid:             v1.mid_energy,
+        high:            v1.high_energy,
+        spectrum:        v1.spectrum.to_vec(),
+        musical_section:  v1.musical_section.map(map_section),
+        instrument_class: v1.instrument_class.map(map_instrument),
     }
 }
 
@@ -85,6 +121,8 @@ pub fn adapt_into(v1: &V1, out: &mut V0) {
         out.spectrum.resize(v1.spectrum.len(), 0.0); // only on first call or rate change
     }
     out.spectrum.copy_from_slice(&v1.spectrum);
+    out.musical_section  = v1.musical_section.map(map_section);
+    out.instrument_class = v1.instrument_class.map(map_instrument);
 }
 
 #[cfg(test)]
@@ -149,6 +187,7 @@ mod tests {
             sample_rate: 0, timestamp_ms: 0, rms: 0.0,
             beat: false, bass: 0.0, mid: 0.0, high: 0.0,
             spectrum: vec![0.0; SPECTRUM_LEN], // pre-sized
+            musical_section: None, instrument_class: None,
         };
         // Warm-up
         adapt_into(&v1, &mut v0);
@@ -197,5 +236,63 @@ mod tests {
         let v1 = make_v1(false, 99, 0.0);
         let v0 = adapt(&v1);
         assert!(!v0.beat, "beat=false must survive adaptation");
+    }
+
+    // ── CONTRACT: musical_section None maps to None ───────────────────────
+    #[test]
+    fn adapt_musical_section_none_maps_none() {
+        let v1 = make_v1(false, 0, 0.0); // musical_section = None (default)
+        let v0 = adapt(&v1);
+        assert!(v0.musical_section.is_none(), "None musical_section must survive adaptation");
+    }
+
+    // ── CONTRACT: musical_section Some(...) maps to correct v0 variant ────
+    #[test]
+    fn adapt_musical_section_some_maps_correctly() {
+        use audio_core::contracts::MusicalSection as V1Sec;
+        use led_core::MusicalSection as V0Sec;
+
+        let cases = [
+            (V1Sec::Intro,   V0Sec::Intro),
+            (V1Sec::Verse,   V0Sec::Verse),
+            (V1Sec::Chorus,  V0Sec::Chorus),
+            (V1Sec::Bridge,  V0Sec::Bridge),
+            (V1Sec::Drop,    V0Sec::Drop),
+            (V1Sec::Build,   V0Sec::Build),
+            (V1Sec::Outro,   V0Sec::Outro),
+            (V1Sec::Unknown, V0Sec::Unknown),
+        ];
+        for (v1_sec, expected_v0) in cases {
+            let mut v1 = make_v1(false, 0, 0.0);
+            v1.musical_section = Some(v1_sec);
+            let v0 = adapt(&v1);
+            assert_eq!(
+                v0.musical_section,
+                Some(expected_v0),
+                "v1 {:?} must map to v0 {:?}", v1_sec, expected_v0
+            );
+        }
+    }
+
+    // ── CONTRACT: adapt_into also maps musical_section ────────────────────
+    #[test]
+    fn adapt_into_maps_musical_section() {
+        use audio_core::contracts::MusicalSection as V1Sec;
+        use led_core::MusicalSection as V0Sec;
+
+        let mut v1 = make_v1(false, 0, 0.0);
+        v1.musical_section = Some(V1Sec::Chorus);
+        let mut v0 = V0 {
+            spectrum: vec![0.0; SPECTRUM_LEN],
+            musical_section: None, instrument_class: None,
+            ..V0::default()
+        };
+        adapt_into(&v1, &mut v0);
+        assert_eq!(v0.musical_section, Some(V0Sec::Chorus));
+
+        // After clearing, None maps through
+        v1.musical_section = None;
+        adapt_into(&v1, &mut v0);
+        assert!(v0.musical_section.is_none());
     }
 }

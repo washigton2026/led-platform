@@ -1,0 +1,15 @@
+[package]
+name = "led-xlights"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "xLights project importer: xlights_networks.xml + xlights_rgbeffects.xml → LUMYX layout, with a channel-conflict gate."
+publish = false
+
+# std-only by design: xLights files are machine-generated XML; a minimal pull
+# parser (elements + attributes + the 5 standard entities) is all we need, and
+# it keeps this crate inside the workspace's no-external-deps convention.
+[dependencies]
+led-core = { path = "../led-core" }
+# Bidirectional bridge: rig plans (led-layout) export to xLights format.
+led-layout = { path = "../led-layout" }

@@ -93,6 +93,7 @@ impl SimLoop {
             rms: 0.0, beat: false,
             bass: 0.0, mid: 0.0, high: 0.0,
             spectrum: Vec::new(),
+            musical_section: None, instrument_class: None,
         };
 
         // ── AudioShare bridge ─────────────────────────────────────────────
@@ -400,6 +401,7 @@ impl SimLoop {
         let mut v0 = led_core::AudioFeatures {
             sample_rate: 0, timestamp_ms: 0, rms: 0.0, beat: false,
             bass: 0.0, mid: 0.0, high: 0.0, spectrum: Vec::new(),
+            musical_section: None, instrument_class: None,
         };
         let share = std::sync::Arc::new(led_pixel_engine::AudioShare::new());
         let positions: Vec<led_pixel_engine::Vec3> = (0..cfg.pixel_count)

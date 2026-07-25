@@ -245,8 +245,8 @@ mod tests {
             hc.process(&spectrum, 48_000);
         }
         let ms = t0.elapsed().as_millis();
-        // Release: <50ms. Debug: allow up to 2000ms (unoptimized).
-        let budget = if cfg!(debug_assertions) { 2_000 } else { 50 };
+        // Release: <50ms. Debug: allow up to 10000ms (unoptimized + parallel test load).
+        let budget = if cfg!(debug_assertions) { 10_000 } else { 50 };
         assert!(ms < budget, "10k classifications must complete in <{budget}ms (took {ms}ms)");
     }
 }

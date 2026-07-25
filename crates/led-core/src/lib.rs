@@ -10,13 +10,22 @@
 //!   produces one; the HAL consumes it. This crate owns only the *compiled artifact*, not
 //!   the high-level layout model.
 
+pub mod contract_version;
 pub mod mapping;
+pub mod provenance;
 pub mod traits;
 pub mod types;
 
 pub use mapping::{CompiledLayout, DeviceSpec, UNIVERSE_SIZE};
+pub use contract_version::{
+    certified_contracts, ContractRecord, ContractStability,
+    LED_CORE_CONTRACT_VERSION, HAL_CONTRACT_VERSION,
+    LOGICAL_FRAME_VERSION, AUDIO_FEATURES_V0_VERSION,
+    PROVENANCE_VERSION, MUSICAL_SECTION_VERSION,
+};
+pub use provenance::{compute_pixel_hash, FrameSource, Provenance};
 pub use traits::{DeviceConfig, DeviceDriver, IDevice, ProtocolOutput};
 pub use types::{
-    AudioFeatures, DeviceId, DeviceStatus, LogicalFrame, OutputError, PixelColor, PixelPhysical,
-    RgbOrder, UniverseData,
+    AudioFeatures, ColorFormat, DeviceId, DeviceStatus, InstrumentClass, LogicalFrame,
+    MusicalSection, OutputError, PixelColor, PixelPhysical, RgbOrder, UniverseData, WhiteMode,
 };

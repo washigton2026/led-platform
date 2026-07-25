@@ -33,15 +33,19 @@ use crate::color;
 use crate::effect::{Effect, Vec3};
 
 /// The scalar audio fields — cheap to copy, safe to read every frame.
+/// `musical_section` is included so reactive effects and `SectionClip` can
+/// branch on it without an additional lock or shared state.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AudioScalars {
-    pub sample_rate: u32,
-    pub timestamp_ms: u64,
-    pub rms: f32,
-    pub beat: bool,
-    pub bass: f32,
-    pub mid: f32,
-    pub high: f32,
+    pub sample_rate:     u32,
+    pub timestamp_ms:    u64,
+    pub rms:             f32,
+    pub beat:            bool,
+    pub bass:            f32,
+    pub mid:             f32,
+    pub high:            f32,
+    /// Current musical section label, or `None` before the warm-up window completes.
+    pub musical_section: Option<led_core::MusicalSection>,
 }
 
 /// Shared latest audio analysis. One writer (audio thread) via [`publish`](Self::publish),
@@ -76,13 +80,14 @@ impl AudioShare {
     /// Spectrum update uses a separate RwLock (off render hot-path).
     pub fn publish(&self, f: &AudioFeatures) {
         self.scalars.store(Arc::new(AudioScalars {
-            sample_rate:  f.sample_rate,
-            timestamp_ms: f.timestamp_ms,
-            rms:          f.rms,
-            beat:         f.beat,
-            bass:         f.bass,
-            mid:          f.mid,
-            high:         f.high,
+            sample_rate:     f.sample_rate,
+            timestamp_ms:    f.timestamp_ms,
+            rms:             f.rms,
+            beat:            f.beat,
+            bass:            f.bass,
+            mid:             f.mid,
+            high:            f.high,
+            musical_section: f.musical_section,
         }));
         let mut g = self.spectrum.write().unwrap();
         if g.len() != f.spectrum.len() {
@@ -199,6 +204,7 @@ mod tests {
             mid: 0.0,
             high: 0.0,
             spectrum: vec![0.0; 8],
+            musical_section: None, instrument_class: None,
         }
     }
 
@@ -261,6 +267,7 @@ mod adversarial_tests {
             mid: 0.3,
             high: 0.1,
             spectrum: vec![0.0; 8],
+            musical_section: None, instrument_class: None,
         }
     }
 
@@ -271,32 +278,60 @@ mod adversarial_tests {
     }
 
     // ── CONCURRENCY: AudioShare — 8 writers, 8 readers simultaneously ─────
+    // Full test: 8 threads × 1000 iterations each. Validated in normal test runs.
+    // Miri version (below): 2 threads × 32 iterations — stays within Miri resource budget.
     #[test]
     fn audioshare_concurrent_publish_read_no_deadlock() {
         use std::thread;
+        // Under Miri, reduce workload to avoid OOM/timeout (resource limit invariant).
+        let (threads, iters) = if cfg!(miri) { (2usize, 32usize) } else { (8, 1_000) };
+
         let share = Arc::new(AudioShare::new());
         let mut handles = Vec::new();
 
-        for i in 0..8 {
+        for i in 0..threads {
             let s = share.clone();
             handles.push(thread::spawn(move || {
-                for j in 0..1_000u64 {
-                    s.publish(&af(j % 3 == 0, i * 1000 + j, j as f32 * 0.001, 0.5));
+                for j in 0..iters as u64 {
+                    s.publish(&af(j % 3 == 0, i as u64 * 1000 + j, j as f32 * 0.001, 0.5));
                 }
             }));
         }
-        for i in 0..8 {
+        for i in 0..threads {
             let s = share.clone();
             handles.push(thread::spawn(move || {
-                for _ in 0..1_000 {
+                for _ in 0..iters {
                     let sc = s.scalars();
                     assert!(sc.rms >= 0.0, "rms must be non-negative");
                     s.with_spectrum(|spec| assert!(spec.len() == 8 || spec.is_empty()));
-                    let _ = i; // prevent optimization
+                    let _ = i;
                 }
             }));
         }
         for h in handles { h.join().unwrap(); }
+    }
+
+    // Miri-specific: explicit 2-thread × 32-iteration test (validates concurrency safety
+    // within Miri's resource limits). Full 8×1000 test runs in normal cargo test.
+    #[test]
+    fn audioshare_miri_2thread_concurrent_no_ub() {
+        use std::thread;
+        let share = Arc::new(AudioShare::new());
+        let s1 = share.clone();
+        let s2 = share.clone();
+        let w = thread::spawn(move || {
+            for j in 0..32u64 {
+                s1.publish(&af(j % 2 == 0, j, j as f32 * 0.01, 0.5));
+            }
+        });
+        let r = thread::spawn(move || {
+            for _ in 0..32 {
+                let sc = s2.scalars();
+                assert!(sc.rms >= 0.0);
+            }
+        });
+        w.join().unwrap();
+        r.join().unwrap();
     }
 
     // ── INVARIANT: AudioShare never hands out stale sample_rate=0 after publish ──
@@ -334,6 +369,7 @@ mod adversarial_tests {
             rms: 0.0, beat: false,
             bass: 0.0, mid: 0.0, high: 0.0,
             spectrum: vec![], // empty
+            musical_section: None, instrument_class: None,
         };
         share.publish(&f);
         share.with_spectrum(|s| assert_eq!(s.len(), 0));
@@ -350,6 +386,7 @@ mod adversarial_tests {
             rms: f32::NAN, beat: false,
             bass: f32::INFINITY, mid: f32::NEG_INFINITY, high: f32::NAN,
             spectrum: vec![f32::NAN; 8],
+            musical_section: None, instrument_class: None,
         };
         share.publish(&f);
         let sc = share.scalars();

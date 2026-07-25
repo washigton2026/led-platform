@@ -1,0 +1,26 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Cross-crate integration tests for the LUMYX platform."
+publish = false
+
+[dependencies]
+led-core  = { path = "../crates/led-core" }
+led-hal   = { path = "../crates/led-hal" }
+led-protocols = { path = "../crates/led-protocols" }
+led-pixel-engine = { path = "../crates/led-pixel-engine" }
+led-sequencer = { path = "../crates/led-sequencer" }
+
+[[test]]
+name = "two_node_cluster"
+path = "tests/two_node_cluster.rs"
+
+[[test]]
+name = "udp_chaos"
+path = "tests/udp_chaos.rs"
+
+[[test]]
+name = "determinism_vector"
+path = "tests/determinism_vector.rs"

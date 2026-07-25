@@ -16,6 +16,7 @@ fn dummy_features() -> AudioFeatures {
         mid: 0.3,
         high: 0.1,
         spectrum: vec![0.0; 16],
+        musical_section: None, instrument_class: None,
     }
 }
 

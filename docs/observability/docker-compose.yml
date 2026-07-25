@@ -1,0 +1,27 @@
+# LUMYX observability stack — Prometheus + Grafana, dashboard pre-provisioned.
+#
+#   cd docs/observability && docker compose up -d
+#   Grafana: http://localhost:3000 (admin/lumyx) → dashboard "LUMYX — Show Operations"
+#
+# The LUMYX process must expose /metrics via led_hal::serve_metrics on :9464
+# (host.docker.internal below assumes the show runs on the host machine).
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: lumyx
+    volumes:
+      - ./grafana-provisioning/datasources.yml:/etc/grafana/provisioning/datasources/lumyx.yml:ro
+      - ./grafana-provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/lumyx.yml:ro
+      - ./grafana-lumyx.json:/var/lib/grafana/dashboards/grafana-lumyx.json:ro
+    restart: unless-stopped

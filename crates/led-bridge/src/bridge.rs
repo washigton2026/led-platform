@@ -49,6 +49,7 @@ impl BridgeHandle {
                     rms: 0.0, beat: false,
                     bass: 0.0, mid: 0.0, high: 0.0,
                     spectrum: Vec::new(),
+                    musical_section: None, instrument_class: None,
                 };
                 // Spin a minimal single-threaded tokio runtime for the async watch loop.
                 let rt = tokio::runtime::Builder::new_current_thread()
