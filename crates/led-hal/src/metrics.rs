@@ -151,8 +151,8 @@ impl MetricsEmitter {
         let hb_gap_ms  = self.last_hb_gap_us.load(Ordering::Relaxed) / 1_000;
         let p50_us     = self.histogram.percentile(50.0);
         let p99_us     = self.histogram.percentile(99.0);
-        let fps        = if elapsed_ms > 0 { frames * 1_000 / elapsed_ms } else { 0 };
-        let beat_density = if hops > 0 { beats * 100 / hops } else { 0 }; // percent
+        let fps        = (frames * 1_000).checked_div(elapsed_ms).unwrap_or(0);
+        let beat_density = (beats * 100).checked_div(hops).unwrap_or(0); // percent
 
         format!(
             r#"{{"component":"{name}","elapsed_ms":{elapsed_ms},"frames":{frames},"drops":{drops},"fps":{fps},"p50_us":{p50_us},"p99_us":{p99_us},"beat_density_pct":{beat_density},"hops":{hops},"hb_gap_ms":{hb_gap_ms}}}"#,
@@ -224,7 +224,7 @@ mod tests {
         for _ in 0..100 { m.record_frame(1_000); }
         let p50 = m.p50_us();
         // 1000µs is in bucket log2(1000) = 9 → range [512, 1024)µs
-        assert!(p50 >= 512 && p50 <= 1024, "p50 must be near 1000µs: got {p50}µs");
+        assert!((512..=1024).contains(&p50), "p50 must be near 1000µs: got {p50}µs");
     }
 
     #[test]

@@ -80,7 +80,7 @@ impl ShowIntent {
         if !(0.0..=1.0).contains(&energy) {
             return Err(ShowIntentError::EnergyOutOfRange(energy));
         }
-        if tempo_bpm < 20.0 || tempo_bpm > 300.0 {
+        if !(20.0..=300.0).contains(&tempo_bpm) {
             return Err(ShowIntentError::InvalidTempo(tempo_bpm));
         }
         if duration_ms == 0 {

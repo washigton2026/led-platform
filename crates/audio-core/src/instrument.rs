@@ -195,7 +195,7 @@ mod tests {
 
     fn impulse_samples(n: usize) -> Vec<f32> {
         let mut s = vec![0.0f32; n];
-        for i in 0..n.min(32) { s[i] = 0.9; }
+        for slot in s.iter_mut().take(n.min(32)) { *slot = 0.9; }
         s
     }
 

@@ -43,12 +43,12 @@ pub fn export_rgbeffects(models: &[XModel], groups: &[XGroup]) -> String {
     xml.push_str("<xrgb SourceVersion=\"LUMYX\">\n");
     xml.push_str("  <models>\n");
     for m in models {
-        let _ = write!(
+        let _ = writeln!(
             xml,
             "    <model name=\"{name}\" DisplayAs=\"{display}\" Controller=\"{ctrl}\" \
              StringType=\"{st}\" NumStrings=\"1\" NodesPerString=\"{px}\" LightsPerNode=\"1\" \
              StartChannel=\"{sc}\" WorldPosX=\"{wx}\" WorldPosY=\"{wy}\" WorldPosZ=\"{wz}\" \
-             X2=\"{x2}\" Y2=\"{y2}\" Z2=\"{z2}\" />\n",
+             X2=\"{x2}\" Y2=\"{y2}\" Z2=\"{z2}\" />",
             name = escape(&m.name),
             display = escape(&m.display_as),
             ctrl = escape(&m.controller),
@@ -65,9 +65,9 @@ pub fn export_rgbeffects(models: &[XModel], groups: &[XGroup]) -> String {
     }
     xml.push_str("  </models>\n  <modelGroups>\n");
     for g in groups {
-        let _ = write!(
+        let _ = writeln!(
             xml,
-            "    <modelGroup name=\"{}\" models=\"{}\" />\n",
+            "    <modelGroup name=\"{}\" models=\"{}\" />",
             escape(&g.name),
             escape(&g.members.join(",")),
         );

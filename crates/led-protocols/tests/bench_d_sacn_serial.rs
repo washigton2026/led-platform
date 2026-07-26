@@ -1,6 +1,6 @@
-/// Bench D: led-protocols sACN packet serialization at scale.
-/// Measures build_data_packet() throughput for N universes (equiv to pixel counts).
-/// 10k px = 59 universes, 50k px = 295 universes, 100k px = 589 universes.
+//! Bench D: led-protocols sACN packet serialization at scale.
+//! Measures build_data_packet() throughput for N universes (equiv to pixel counts).
+//! 10k px = 59 universes, 50k px = 295 universes, 100k px = 589 universes.
 
 use std::time::Instant;
 use led_protocols::packet::{self, PACKET_LEN};

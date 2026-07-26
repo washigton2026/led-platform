@@ -1,6 +1,6 @@
-/// Bench A: audio-core FFT + feature extraction throughput.
-/// Measures hop latency (the real hot-path) and analyze_all throughput
-/// at 1s, 5s, 10s of audio. Pixel-count independent.
+//! Bench A: audio-core FFT + feature extraction throughput.
+//! Measures hop latency (the real hot-path) and analyze_all throughput
+//! at 1s, 5s, 10s of audio. Pixel-count independent.
 
 use audio_core::{Analyzer, MockCaptureSource};
 use audio_core::contracts::HOP_SIZE;

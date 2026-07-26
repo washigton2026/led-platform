@@ -975,8 +975,8 @@ mod tests {
         let layout = led_core::CompiledLayout::compile(&assigns);
         // 2 devices, 15 pixels total — layout must be constructible and coherent
         assert_eq!(assigns.len(), 15);
-        assert!(layout.device_universes(0).len() >= 1);
-        assert!(layout.device_universes(1).len() >= 1);
+        assert!(!layout.device_universes(0).is_empty());
+        assert!(!layout.device_universes(1).is_empty());
     }
 
     #[test]

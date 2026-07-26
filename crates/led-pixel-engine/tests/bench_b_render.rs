@@ -1,5 +1,5 @@
-/// Bench B: led-pixel-engine render O(pixels) per frame.
-/// Measures SolidColor and BandPulse render at 10k, 50k, 100k pixels.
+//! Bench B: led-pixel-engine render O(pixels) per frame.
+//! Measures SolidColor and BandPulse render at 10k, 50k, 100k pixels.
 
 use std::sync::Arc;
 use std::time::Instant;

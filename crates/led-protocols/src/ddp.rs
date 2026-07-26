@@ -342,7 +342,8 @@ mod tests {
     fn ddp_max_pixels_constant() {
         // Each DDP_MAX_PIXELS pixels = DDP_MAX_PIXELS * 3 bytes = DDP_MAX_PAYLOAD
         assert_eq!(DDP_MAX_PIXELS * 3, DDP_MAX_PAYLOAD);
-        assert!(DDP_MAX_PAYLOAD <= 1462, "payload must fit within 1472-10 byte UDP limit");
+        // compile-time invariant: payload must fit within the 1472-10 byte UDP limit
+        const _: () = assert!(DDP_MAX_PAYLOAD <= 1462);
     }
 
     #[test]
@@ -435,8 +436,8 @@ mod tests {
 
     #[test]
     fn ddp_parse_exact_header_no_payload() {
-        let mut buf = [0x41u8, 0, 0, 1, 0, 0, 0, 0, 0, 0]; // length=0
-        let parsed = parse_ddp_packet(&mut buf).expect("zero-length payload is valid");
+        let buf = [0x41u8, 0, 0, 1, 0, 0, 0, 0, 0, 0]; // length=0
+        let parsed = parse_ddp_packet(&buf).expect("zero-length payload is valid");
         assert_eq!(parsed.payload.len(), 0);
     }
 

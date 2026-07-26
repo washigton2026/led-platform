@@ -127,6 +127,18 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-07-26 — Evolução pós-FASE 1: gate de clippy verde + M4 (router status real)
+
+**Done.**
+1. **Gate de clippy destravado** (Gate 2 do GOSL): `cargo clippy --workspace --all-targets -- -D warnings` → **exit 0**. Corrigido 1 erro deny (`led-protocols/src/artnet.rs` `*seq >= 255` → `== 255`, `absurd_extreme_comparisons` — lógica idêntica, wrap 1..=255 skip-0) + ~13 warnings de estilo em 15 arquivos (`checked_div`, `needless_range_loop`, `type` alias p/ `type_complexity`, const-assert, doc-comments `//!`, `unused_mut`, `redundant_pattern_matching`). Era **drift de toolchain** (rust-1.96.0): o "clippy=0" anterior foi registrado com um clippy mais antigo.
+2. **M4** (`led-protocols/src/router.rs`): `RouterDevice::status()` reportava `frames_sent:0` hardcoded. Agora conta via `AtomicU64` incrementado em `send_physical` (+ teste `router_status_reports_real_frames_sent`).
+
+**Invariants verified.** Sem mudança de comportamento: crates afetados **416/0**, led-protocols **75/0** (incl. teste M4). Gate de clippy **exit 0**. Seams Frozen intactos (só estilo + um `AtomicU64` de observabilidade no Router, fora do hot-path de serialização).
+
+**Pending.** M5 (PixelLogical não-seam) — decisão de contrato, adiada p/ ADR próprio. Demais achados da FASE 1: M1 (Mutex hot-path HAL), M2 (skill-Constituição sem HAL), M6 (compile O(n²)), L1 (deprecar `verify_manifest`).
+
+**Decisions.** Clippy tratado como cleanup mecânico, zero impacto de runtime — o erro deny era benigno (`>=255` num `u8` é sempre `==255`). M4 usa `AtomicU64`/`Relaxed` (status é lido off-path).
+
 ### 2026-07-25 — Revisão Constitucional HardwareProfile: C2 (alloc DDP) + H4 (fantasmas GOSL) + C1/RGBW (`ColorFormat`, ADR-0011)
 
 **Done.**

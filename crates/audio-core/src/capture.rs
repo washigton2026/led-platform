@@ -286,7 +286,7 @@ impl MockCaptureSource {
 
         if count == 0 { return None; }
         // Clone the latest value out of the watch channel before dropping `rx`.
-        let latest = rx.borrow_and_update().clone();
+        let latest = *rx.borrow_and_update();
         Some(latest)
     }
 }

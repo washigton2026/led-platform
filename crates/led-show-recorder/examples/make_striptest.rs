@@ -45,8 +45,9 @@ fn main() -> std::io::Result<()> {
     for k in 0..steps {
         let mut px = vec![PixelColor::rgb(0, 0, 0); n];
         let start = k * S;
-        for p in start..(start + W).min(n) {
-            px[p] = PixelColor::rgb(V, V, V);
+        let end = (start + W).min(n);
+        for slot in &mut px[start..end] {
+            *slot = PixelColor::rgb(V, V, V);
         }
         frame(&mut w, base + k as u64 * DT, px)?;
     }

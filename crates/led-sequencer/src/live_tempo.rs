@@ -100,7 +100,7 @@ impl LiveTempoMap {
         if let Some(prev) = self.last_beat_ms {
             if timestamp_ms > prev {
                 let interval = timestamp_ms - prev;
-                if interval >= MIN_INTERVAL_MS && interval <= MAX_INTERVAL_MS {
+                if (MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&interval) {
                     self.intervals[self.interval_idx] = interval;
                     self.interval_idx = (self.interval_idx + 1) % BPM_WINDOW;
                     if self.interval_len < BPM_WINDOW { self.interval_len += 1; }
@@ -380,14 +380,14 @@ mod tests {
         // Simulate 1200 hops = 30 seconds
         for hop in 0u64..1200 {
             let t = hop * hop_ms;
-            let beat = t % beat_period_ms == 0 && t > 0;
+            let beat = t.is_multiple_of(beat_period_ms) && t > 0;
             lm.push(t, beat);
         }
 
         // Should have accumulated ~59 beats (1 per 500ms over 30s, excluding t=0)
         let beat_count = lm.beat_count();
         assert!(
-            beat_count >= 55 && beat_count <= 62,
+            (55..=62).contains(&beat_count),
             "expected ~59 beats in 30s at 120BPM, got {beat_count}"
         );
 

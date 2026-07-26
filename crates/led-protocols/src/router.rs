@@ -178,6 +178,8 @@ pub struct RouterDevice {
     routes:   Vec<RouteEntry>,
     /// Default backend for universes not in the routing table.
     default:  Option<Box<dyn ProtocolBackend>>,
+    /// Real frame counter, surfaced in [`status`](DeviceDriver::status) (was hardcoded 0 — M4).
+    frames_sent: std::sync::atomic::AtomicU64,
 }
 
 impl RouterDevice {
@@ -192,7 +194,7 @@ impl RouterDevice {
         default: Option<Box<dyn ProtocolBackend>>,
     ) -> Self {
         routes.sort_by_key(|r| r.universe_idx);
-        Self { id, routes, default }
+        Self { id, routes, default, frames_sent: std::sync::atomic::AtomicU64::new(0) }
     }
 
     fn find_backend(&self, universe_idx: usize) -> Option<&dyn ProtocolBackend> {
@@ -200,7 +202,7 @@ impl RouterDevice {
             .binary_search_by_key(&universe_idx, |r| r.universe_idx)
             .ok()
             .map(|i| self.routes[i].backend.as_ref())
-            .or_else(|| self.default.as_deref())
+            .or(self.default.as_deref())
     }
 }
 
@@ -215,10 +217,17 @@ impl DeviceDriver for RouterDevice {
             // Universes with no backend and no default are silently skipped —
             // this is intentional (not every universe needs sending).
         }
+        self.frames_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
-    fn status(&self) -> DeviceStatus { DeviceStatus { connected: true, frames_sent: 0, last_send_ms: 0 } }
+    fn status(&self) -> DeviceStatus {
+        DeviceStatus {
+            connected: true,
+            frames_sent: self.frames_sent.load(std::sync::atomic::Ordering::Relaxed),
+            last_send_ms: 0,
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -231,14 +240,17 @@ mod tests {
 
     // ── Spy backend for testing ───────────────────────────────────────────────
 
+    // Shared capture buffer for the spy: (protocol_name, data) per call.
+    type Calls = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
     #[derive(Default)]
     struct SpyBackend {
-        calls: Arc<Mutex<Vec<(String, Vec<u8>)>>>, // (protocol_name, data)
+        calls: Calls,
         name:  &'static str,
     }
 
     impl SpyBackend {
-        fn new(name: &'static str) -> (Self, Arc<Mutex<Vec<(String, Vec<u8>)>>>) {
+        fn new(name: &'static str) -> (Self, Calls) {
             let calls = Arc::new(Mutex::new(vec![]));
             (Self { calls: calls.clone(), name }, calls)
         }
@@ -391,6 +403,22 @@ mod tests {
         assert!(router.status().connected);
     }
 
+    #[test]
+    fn router_status_reports_real_frames_sent() {
+        // M4: status().frames_sent must reflect actual send_physical calls, not a hardcoded 0.
+        let (spy, _) = SpyBackend::new("u0");
+        let router = RouterDevice::new(
+            7,
+            vec![RouteEntry { universe_idx: 0, backend: Box::new(spy) }],
+            None,
+        );
+        assert_eq!(router.status().frames_sent, 0, "starts at 0");
+        for _ in 0..3 {
+            router.send_physical(&[universe(vec![1, 2, 3])]).unwrap();
+        }
+        assert_eq!(router.status().frames_sent, 3, "must count each frame");
+    }
+
     // ── UDP loopback: real sACN + DDP backends ────────────────────────────────
 
     #[test]
@@ -401,7 +429,7 @@ mod tests {
         let addr = recv.local_addr().unwrap();
 
         let backend = SacnBackend::new(addr, 1).unwrap();
-        let payload = vec![0xFFu8, 0x00, 0xAA].repeat(170);
+        let payload = [0xFFu8, 0x00, 0xAA].repeat(170);
         let u = UniverseData { universe: 1, data: payload[..510].to_vec() };
         backend.send_universe(&u).unwrap();
 

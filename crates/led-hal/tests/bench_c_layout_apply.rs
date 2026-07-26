@@ -12,7 +12,7 @@ fn bench_layout_apply_scale() {
     println!("{:<12} {:<12} {:<10} {:<10} {:<10} budget", "pixels", "universes", "avg_us", "p50_us", "p95_us");
 
     for &n in &scales {
-        let universes = ((n + 169) / 170) as u16;
+        let universes = n.div_ceil(170) as u16;
         let specs = vec![DeviceSpec { id: 1, universes }];
         let layout = CompiledLayout::linear(n, &specs, RgbOrder::Rgb);
         let sim = SimulatorDevice::new(1, layout.device_universes(1));

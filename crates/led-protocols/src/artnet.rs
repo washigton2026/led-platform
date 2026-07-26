@@ -291,7 +291,7 @@ pub fn parse_art_dmx(pkt: &[u8]) -> Option<(u16, u8, &[u8])> {
     }
     let universe = (pkt[14] as u16) | (((pkt[15] & 0x7F) as u16) << 8);
     let len = ((pkt[16] as usize) << 8) | pkt[17] as usize;
-    if len < 2 || len > ART_DMX_MAX_SLOTS || pkt.len() < ART_DMX_HEADER_LEN + len {
+    if !(2..=ART_DMX_MAX_SLOTS).contains(&len) || pkt.len() < ART_DMX_HEADER_LEN + len {
         return None;
     }
     Some((universe, pkt[12], &pkt[ART_DMX_HEADER_LEN..ART_DMX_HEADER_LEN + len]))
@@ -357,7 +357,7 @@ impl DeviceDriver for ArtNetDevice {
                 )));
             }
             let seq = st.seqs.entry(u.universe).or_insert(0);
-            *seq = if *seq >= 255 { 1 } else { *seq + 1 }; // wrap 1..=255, skip 0
+            *seq = if *seq == 255 { 1 } else { *seq + 1 }; // wrap 1..=255, skip 0
             let len = build_art_dmx(&mut st.buf, u.universe, *seq, 0, &u.data);
             self.socket
                 .send_to(&st.buf[..len], self.dest)

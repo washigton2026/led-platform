@@ -357,7 +357,7 @@ mod tests {
 
         // Phase 2: moderate energy + beats
         for _ in 0..300 {
-            if let Some(_) = det.update(0.3, true) {
+            if det.update(0.3, true).is_some() {
                 if !warmup_done { warmup_done = true; }
                 section_count += 1;
             }
@@ -365,12 +365,12 @@ mod tests {
 
         // Phase 3: high energy + beats
         for _ in 0..300 {
-            if let Some(_) = det.update(0.7, true) { section_count += 1; }
+            if det.update(0.7, true).is_some() { section_count += 1; }
         }
 
         // Phase 4: silence again (Outro)
         for _ in 0..300 {
-            if let Some(_) = det.update(0.0, false) { section_count += 1; }
+            if det.update(0.0, false).is_some() { section_count += 1; }
         }
 
         assert!(warmup_done, "detector must produce Some() after warm-up");
