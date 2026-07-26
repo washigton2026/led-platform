@@ -23,6 +23,11 @@ recuperada do changelog.
 | [0010](0010-cluster-failover.md) | Failover de cluster por saúde de segmento | aceito | 2026-06-28 |
 | [0011](0011-colorformat-rgbw-no-mapper.md) | `ColorFormat` no mapper: suporte RGBW/4-canais aditivo | aceito | 2026-07-25 |
 | [0012](0012-unificacao-saida-fanout-paralelo.md) | Unificação da saída: fan-out paralelo adiado; serialização já é fonte única | aceito (impl. adiada) | 2026-07-25 |
+| [0013](0013-engine-daemon-separado.md) | Engine headless em daemon separado; UI é cliente (output não compartilha processo de falha) | aceito (pré-impl.) | 2026-07-26 |
+| [0014](0014-ipc-seguranca-ui-engine.md) | IPC + segurança UI↔engine: UDS owner-only / token-mTLS por interface; nunca 0.0.0.0 | aceito (pré-impl.) | 2026-07-26 |
+| [0015](0015-preview-lossy-fora-hot-path.md) | Preview: cópia downsampled/rate-limited/lossy fora do hot-path; UI nunca lê o triple buffer | aceito (pré-impl.) | 2026-07-26 |
+| [0016](0016-stack-console-provisorio.md) | Stack do console (web DOM+WebGPU, Leptos preferido) — PROVISÓRIO, pendente spike | proposto (provisório) | 2026-07-26 |
+| [0017](0017-blackout-intencional-vs-heartbeat.md) | Blackout intencional × invariante do heartbeat — decisão adiada | proposto (adiado) | 2026-07-26 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma
