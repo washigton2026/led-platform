@@ -1,0 +1,61 @@
+# LUMYX CI — porta os gates locais (build + test + clippy) para GitHub Actions.
+#
+# Alvos: Linux (output ao vivo) e macOS (autoria/referência) são BLOQUEANTES.
+# Windows é suporte (`continue-on-error`) e NÃO orienta a arquitetura (ADR-0013).
+#
+# Notas de evidência:
+# - `gpu` é feature opt-in (hardware-gated); a CI roda SEM ela (default features).
+# - `audio-core` usa `cpal` → o runner Linux precisa de `libasound2-dev` (ALSA).
+# - Toolchain = `stable` (o repo não pina). Clippy pode acusar lints novos num bump de
+#   toolchain (drift já observado com rust-1.96.0) — isso é sinal real, não falso-vermelho.
+name: CI
+
+on:
+  push:
+    branches: [main, "baseline/**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Bloqueante: plataformas validadas de output/autoria ──────────────────────
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Deps de áudio no Linux (cpal → ALSA)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build (sem feature gpu — hardware-gated)
+        run: cargo build --workspace --all-targets --locked
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # ── Não-bloqueante: Windows é suportado, mas não conduz o design ─────────────
+  windows:
+    name: windows (allow-failure)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
