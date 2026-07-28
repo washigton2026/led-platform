@@ -40,16 +40,7 @@ jobs:
       - name: Build (sem feature gpu — hardware-gated)
         run: cargo build --workspace --all-targets --locked
       - name: Test
-        shell: bash
-        run: |
-          cargo test --workspace --locked --no-fail-fast 2>&1 | tee test-output.txt
-          code=${PIPESTATUS[0]}          # exit real do cargo, sem mascarar pelo pipe (KB-013)
-          if [ "$code" -ne 0 ]; then
-            # Emite cada teste FAILED/panicked como annotation (visível sem login).
-            grep -aE '\.\.\. FAILED$|panicked at|test result: FAILED' test-output.txt | head -20 | \
-              while IFS= read -r l; do printf '::error::%s\n' "$l"; done
-          fi
-          exit $code
+        run: cargo test --workspace --locked
       - name: Clippy (-D warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -66,14 +57,5 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
-      - name: Test (diagnostic)
-        shell: bash
-        run: |
-          cargo test --workspace --locked --no-fail-fast 2>&1 | tee test-output.txt
-          code=${PIPESTATUS[0]}
-          if [ "$code" -ne 0 ]; then
-            grep -aE '\.\.\. FAILED$|panicked at|test result: FAILED' test-output.txt | head -20 | \
-              while IFS= read -r l; do printf '::error::%s\n' "$l"; done
-          fi
-          exit $code
+      - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
