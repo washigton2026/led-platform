@@ -1,0 +1,10 @@
+[package]
+name = "led-readmodel"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Read-only snapshot the operator UI polls (ADR-0013/0014). No business logic, no commands, no hot-path."
+
+[dependencies]
+led-core = { path = "../led-core" }
+led-protocols = { path = "../led-protocols" }
