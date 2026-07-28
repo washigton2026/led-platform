@@ -45,12 +45,9 @@ jobs:
           cargo test --workspace --locked --no-fail-fast 2>&1 | tee test-output.txt
           code=${PIPESTATUS[0]}          # exit real do cargo, sem mascarar pelo pipe (KB-013)
           if [ "$code" -ne 0 ]; then
-            {
-              echo "### ❌ Test failures — ${{ matrix.os }}"
-              echo '```'
-              grep -aE 'FAILED|panicked|test result: FAILED' test-output.txt || echo "(sem linha correspondente)"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            # Emite cada teste FAILED/panicked como annotation (visível sem login).
+            grep -aE '\.\.\. FAILED$|panicked at|test result: FAILED' test-output.txt | head -20 | \
+              while IFS= read -r l; do printf '::error::%s\n' "$l"; done
           fi
           exit $code
       - name: Clippy (-D warnings)
@@ -75,12 +72,8 @@ jobs:
           cargo test --workspace --locked --no-fail-fast 2>&1 | tee test-output.txt
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            {
-              echo "### ❌ Test failures — windows-latest"
-              echo '```'
-              grep -aE 'FAILED|panicked|test result: FAILED' test-output.txt || echo "(sem linha correspondente)"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            grep -aE '\.\.\. FAILED$|panicked at|test result: FAILED' test-output.txt | head -20 | \
+              while IFS= read -r l; do printf '::error::%s\n' "$l"; done
           fi
           exit $code
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
