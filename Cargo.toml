@@ -17,6 +17,9 @@ members = [
     "crates/led-readmodel",
     "integration-tests",
 ]
+# Throwaway UI-stack spike (ADR-0016). Excluded so its Leptos Cargo.toml never joins the
+# workspace or the CI `cargo test --workspace`. Not part of the production baseline.
+exclude = ["spike"]
 
 [workspace.package]
 edition = "2021"
