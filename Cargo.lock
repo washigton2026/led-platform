@@ -893,6 +893,7 @@ name = "led-readmodel"
 version = "0.1.0"
 dependencies = [
  "led-core",
+ "led-hal",
  "led-protocols",
 ]
 

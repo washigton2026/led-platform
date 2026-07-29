@@ -19,18 +19,21 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use led_core::DeviceStatus;
-use led_protocols::{DiscoveryResult, HealthStatus};
+use led_core::{DeviceDriver, DeviceStatus};
+use led_hal::MetricsEmitter;
+use led_protocols::{health, DiscoveryResult, HealthStatus};
 
-/// A minimal metrics view for the UI. Filled from `led-hal`'s `MetricsEmitter` by whoever
-/// assembles the snapshot (kept as plain fields so this crate needs no dependency on the HAL).
+/// A metrics view for the UI — **only the values `led-hal`'s `MetricsEmitter` publicly
+/// exposes** (`frame_count`/`drop_count`/`beat_count` + `p50_us`/`p99_us`). It deliberately
+/// does NOT carry `fps`/`hb_gap` because the emitter has no public accessor for those — the
+/// read-model reflects the real source, it does not fabricate fields it cannot fill.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MetricsView {
-    pub fps: u64,
+    pub frames: u64,
+    pub drops: u64,
+    pub beats: u64,
     pub p50_us: u64,
     pub p99_us: u64,
-    pub drops: u64,
-    pub hb_gap_ms: u64,
 }
 
 /// One controller's read-only status, tagged with its stable device id.
@@ -78,9 +81,40 @@ impl ReadModel {
             ),
         };
         format!(
-            r#"{{"health":"{health}","devices":[{devices}],"metrics":{{"fps":{},"p50_us":{},"p99_us":{},"drops":{},"hb_gap_ms":{}}},"discovery":{discovery}}}"#,
-            m.fps, m.p50_us, m.p99_us, m.drops, m.hb_gap_ms
+            r#"{{"health":"{health}","devices":[{devices}],"metrics":{{"frames":{},"drops":{},"beats":{},"p50_us":{},"p99_us":{}}},"discovery":{discovery}}}"#,
+            m.frames, m.drops, m.beats, m.p50_us, m.p99_us
         )
+    }
+
+    /// Assemble a snapshot from the **real engine sources** (read-only over the engine):
+    /// each driver's [`DeviceStatus`], the heartbeat [`health`]`(last_sent, now)`, the
+    /// `MetricsEmitter`'s published counters, and an optional discovery result. Absent inputs
+    /// are represented honestly (empty `devices`, `None` discovery) — never fabricated.
+    ///
+    /// Reads only — it never mutates a device, the emitter, or the engine, and is called on
+    /// the management plane (never the render/send hot path).
+    pub fn assemble(
+        devices: &[Arc<dyn DeviceDriver>],
+        last_sent_ms: u64,
+        now_ms: u64,
+        metrics: &MetricsEmitter,
+        discovery: Option<DiscoveryResult>,
+    ) -> ReadModel {
+        ReadModel {
+            devices: devices
+                .iter()
+                .map(|d| DeviceView { id: d.id(), status: d.status() })
+                .collect(),
+            health: health(last_sent_ms, now_ms),
+            metrics: MetricsView {
+                frames: metrics.frame_count(),
+                drops: metrics.drop_count(),
+                beats: metrics.beat_count(),
+                p50_us: metrics.p50_us(),
+                p99_us: metrics.p99_us(),
+            },
+            discovery,
+        }
     }
 }
 
@@ -199,7 +233,7 @@ mod tests {
         assert!(j.contains(r#""health":"ok""#), "{j}");
         assert!(j.contains(r#""devices":[]"#), "{j}");
         assert!(j.contains(r#""discovery":null"#), "{j}");
-        assert!(j.contains(r#""fps":0"#) && j.contains(r#""p99_us":0"#), "{j}");
+        assert!(j.contains(r#""frames":0"#) && j.contains(r#""p99_us":0"#), "{j}");
         assert!(braces_balanced(&j), "unbalanced JSON: {j}");
     }
 
@@ -225,7 +259,7 @@ mod tests {
         let rm = ReadModel {
             devices: vec![dev(0, true, 42), dev(7, false, 0)],
             health: HealthStatus::Warning,
-            metrics: MetricsView { fps: 44, p50_us: 120, p99_us: 4100, drops: 3, hb_gap_ms: 800 },
+            metrics: MetricsView { frames: 100, drops: 3, beats: 5, p50_us: 120, p99_us: 4100 },
             discovery: Some(DiscoveryResult {
                 responded: vec![Ipv4Addr::new(192, 168, 2, 156)],
                 missing: vec![Ipv4Addr::new(192, 168, 2, 157)],
@@ -238,6 +272,60 @@ mod tests {
         assert!(j.contains(r#""responded":["192.168.2.156"]"#), "{j}");
         assert!(j.contains(r#""missing":["192.168.2.157"]"#), "{j}");
         assert!(braces_balanced(&j), "unbalanced JSON: {j}");
+    }
+
+    // A fake driver so `assemble` reads a real `DeviceStatus` via the `led-core` trait,
+    // without needing a live HAL.
+    struct FakeDev {
+        id: u16,
+        status: DeviceStatus,
+    }
+    impl DeviceDriver for FakeDev {
+        fn id(&self) -> led_core::DeviceId {
+            self.id
+        }
+        fn send_physical(&self, _u: &[led_core::UniverseData]) -> Result<(), led_core::OutputError> {
+            Ok(())
+        }
+        fn status(&self) -> DeviceStatus {
+            self.status
+        }
+    }
+
+    #[test]
+    fn assemble_reflects_real_sources() {
+        let devices: Vec<Arc<dyn DeviceDriver>> = vec![Arc::new(FakeDev {
+            id: 3,
+            status: DeviceStatus { connected: true, frames_sent: 9, last_send_ms: 0 },
+        })];
+        let m = MetricsEmitter::new("node");
+        m.record_frame(1000);
+        m.record_frame(2000);
+        m.record_drop();
+        m.record_beat();
+
+        // last_sent == now → gap 0 → Ok
+        let rm = ReadModel::assemble(&devices, 1000, 1000, &m, None);
+        assert_eq!(rm.health, HealthStatus::Ok);
+        assert_eq!(rm.devices.len(), 1);
+        assert_eq!(rm.devices[0].id, 3);
+        assert_eq!(rm.devices[0].status.frames_sent, 9);
+        assert_eq!(rm.metrics.frames, 2, "reflects real frame_count");
+        assert_eq!(rm.metrics.drops, 1);
+        assert_eq!(rm.metrics.beats, 1);
+        assert!(rm.discovery.is_none());
+    }
+
+    #[test]
+    fn assemble_maps_gap_to_critical_and_absent_sources_are_honest() {
+        let m = MetricsEmitter::new("n");
+        // no devices, big gap → Critical; discovery None → explicit absence, not fabricated data
+        let rm = ReadModel::assemble(&[], 0, 3000, &m, None);
+        assert_eq!(rm.health, HealthStatus::Critical);
+        assert!(rm.devices.is_empty());
+        let j = rm.to_json();
+        assert!(j.contains(r#""devices":[]"#), "{j}");
+        assert!(j.contains(r#""discovery":null"#), "{j}");
     }
 
     fn sample() -> ReadModel {
