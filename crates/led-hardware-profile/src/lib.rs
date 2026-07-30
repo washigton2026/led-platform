@@ -28,9 +28,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod presets;
+pub mod registry;
 pub mod validate;
 
 pub use led_core::{ColorFormat, RgbOrder, WhiteMode};
+pub use presets::{PresetRow, PRESETS};
+pub use registry::HardwareRegistry;
 pub use validate::{validate, Available, Finding, Severity, Validation};
 
 /// Versão do schema deste descritor. Um profile com `schema_version` desconhecida é

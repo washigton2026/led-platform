@@ -28,8 +28,10 @@ An enum of **capabilities** (`OutputInterface`, `Protocol`) is correct and passe
 Presets are pure data.
 
 ```sh
-# in the preset module/files: no control flow, no impl blocks
-grep -rnE '\b(if|match|while|for|impl|fn)\b' <preset files>
+# in the preset module/files: no control flow, no impl blocks.
+# Strip comments first — prose that *describes* the rule ("no match, no if") is not logic
+# and would otherwise produce a false BLOCK.
+grep -vE '^\s*//' <preset files> | grep -nE '\bfn \b|^impl |\b(if|match|while|for)\b'
 ```
 Control flow or `fn`/`impl` in a preset definition → **BLOCK**.
 (Constructors that only assign literal field values are acceptable; branching is not.)
