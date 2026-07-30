@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (664 tests)
+cargo test --workspace                  # all suites (713 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -84,10 +84,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (664 tests)
+cargo test --workspace                  # all suites (713 tests)
 ```
 
-12 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **664 tests green** · zero warnings.
+14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **713 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -104,6 +104,8 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-bridge` | adapt v1→v0 + BridgeHandle + SimLoop |
 | `audio-core` | CPAL → SPSC ring → Hann FFT → bands/beat/BPM/harmonic + **SectionDetector** (musical section detection: Intro/Verse/Chorus/Build/Bridge/Drop/Outro) |
 | `led-show-recorder` | **NEW** — `.lumyx` binary format: write/read `LogicalFrame` + `AudioSnapshot` streams; `pixel_hash` for regression replay comparison |
+| `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
+| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -126,6 +128,23 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-07-29b — `HardwareProfile` completo (ADR-0018): slices 1–5, guardião, presets, E2E
+
+**Done.** O ponto de expansão de hardware do LUMYX, em 5 slices, com [ADR-0018](./docs/adr/0018-hardwareprofile-capacidades-design-time.md) e arquitetura em [`docs/architecture/hardware-profile.md`](./docs/architecture/hardware-profile.md).
+
+1. **ADR-0018 + `HardwareProfileGuardian`** (`6aeb9f0`): profile é **descritor declarativo de capacidades**, nunca enum de produtos. `OutputInterface` **declara**, `DeviceDriver` **executa** (nome escolhido em vez de `Connection` porque `DeviceStatus.connected` já é conectividade de runtime). `RuntimeState` fica **fora** (reusa `DeviceStatus` + `led-readmodel`). `HardwareRegistry` separa registro de descrição. `schema_version` + `firmware_version`. Guardião com **8 checks executáveis**.
+2. **Slice 1 — schema** (`65e604b`): crate leaf `led-hardware-profile` (dep única: `led-core`). `Identity`/`Capabilities`/`Limits`/`Power`/`Calibration`. `Capabilities` só declarativo/booleano; limites de pixel **só** em `Limits`. Cor reusa `ColorFormat`/`WhiteMode` (ADR-0011) — nenhuma segunda representação de RGBW.
+3. **Slice 2 — validador** (`a203f7c`): `validate(profile, &Available{interfaces, protocols})`. **Injeção de dados**: detectar "driver inexistente" exigiria conhecer os drivers, o que quebraria o leaf — quem os conhece passa a lista como dado. Erros: schema desconhecida, interface/protocolo sem driver, pixels que não cabem no universo (usa `led_core::UNIVERSE_SIZE`, não 510 hardcoded), limites zerados, `Power`/`Calibration` inválidos (inclui `NaN`). Avisos: **RGBW sobre DDP** (o cabeçalho DDP fixa data type RGB8) e **WiFi** (ADR-0005 — o validador declara, o `NetworkGuard` bloqueia). Achados **acumulam**.
+4. **Slices 3+4 — presets + registry** (`32f6b38`): `presets.rs` é uma **tabela**, `const PRESETS: &[PresetRow]`, com **zero `fn`/`impl`/ramificação** — como todo campo é literal ou variante, é `const` genuína. ESP32, ESP32-POE, Falcon, Advatek, Raspberry Pi, SK6812-RGBW e Custom são **linhas**, nunca variantes. Conversão linha→profile vive no `registry` (por isso a tabela fica sem `fn`). Landaram juntas porque o check 6 do guardião bloqueia preset sem teste de validação. Testes afirmam que os **avisos são exatamente os que os ADRs preveem**.
+5. **Slice 5 — compilação** (`e40cb24`): `compile_layout` + `driver_config`. **Não precisou de crate novo nem tocar o `led-hal`**: `CompiledLayout` está no `led-core` e a cadeia termina em *Driver Configuration* (dado), não em *Driver* (I/O) — o crate segue leaf e o profile nunca chega ao caminho de render. Honra o `pixels_per_universe` **declarado** mesmo abaixo do máximo teórico. **Recusa** em vez de mapear errado.
+6. **E2E + docs** (este commit): `integration-tests/tests/hardware_profile_e2e.rs` percorre **preset → validate → CompiledLayout → DriverConfig → Hal → SimulatorDevice** e verifica os **bytes** no dispositivo (ordem GRB do preset; 4 canais do preset RGBW com branco derivado no mapper; empacotamento declarado sobrevivendo até o fio) + controle negativo (sem driver, o fluxo para na validação). Vive no `integration-tests` porque o `SimulatorDevice` está no `led-hal` — assim o E2E existe sem o profile ganhar dependência de HAL.
+
+**Invariants verified.** `led-core` **intocado** — confirmado pelo próprio SemVer Guardian ("superfície de seam inalterada, v1.3.0, 61 itens"). `cargo tree`: o crate depende só de `led-core`. Profile **ausente** de `led-hal` e do engine (guardião check 8). Zero dependência nova no workspace. Gates completos com `--locked` verdes a cada slice. Quando `CompiledLayout` (Frozen, sem `Debug`) impediu `unwrap_err()` nos testes, a saída foi casar o padrão — **não** adicionar `Debug` ao seam.
+
+**Pending.** Drivers **SPI/PWM/ESP-NOW** (declaráveis, sem implementação — ADR próprio). Mover `gamma`/`brightness` do engine para por-output (achado H5). RGB+CCT / 5 canais. `profile_version` separado de `schema_version` — adiado por falta de consumidor (decidir se o catálogo precisar de revisão própria). Spike da ADR-0016 aguarda medição humana (a11y/GPU/DX). ADR-0017 (blackout) adiado.
+
+**Decisions.** Preset é um **tipo** de hardware; `device_id`/`address`/`first_universe` são da **instância** — por isso `Identity` não tem endereço. Presets são dado e **novo hardware é uma linha**; `DeviceDriver` novo só quando houver transporte físico novo de verdade. Os números dos presets são pontos de partida por família, **não medições** — ajustar por instalação.
 
 ### 2026-07-29 — Fundação de UI: ADRs 0013–0017, CI do zero, `led-readmodel`, spike de stack, M1 medido
 
