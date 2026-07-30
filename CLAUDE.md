@@ -127,6 +127,22 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-07-29 — Fundação de UI: ADRs 0013–0017, CI do zero, `led-readmodel`, spike de stack, M1 medido
+
+**Done.**
+1. **ADRs 0013–0017** (`docs/adr/`, commit `4337cb7`): 0013 engine headless em daemon separado + UI cliente (output não compartilha processo de falha); 0014 IPC/segurança (UDS owner-only same-host, token/mTLS por interface na LAN, **nunca 0.0.0.0**, comandos tipados/versionados); 0015 preview por cópia downsampled/rate-limited/**lossy fora do hot-path** (UI nunca lê o triple buffer nem faz backpressure); 0016 stack do console **PROVISÓRIO** (web DOM+WebGPU, Leptos preferido) pendente de spike; **0017 blackout intencional × invariante do heartbeat — ADIADO** (nenhum botão/atalho/API de blackout antes deste ADR ser aceito).
+2. **CI criada do zero** (`.github/workflows/ci.yml`, `91a92e3`): build+test+`clippy -D warnings` em **Linux e macOS (bloqueantes)**, Windows `continue-on-error` (suporta, não conduz — ADR-0013). Linux precisa de `libasound2-dev` (cpal→ALSA); roda **sem** a feature `gpu`. **Primeira CI verde do repo** após `35e77d7`.
+3. **`sacn_multicast` na CI** (`35e77d7`): o teste estourava com `No route to host` nos runners (sem rota de multicast). O teste já pulava em falha de bind/join/recv; estendido para pular também na falha de **send**. Não era bug de código.
+4. **`led-readmodel`** (crate leaf novo, `a3a8852` + `9f8a14c` + `f9274c3`): `ReadModel` read-only que a UI vai pollar — `DeviceStatus` + `HealthStatus` + contadores do `MetricsEmitter` + `DiscoveryResult`; `to_json()` hand-rolled (std-only, convenção do workspace — **sem serde**); `serve_readmodel` **loopback-only** (recusa bind não-loopback: `/security`); `ReadModel::assemble(...)` monta o snapshot das **fontes reais** do engine. Ausências são honestas (`devices:[]`, `discovery:null`), nunca fabricadas. `MetricsView` carrega só o que o emitter expõe publicamente (frames/drops/beats/p50/p99).
+5. **Spike de stack** (`spike/`, `5450cfc`): protótipos descartáveis React/Vite e Leptos/WASM com a mesma tela acessível + preview 10k pts, `exclude`ídos do workspace/CI. React builda (vite 1.64s, 47 KB gzip); Leptos exige `trunk`+target wasm (não builda no ambiente do agente). `spike/README.md` traz o checklist de medição da ADR-0016 — **a11y/fps de GPU/DX são medidos pelo humano, não carimbados pelo agente**.
+6. **M1 medido → TD-011 `wontfix`** (`8b1f217`): bench de medição `led-hal/tests/bench_contention.rs` (`#[ignore]`, **zero mudança de produção**) quantifica a contenção do `Mutex` de scratch em `send_frame`. 100k iters/300px/SimulatorDevice/dev macOS: render sozinho p50 20.651 ns / p99 69.678 ns; render+contender p50 23.558 ns / p99 1.419.228 ns → **x1,14 / x20,37**. **RESOLVIDO, otimização adiada**: pior caso 1,42 ms < 5 ms de orçamento; a cauda foi medida com contender em loop apertado, não a cadência real do heartbeat (~1 Hz vs ~44 Hz do render). Gatilhos de revisita em `docs/technical-debt-ledger.md` TD-011.
+
+**Invariants verified.** Nenhum contrato canônico/seam Frozen alterado; hot-path render/send intocado (o read-model é management-plane read-only; o bench só exercita a API pública). Gate workspace **verde via CI** em `f9274c3` (Linux+macOS). `clippy -D warnings` = 0. Bench é `#[ignore]` (não pesa na CI: `1 ignored`, 0.00s). `/security`: read-model recusa bind não-loopback.
+
+**Pending.** **Spike da ADR-0016 aguarda medição humana** (a11y/GPU/DX) → decidir Leptos vs React → promover 0016 → desbloqueia PR-05 (scaffold da shell). **ADR-0017 (blackout) adiado** — bloqueia qualquer blackout na UI. Windows segue vermelho na CI (não-bloqueante, não é alvo atual). Achados abertos da FASE 1: M2 (skill-Constituição sem camada HAL), M5 (PixelLogical não é seam — decisão de contrato), M6 (compile O(n²) não medido), L1 (deprecar `verify_manifest`), RGBW pixel-nativo no DDP.
+
+**Decisions.** UI = **processo separado** (isolamento de falha é a única garantia real de que a UI não derruba o output). Read-model **hand-rolled sem serde** (o workspace já emite JSON à mão; evita dependência durável). Preview **lossy por contrato** — regra de isolamento, não otimização. Spike **excluído do workspace** para nunca entrar no baseline/CI. M1 **medido antes de otimizar** — e a medição disse para não otimizar.
+
 ### 2026-07-26 — Evolução pós-FASE 1: gate de clippy verde + M4 (router status real)
 
 **Done.**

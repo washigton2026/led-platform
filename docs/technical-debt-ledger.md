@@ -289,6 +289,48 @@ negative_control: |
 
 ---
 
+## TD-011 — M1: contenção do `Mutex` de scratch em `Hal::send_frame`
+
+```yaml
+td_id:     TD-011
+title:     "M1: Mutex<scratch> contention on Hal::send_frame (render + heartbeat)"
+severity:  Medium
+status:    wontfix
+origin:    "Revisão Constitucional HardwareProfile (FASE 1), achado M1 [VALIDAR]"
+measured_on: 2026-07-29
+context: |
+  Hal::send_frame toma scratch: Mutex<Vec<UniverseData>> por frame (led-hal/src/hal.rs:27,109).
+  Em produção a thread de render E a thread de heartbeat chamam send_frame no MESMO Hal, logo
+  podem contender no mesmo lock. A revisão marcou a magnitude como NAO MEDIDA ([VALIDAR]).
+measurement: |
+  Bench de medição (sem alterar produção): crates/led-hal/tests/bench_contention.rs
+  (#[ignore] — medição, não gate; commit 8b1f217).
+  100k iters, 300px, SimulatorDevice, dev macOS:
+    render sozinho     : p50 =    20_651 ns   p99 =    69_678 ns
+    render + contender : p50 =    23_558 ns   p99 = 1_419_228 ns
+    fator de contenção : p50 = x1.14          p99 = x20.37
+decision: |
+  RESOLVIDO — nenhuma otimização necessária no escopo atual; otimização ADIADA.
+  Razão: pior caso 1.42 ms < 5 ms de orçamento de latência cabeado.
+  A mediana é praticamente imune (x1.14). A cauda (x20) foi medida com um contender em loop
+  apertado — pior caso sintético, NAO a cadência real do heartbeat (~1 Hz vs ~44 Hz do render),
+  portanto a contenção real é rara. Custo do pior caso: ~28% do orçamento em jitter de lock.
+caveats: |
+  Medido em dev macOS (não na appliance Linux cabeada de produção); SimulatorDevice isola os
+  locks in-process (sem latência de fio); a cauda inclui jitter do escalonador, não só o lock.
+revisit_when: |
+  - cluster (SyncedCluster com múltiplos segmentos ativos)
+  - multi-nó físico (2+ nós reais)
+  - senders concorrentes de alta frequência (contenção deixa de ser rara)
+  Caminho natural se revisitado: ArcSwap/triple-buffer no scratch (precedente ADR-0002).
+note: |
+  status=wontfix conforme o Status legend deste arquivo ("acknowledged, intentionally
+  deferred"). O audit_gate.py só exige evidence_ref/negative_control para status=closed
+  (audit_gate.py:155), portanto este registro não altera o gate.
+```
+
+---
+
 ## Closed items — summary table
 
 | TD-ID   | Title (short)                         | Closed     | Commit   |
