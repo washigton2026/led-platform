@@ -28,10 +28,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod compile;
 pub mod presets;
 pub mod registry;
 pub mod validate;
 
+pub use compile::{compile_layout, driver_config, CompileError, DriverConfig};
 pub use led_core::{ColorFormat, RgbOrder, WhiteMode};
 pub use presets::{PresetRow, PRESETS};
 pub use registry::HardwareRegistry;
