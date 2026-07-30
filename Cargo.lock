@@ -850,6 +850,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "led-hardware-profile"
+version = "0.1.0"
+dependencies = [
+ "led-core",
+]
+
+[[package]]
 name = "led-layout"
 version = "0.1.0"
 dependencies = [
