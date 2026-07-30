@@ -28,6 +28,7 @@ recuperada do changelog.
 | [0015](0015-preview-lossy-fora-hot-path.md) | Preview: cópia downsampled/rate-limited/lossy fora do hot-path; UI nunca lê o triple buffer | aceito (pré-impl.) | 2026-07-26 |
 | [0016](0016-stack-console-provisorio.md) | Stack do console (web DOM+WebGPU, Leptos preferido) — PROVISÓRIO, pendente spike | proposto (provisório) | 2026-07-26 |
 | [0017](0017-blackout-intencional-vs-heartbeat.md) | Blackout intencional × invariante do heartbeat — decisão adiada | proposto (adiado) | 2026-07-26 |
+| [0018](0018-hardwareprofile-capacidades-design-time.md) | `HardwareProfile`: descritor de capacidades em design-time (presets são dado; compila para os seams) | aceito (pré-impl.) | 2026-07-29 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma
