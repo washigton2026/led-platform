@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (713 tests)
+cargo test --workspace                  # all suites (729 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -84,10 +84,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (713 tests)
+cargo test --workspace                  # all suites (729 tests)
 ```
 
-14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **713 tests green** · zero warnings.
+14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **729 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -128,6 +128,24 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-07-29c — H5: calibração por-output no HAL (ADR-0019)
+
+**Done.** O `Calibration{gamma,brightness}` declarado por nó no ADR-0018 passa a ter efeito real. [ADR-0019](./docs/adr/0019-calibracao-por-output-no-hal.md).
+
+**O achado que corrigiu o próprio H5.** O H5 dizia "gamma/brightness estão no lugar errado (globais no engine)". Verificando: (a) **`Gamma` era código morto** — LUT de 256 entradas em `color.rs:35` sem nenhum consumidor de produção, nem reexportada; (b) **`color::scale` não é calibração** — seus usos (`reactive.rs:142,189`) são **intensidade de efeito** (energia de áudio, decay do flash), corretos onde estão e **não movidos**. O problema real não era mover nada: era um campo declarado que ninguém honrava.
+
+**Colocação:** no **HAL, por device, entre o `apply` e o fan-out** — o `scratch` de cada device já é contíguo (`device_range`). Assim **nenhum contrato Frozen muda** (`led-core` intocado, zero bump), a ramificação é **por device e não por pixel**, o custo é **zero** sem calibração, e o `led-hal` recebe `f32` — **não** ganha dependência de `led-hardware-profile` (o app é quem cabla).
+
+**Bug pego antes do commit:** calibrar o `scratch` in-place causaria **escurecimento cumulativo** — `CompiledLayout::apply` só escreve os alvos cobertos por `frame.pixels` (guarda `.get(id)` para frames curtos), então alvos não cobertos seriam re-corrigidos a cada frame. Solução: **buffer calibrado separado**, dimensionado no startup. Provado por `calibration_does_not_compound_across_frames_on_a_short_frame` (50 frames curtos, gamma 2.2).
+
+**Hazard no gate `no_alloc`:** o gate acusou 7 alocações. Em vez de afrouxar, diagnóstico (10k vs +20k frames): **0 e 0** rodando isolado → o contador é `static` **global do processo** e o `cargo test` roda em threads paralelas, contaminando a janela de medição. Corrigido com `ALLOC_GATE` serializando os testes do arquivo; o hazard ficou documentado.
+
+**Invariants verified.** `no_alloc` verde **com calibração ativa** (zero alocação no hot path). SemVer Guardian: "superfície de seam inalterada (v1.3.0, 61 itens)". Efeitos reativos intocados. **Custo medido, não estimado** (6.200 px / 37 universos, debug): sem calibração 338.775 ns/frame, com 472.583 ns/frame → **+133.808 ns (×1,39), ~2,7% do orçamento de 5 ms**; release é substancialmente menor.
+
+**Pending.** Ligar automaticamente `HardwareProfile.calibration` → `Hal::with_calibration` no app (hoje é manual, por design — o HAL não depende do profile). Calibração é por **device**, não por strip — um nó com chips diferentes precisaria de granularidade maior. White balance / temperatura de cor fora de escopo.
+
+**Decisions.** Gamma e brightness são **dobrados numa única LUT** de 256 entradas no startup: o hot path faz uma leitura indexada por canal, sem `powf` nem ponto flutuante. Calibração é correção óptica, **nunca proteção elétrica** (isso é a fonte e o ABL do controlador).
 
 ### 2026-07-29b — `HardwareProfile` completo (ADR-0018): slices 1–5, guardião, presets, E2E
 

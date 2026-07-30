@@ -13,6 +13,7 @@
 //! heartbeat never zeros, zero allocation on the hot path, Core reaches hardware only
 //! through `ProtocolOutput`.
 
+pub mod calibration;
 pub mod chaos;
 pub mod cluster;
 pub mod cluster_sync;
@@ -30,6 +31,7 @@ pub mod sim;
 // Re-export the shared seams so `led_hal::*` and downstream code have one import surface.
 pub use led_core::*;
 
+pub use calibration::{Calibration, CalibrationLut};
 pub use cluster::{ClusteredHal, ClusterHeartbeat, SharedCluster};
 pub use chaos::{ChaosHarness, ChaosResult, FaultConfig, run_experiment};
 pub use cluster_sync::{SegmentHealth, SegmentState, SyncedCluster};

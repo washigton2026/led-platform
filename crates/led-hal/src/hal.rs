@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use led_core::{CompiledLayout, DeviceDriver, LogicalFrame, OutputError, ProtocolOutput, UniverseData};
 
+use crate::calibration::Calibration;
 use crate::metrics::MetricsEmitter;
 use crate::network_guard::{NetworkGuard, NetworkPolicyError, PermissiveGuard};
 use crate::observability::SpanCollector;
@@ -33,6 +34,17 @@ pub struct Hal {
     spans:    Option<Arc<SpanCollector>>,
     /// Node ID for distributed tracing (0 = single-node default).
     node_id:  u32,
+    /// Per-output calibration (ADR-0019). Empty by default: with no device registered the
+    /// fan-out is byte-identical to before, and the branch is per device, never per pixel.
+    calibration: Calibration,
+    /// Destination for calibrated bytes, sized once at startup (empty when no calibration).
+    ///
+    /// Why a second buffer instead of correcting `scratch` in place: `CompiledLayout::apply`
+    /// only writes the targets covered by `frame.pixels` (it guards with `.get(id)` for short
+    /// frames). Correcting in place would re-correct any uncovered target on every frame —
+    /// compounding gamma and darkening those pixels frame after frame. Writing into a separate
+    /// buffer makes the correction idempotent per frame. Allocated once; never on the hot path.
+    cal_scratch: Mutex<Vec<UniverseData>>,
 }
 
 impl Hal {
@@ -60,7 +72,37 @@ impl Hal {
         guard:   impl NetworkGuard + 'static,
     ) -> Self {
         let scratch = layout.make_scratch();
-        Self { layout, devices, scratch: Mutex::new(scratch), guard: Box::new(guard), metrics: None, spans: None, node_id: 0 }
+        Self {
+            layout,
+            devices,
+            scratch: Mutex::new(scratch),
+            guard: Box::new(guard),
+            metrics: None,
+            spans: None,
+            node_id: 0,
+            calibration: Calibration::new(),
+            cal_scratch: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Attach per-output calibration (ADR-0019). Gamma and brightness are folded into one
+    /// 256-entry LUT per device at startup; the frame path then costs a single indexed read
+    /// per channel, and **nothing at all** for devices with no calibration registered.
+    ///
+    /// Values arrive as plain `f32` on purpose: `led-hal` does not depend on
+    /// `led-hardware-profile` — wiring a profile's `Calibration` to this is the app's job.
+    pub fn with_calibration(mut self, calibration: Calibration) -> Self {
+        // Size the calibrated-output buffer here, at startup — never on the frame path.
+        if !calibration.is_empty() {
+            self.cal_scratch = Mutex::new(self.layout.make_scratch());
+        }
+        self.calibration = calibration;
+        self
+    }
+
+    /// The calibration currently attached.
+    pub fn calibration(&self) -> &Calibration {
+        &self.calibration
     }
 
     /// Attach a [`MetricsEmitter`] to this HAL. After attaching, every `send_frame`
@@ -112,12 +154,27 @@ impl ProtocolOutput for Hal {
         self.layout.apply(frame, &mut scratch);
 
         // (2) Fan out: each device receives only the universes it owns. No re-mapping.
+        //     Per-output calibration (ADR-0019) is applied here, on the device's own
+        //     contiguous scratch slice — one branch per device, never per pixel, and skipped
+        //     entirely when the device has no calibration.
         for dev in &self.devices {
             let range = self
                 .layout
                 .device_range(dev.id())
                 .ok_or(OutputError::DeviceNotConnected(dev.id()))?;
-            dev.send_physical(&scratch[range])?;
+            match self.calibration.lut(dev.id()) {
+                // Uncalibrated device: byte-identical to the pre-ADR-0019 path.
+                None => dev.send_physical(&scratch[range])?,
+                // Calibrated: correct into the dedicated buffer (idempotent per frame), send that.
+                Some(lut) => {
+                    let mut cal = self.cal_scratch.lock().expect("cal scratch poisoned");
+                    for i in range.clone() {
+                        cal[i].data.copy_from_slice(&scratch[i].data);
+                        lut.apply_in_place(&mut cal[i].data);
+                    }
+                    dev.send_physical(&cal[range])?;
+                }
+            }
         }
 
         // Record metrics (outside the scratch lock to minimise critical section).
