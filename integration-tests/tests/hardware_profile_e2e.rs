@@ -156,6 +156,62 @@ fn a_profile_whose_interface_has_no_driver_never_reaches_the_device() {
     assert!(devices.is_empty(), "nenhum dispositivo é construído a partir de um profile inválido");
 }
 
+/// O último centímetro: a `Calibration` **declarada no preset** chega aos bytes do device.
+/// Isto é a composição que o app faz (`led-player --profile`), provada aqui ponta a ponta.
+#[test]
+fn the_presets_declared_calibration_reaches_the_device_bytes() {
+    let registry = HardwareRegistry::with_builtin();
+    let mut profile = registry.profile("esp32-poe-wled-ddp").expect("preset");
+    // Brightness 0.5 declarado no profile (gamma 1.0 para isolar o efeito).
+    profile.calibration.gamma = 1.0;
+    profile.calibration.brightness = 0.5;
+
+    let layout = compile_layout(&profile, 170, DEVICE, FIRST_UNIVERSE).expect("compila");
+    let sim = SimulatorDevice::new(DEVICE, layout.device_universes(DEVICE));
+
+    // A ponte profile→HAL: o app lê o profile e configura o HAL. O HAL recebe `f32`, não o
+    // tipo do profile — é por isso que `led-hal` não depende de `led-hardware-profile`.
+    let mut cal = led_hal::Calibration::new();
+    cal.set(DEVICE, profile.calibration.gamma, profile.calibration.brightness);
+
+    let hal = Hal::new(layout, vec![sim.clone() as Arc<dyn DeviceDriver>]).with_calibration(cal);
+    let pixels = vec![PixelColor::rgb(200, 100, 0); 170];
+    hal.send_frame(&LogicalFrame::new(pixels, 0)).expect("send");
+
+    // GRB declarado no preset + brightness 0.5 do Calibration: G=100→50, R=200→100, B=0→0.
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 0), Some(50), "G após brightness do preset");
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 1), Some(100), "R após brightness do preset");
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 2), Some(0));
+}
+
+/// A calibração acontece na **borda de saída**, depois do frame lógico — então ela **não**
+/// altera o hash de replay determinístico (ADR-0001). Observado também no `led-player`: o hash
+/// do show é o mesmo com e sem `--profile`.
+#[test]
+fn calibration_does_not_change_the_deterministic_replay_hash() {
+    use led_core::compute_pixel_hash;
+
+    let registry = HardwareRegistry::with_builtin();
+    let mut profile = registry.profile("esp32-poe-wled-ddp").expect("preset");
+    profile.calibration.brightness = 0.25; // calibração agressiva
+
+    let pixels = vec![PixelColor::rgb(200, 100, 50); 170];
+    let frame = LogicalFrame::new(pixels.clone(), 0);
+    let hash_before = compute_pixel_hash(&pixels);
+
+    let layout = compile_layout(&profile, 170, DEVICE, FIRST_UNIVERSE).expect("compila");
+    let sim = SimulatorDevice::new(DEVICE, layout.device_universes(DEVICE));
+    let mut cal = led_hal::Calibration::new();
+    cal.set(DEVICE, profile.calibration.gamma, profile.calibration.brightness);
+    let hal = Hal::new(layout, vec![sim.clone() as Arc<dyn DeviceDriver>]).with_calibration(cal);
+    hal.send_frame(&frame).expect("send");
+
+    // Os bytes no fio mudaram…
+    assert_ne!(sim.channel(FIRST_UNIVERSE, 1), Some(200), "a calibração alterou o fio");
+    // …mas o frame lógico — a base do replay determinístico — é intocado.
+    assert_eq!(compute_pixel_hash(&frame.pixels), hash_before, "replay hash inalterado");
+}
+
 /// Com driver WiFi disponível o profile passa, mas o **aviso** do ADR-0005 permanece — o
 /// validador declara, o `NetworkGuard` é quem bloqueia o show ao vivo.
 #[test]

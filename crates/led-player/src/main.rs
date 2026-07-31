@@ -29,7 +29,8 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: led-player <show.lumyx> [--info] [--verify <hex-hash>] \
          [--artnet <ip[:port]>] [--ddp <ip[:port]>] [--first-universe N] \
-         [--speed X|max] [--loop N] [--discover] [--require-all]"
+         [--speed X|max] [--loop N] [--discover] [--require-all] \
+         [--profile <preset>] [--list-profiles]"
     );
     ExitCode::from(2)
 }
@@ -49,6 +50,8 @@ fn main() -> ExitCode {
     let mut metrics_port: Option<u16> = None;
     let mut discover = false;
     let mut require_all = false;
+    let mut profile_name: Option<String> = None;
+    let mut list_profiles = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -130,9 +133,34 @@ fn main() -> ExitCode {
             }
             "--discover" => discover = true,
             "--require-all" => { discover = true; require_all = true; }
+            "--profile" => {
+                i += 1;
+                let Some(v) = args.get(i) else { return usage() };
+                profile_name = Some(v.clone());
+            }
+            "--list-profiles" => list_profiles = true,
             _ => return usage(),
         }
         i += 1;
+    }
+
+    if list_profiles {
+        let reg = led_hardware_profile::HardwareRegistry::with_builtin();
+        println!("presets embutidos (ADR-0018):");
+        for name in reg.names() {
+            let p = reg.profile(name).expect("preset");
+            println!(
+                "  {name:<26} {} {} · {:?}/{:?} · {} px/uni · gamma {} · brightness {}",
+                p.identity.vendor,
+                p.identity.model,
+                p.capabilities.protocol,
+                p.capabilities.output_interface,
+                p.limits.pixels_per_universe,
+                p.calibration.gamma,
+                p.calibration.brightness,
+            );
+        }
+        return ExitCode::SUCCESS;
     }
 
     // Read the whole recording (shows are minutes, not hours — memory is fine
@@ -246,8 +274,60 @@ fn main() -> ExitCode {
     }
 
     let px = info.pixel_count as usize;
-    let assigns = linear_assignments(px, 0, first_universe, RgbOrder::Rgb);
-    let layout = CompiledLayout::compile(&assigns);
+
+    // Layout + calibração: de um HardwareProfile quando `--profile` é dado, senão o
+    // comportamento histórico (RGB linear, 170 px/universo). O app é o ponto de composição —
+    // é aqui que o descritor de design-time vira artefatos de runtime (ADR-0018/0019).
+    let (layout, calibration) = match &profile_name {
+        None => (
+            CompiledLayout::compile(&linear_assignments(px, 0, first_universe, RgbOrder::Rgb)),
+            led_hal::Calibration::new(),
+        ),
+        Some(name) => {
+            use led_hardware_profile as hwp;
+            let registry = hwp::HardwareRegistry::with_builtin();
+            let Some(profile) = registry.profile(name) else {
+                eprintln!("profile desconhecido: '{name}' — use --list-profiles");
+                return ExitCode::FAILURE;
+            };
+
+            // O que ESTE binário sabe executar, passado como dado (o crate do profile é leaf).
+            let available = hwp::Available {
+                interfaces: &[hwp::OutputInterface::Ethernet, hwp::OutputInterface::WiFi],
+                protocols: &[hwp::Protocol::ArtNet, hwp::Protocol::Ddp],
+            };
+            let report = hwp::validate(&profile, &available);
+            for w in report.warnings() {
+                eprintln!("⚠ profile '{name}': {w:?}");
+            }
+            if report.has_errors() {
+                for e in report.errors() {
+                    eprintln!("✖ profile '{name}': {e:?}");
+                }
+                return ExitCode::FAILURE;
+            }
+
+            let layout = match hwp::compile_layout(&profile, px as u32, 0, first_universe) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("✖ profile '{name}' não compila para {px} px: {e:?}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut cal = led_hal::Calibration::new();
+            cal.set(0, profile.calibration.gamma, profile.calibration.brightness);
+            println!(
+                "profile: {name} ({} {}) · {:?} · {} px/uni · gamma {} · brightness {}",
+                profile.identity.vendor,
+                profile.identity.model,
+                profile.capabilities.color,
+                profile.limits.pixels_per_universe,
+                profile.calibration.gamma,
+                profile.calibration.brightness,
+            );
+            (layout, cal)
+        }
+    };
 
     // Observability: attach a MetricsEmitter to the Hal and expose /metrics.
     let emitter = std::sync::Arc::new(led_hal::MetricsEmitter::new("led-player"));
@@ -272,6 +352,13 @@ fn main() -> ExitCode {
         match DdpOutput::new(dest, px) {
             Ok(o) => {
                 println!("output: DDP {dest} (pixel-native)");
+                if !calibration.is_empty() {
+                    eprintln!(
+                        "⚠ calibração do profile NÃO se aplica no caminho DDP pixel-nativo: \
+                         ele bypassa o HAL por design (ADR-0003), e a calibração vive no HAL \
+                         (ADR-0019). Use --artnet para saída calibrada."
+                    );
+                }
                 Box::new(o)
             }
             Err(e) => {
@@ -301,11 +388,11 @@ fn main() -> ExitCode {
             eprintln!("⚠ universes {first_universe}..{last_universe} exceed the 15-bit Art-Net range — likely a typo");
         }
         println!("output: ArtNet {dest} (universes {first_universe}..{last_universe})");
-        Box::new(Hal::new(layout, vec![dev]))
+        Box::new(Hal::new(layout, vec![dev]).with_calibration(calibration))
     } else {
         let sim = SimulatorDevice::new(0, layout.device_universes(0));
         println!("output: simulator");
-        Box::new(Hal::new(layout, vec![sim]))
+        Box::new(Hal::new(layout, vec![sim]).with_calibration(calibration))
     };
 
     // Burn-in: loop the show, re-verifying integrity every pass. Abort on the

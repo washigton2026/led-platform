@@ -884,6 +884,7 @@ version = "0.1.0"
 dependencies = [
  "led-core",
  "led-hal",
+ "led-hardware-profile",
  "led-protocols",
  "led-show-recorder",
 ]

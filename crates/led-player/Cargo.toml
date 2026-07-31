@@ -11,3 +11,6 @@ led-core          = { path = "../led-core" }
 led-hal           = { path = "../led-hal" }
 led-protocols     = { path = "../led-protocols" }
 led-show-recorder = { path = "../led-show-recorder" }
+# App = composition root: it is where a HardwareProfile is turned into a layout +
+# calibration (ADR-0018/0019). The profile crate itself stays leaf and never sees the HAL.
+led-hardware-profile = { path = "../led-hardware-profile" }
