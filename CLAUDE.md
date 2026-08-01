@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (731 tests)
+cargo test --workspace                  # all suites (737 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -84,10 +84,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (731 tests)
+cargo test --workspace                  # all suites (737 tests)
 ```
 
-14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **731 tests green** · zero warnings.
+14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **737 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -128,6 +128,24 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-07-30 — FASE A: RGBW pixel-nativo no DDP (A2) + últimas dívidas da FASE 1 (A3)
+
+**Done.**
+
+1. **A2 — RGBW pixel-nativo no DDP.** Até aqui RGBW só saía por sACN/Art-Net (byte-transparentes); o caminho DDP era RGB-only. Novo `build_ddp_packet_format` delega cada pixel a `ColorFormat::write` (ADR-0011) — **nenhuma segunda derivação de branco no projeto**. `max_pixels_per_packet(format)` corrige a fragmentação: RGB cabe 487 px/pacote, **RGBW cabe 365** (1462/4). `DdpDevice::with_format` e `DdpOutput::with_format` propagam o formato, e `--profile` + `--ddp` passa a honrá-lo. Hardware novo continuou sendo **uma linha**: preset `esp32-poe-wled-rgbw-ddp` adicionado sem tocar em código.
+
+   **Dois cuidados com o caminho validado em hardware:** (a) `DDP_DTYPE_RGB8 = 0x01` **não foi alterado** — descobri que ele não segue a codificação publicada do DDP (que daria `0x13`), mas é o valor que o WLED aceitou no rig real (94/94 frames, 2026-07-20); a discrepância ficou documentada e alterar exige re-validação; (b) `DDP_DTYPE_RGBW8 = 0x33` segue a spec mas está marcado **não validado em hardware**, e o validador emite `RgbwOverDdpDataType`. Teste prova retrocompatibilidade **byte-a-byte**: RGB pelo builder novo é idêntico ao antigo.
+
+2. **A3/L1 — `verify_manifest` depreciado.** Fecha uma nota do próprio ADR-0004. A função prova integridade, não autenticidade (um atacante re-assina com a própria chave e ela retorna `Ok`). Só tinha chamadores em testes; estes ganharam `#![allow(deprecated)]` **com justificativa** — inclusive a prova de red-team que motivou a depreciação. O caminho de fronteira de confiança continua sendo `verify_manifest_pinned`.
+
+3. **A3/M6 — `CompiledLayout::compile` medido.** Crescimento **quadrático confirmado** (1k→0,91 ms · 6,2k→5,37 ms · 25k→46 ms · 50k→142 ms · 100k→517 ms; a 2× pixels o tempo cresce ~3,1–3,6×). Mas `compile` roda **uma vez no startup, nunca no hot path**, e no rig real (6.200 px) custa **5,4 ms**. Registrado como **TD-012 `wontfix`** com gatilho (rigs > ~50k px) e uma **guarda falsificável que roda sempre**: 6.200 px deve compilar em < 1 s.
+
+**Invariants verified.** `led-core` intocado — SemVer Guardian: "superfície de seam inalterada (v1.3.0, 61 itens)". Audit gate: 0 Critical, 0 Warning, 10 OK. Caminho RGB do DDP byte-idêntico ao validado em hardware.
+
+**Pending.** O data type RGBW do DDP precisa de validação em rig com fita RGBW. Depois desta fase o trabalho gateável sem recurso externo se esgota: o que resta depende do spike da ADR-0016 (a11y/GPU/DX), da migração WiFi→Ethernet, da decisão do ADR-0017 (blackout) e do burn-in 72h.
+
+**Decisions.** Não alterar `DDP_DTYPE_RGB8` sem re-validar no rig — evidência de hardware vale mais que conformidade com a spec quando as duas divergem. M6 e M1 receberam o mesmo tratamento: medir, documentar, adiar com gatilho — em vez de otimizar por suspeita.
 
 ### 2026-07-29c — H5: calibração por-output no HAL (ADR-0019)
 

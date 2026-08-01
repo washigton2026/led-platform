@@ -176,6 +176,29 @@ pub const PRESETS: &[PresetRow] = &[
         gamma: 2.2,
         brightness: 1.0,
     },
+    // WLED + fita SK6812-RGBW por DDP — combinação real e comum. Demonstra que o formato de
+    // cor é ortogonal ao controlador: mesma placa do preset acima, só o `color` muda. O
+    // validador emite o aviso RgbwOverDdpDataType (o data type RGBW do DDP ainda não foi
+    // validado em rig) — o aviso é a regra funcionando.
+    PresetRow {
+        name: "esp32-poe-wled-rgbw-ddp",
+        vendor: "Olimex",
+        model: "ESP32-POE + SK6812 RGBW",
+        firmware: "WLED",
+        firmware_version: "16.0.1",
+        protocol: Protocol::Ddp,
+        output_interface: OutputInterface::Ethernet,
+        color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::Min),
+        supports_discovery: true,
+        supports_metrics: true,
+        pixels_per_universe: 128,
+        max_pixels: 1_200,
+        refresh_hz: 44,
+        voltage_v: 5.0,
+        max_current_a: 10.0,
+        gamma: 2.2,
+        brightness: 1.0,
+    },
     // Ponto de partida neutro para hardware não catalogado. "Custom" não é um caminho
     // especial no código — é só mais uma linha.
     PresetRow {

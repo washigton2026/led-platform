@@ -106,6 +106,14 @@ impl ShowSigner {
 /// just wrote). To verify a manifest that crossed a trust boundary — the studio→
 /// venue path this signing exists for — use [`verify_manifest_pinned`] with the
 /// operator's known public key.
+#[deprecated(
+    since = "0.1.0",
+    note = "prova INTEGRIDADE, não AUTENTICIDADE: um atacante pode re-assinar um manifest \
+            adulterado com a própria chave e esta função retorna Ok (provado por \
+            redteam_resigned_tamper_defeats_unpinned_verify). Em qualquer fronteira de \
+            confiança use verify_manifest_pinned com a chave confiada out-of-band (ADR-0004). \
+            Mantida para o uso local legítimo: verificar um arquivo que você mesmo acabou de escrever."
+)]
 pub fn verify_manifest(signed: &SignedManifest) -> Result<(), SignatureError> {
     let vk = VerifyingKey::from_bytes(&signed.public_key)
         .map_err(|_| SignatureError::BadPublicKey)?;
@@ -196,6 +204,11 @@ impl SignedManifest {
 
 #[cfg(test)]
 mod tests {
+    // Estes testes exercitam `verify_manifest` DE PROPÓSITO — inclusive o teste de red-team
+    // que documenta o buraco que motivou a depreciação (ADR-0004). Silenciar o aviso aqui é
+    // correto; silenciá-lo em código de produção não seria.
+    #![allow(deprecated)]
+
     use super::*;
     use crate::ShowRecord;
     use led_core::PixelColor;

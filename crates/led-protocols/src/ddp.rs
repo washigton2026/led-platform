@@ -26,7 +26,7 @@
 
 use std::net::{SocketAddr, UdpSocket};
 
-use led_core::PixelColor;
+use led_core::{ColorFormat, PixelColor};
 
 /// Maximum pixels per DDP packet (each pixel = 3 bytes RGB).
 /// 1472 UDP payload − 10 DDP header = 1462 bytes; floor(1462/3) = 487 whole pixels.
@@ -36,13 +36,39 @@ pub const DDP_MAX_PIXELS: usize = 487;
 pub const DDP_MAX_PAYLOAD: usize = DDP_MAX_PIXELS * 3; // 1461
 
 /// DDP data type: 8-bit RGB triples.
+///
+/// **Nota de evidência:** `0x01` **não** é a codificação publicada do campo (que empacota
+/// tipo nos bits 6-4 e bits-por-pixel nos bits 3-0, dando `0x13` para RGB de 8 bits). Mas
+/// `0x01` é o valor **validado contra hardware real** — WLED 16.0.1, 94/94 frames em
+/// 2026-07-20 (`docs/certification/HARDWARE-VALIDATION-2026-07-20.md`). Na prática o WLED
+/// infere o formato pelo tamanho do payload. **Não alterar sem re-validar no rig.**
 const DDP_DTYPE_RGB8: u8 = 0x01;
+
+/// DDP data type para RGBW de 8 bits, seguindo a codificação publicada
+/// (tipo RGBW = `0b011` nos bits 6-4, 8 bits/canal = `0b0011` nos bits 3-0).
+///
+/// ⚠️ **Não validado em hardware.** Diferente do RGB acima, nenhum controlador confirmou
+/// este valor ainda. Como o WLED infere o formato pelo tamanho do payload, o valor tende a
+/// ser irrelevante para ele — mas um receptor estrito pode discordar. Item de validação
+/// quando houver fita RGBW no rig.
+const DDP_DTYPE_RGBW8: u8 = 0x33;
 
 /// DDP flags1: VER1(0x40) | PUSH(0x01) — "this is data, push it immediately".
 const DDP_FLAGS1: u8 = 0x41;
 
 /// DDP port (default).
 pub const DDP_PORT: u16 = 4048;
+
+/// Bytes de payload que cabem num datagrama DDP (1472 UDP − 10 de cabeçalho).
+pub const DDP_MAX_PAYLOAD_BYTES: usize = 1462;
+
+/// Quantos pixels inteiros cabem num pacote para este formato de cor.
+/// RGB (3 canais) → 487; RGBW (4 canais) → 365. É por isso que a fragmentação não pode
+/// usar a constante de RGB quando o formato é RGBW.
+#[inline]
+pub fn max_pixels_per_packet(format: ColorFormat) -> usize {
+    DDP_MAX_PAYLOAD_BYTES / format.channels()
+}
 
 // ── Packet builder ─────────────────────────────────────────────────────────────
 
@@ -88,6 +114,58 @@ pub fn build_ddp_packet(
         buf[b]     = px.r;
         buf[b + 1] = px.g;
         buf[b + 2] = px.b;
+    }
+    total
+}
+
+/// Build a DDP packet honouring a [`ColorFormat`] — o caminho **pixel-nativo RGBW**.
+///
+/// Delega a escrita de cada pixel a [`ColorFormat::write`] (ADR-0011), de modo que a
+/// derivação do canal branco é **a mesma** usada pelo mapper: não existe segunda
+/// implementação de RGBW no projeto.
+///
+/// O byte de data type acompanha o formato: RGB usa o valor validado em hardware, RGBW usa a
+/// codificação publicada (ainda **não** validada em rig — ver [`DDP_DTYPE_RGBW8`]).
+///
+/// # Panics
+/// Se `pixels` estiver vazio, exceder [`max_pixels_per_packet`] ou `buf` for curto demais.
+pub fn build_ddp_packet_format(
+    buf:          &mut [u8],
+    seq:          u8,
+    offset_bytes: u32,
+    pixels:       &[PixelColor],
+    format:       ColorFormat,
+) -> usize {
+    let channels = format.channels();
+    let max_px = max_pixels_per_packet(format);
+    assert!(!pixels.is_empty(), "DDP: pixels must not be empty");
+    assert!(
+        pixels.len() <= max_px,
+        "DDP: {} pixels exceeds max {} per packet for {:?}",
+        pixels.len(),
+        max_px,
+        format
+    );
+    let payload_len = pixels.len() * channels;
+    let total = 10 + payload_len;
+    assert!(buf.len() >= total, "DDP: buffer too small ({} < {})", buf.len(), total);
+
+    buf[0] = DDP_FLAGS1;
+    buf[1] = 0x00;
+    buf[2] = seq;
+    buf[3] = match format {
+        ColorFormat::Rgb(_) => DDP_DTYPE_RGB8,
+        ColorFormat::Rgbw(_, _) => DDP_DTYPE_RGBW8,
+    };
+    buf[4] = (offset_bytes >> 24) as u8;
+    buf[5] = (offset_bytes >> 16) as u8;
+    buf[6] = (offset_bytes >>  8) as u8;
+    buf[7] =  offset_bytes        as u8;
+    buf[8] = (payload_len >> 8) as u8;
+    buf[9] =  payload_len       as u8;
+    for (i, px) in pixels.iter().enumerate() {
+        let b = 10 + i * channels;
+        format.write(*px, &mut buf[b..b + channels]);
     }
     total
 }
@@ -175,6 +253,9 @@ pub struct DdpDevice {
     socket:     UdpSocket,
     target:     SocketAddr,
     seq:        u8,
+    /// Formato de cor por pixel. `Rgb(Rgb)` por padrão — byte-idêntico ao comportamento
+    /// anterior ao suporte RGBW.
+    format:     ColorFormat,
     /// Pre-allocated send buffer (10 + DDP_MAX_PAYLOAD bytes).
     buf:        Box<[u8; 10 + DDP_MAX_PAYLOAD]>,
     /// Byte offset in the destination's pixel buffer where this segment starts.
@@ -201,20 +282,47 @@ impl DdpDevice {
             socket,
             target: addr,
             seq: 0,
+            format: ColorFormat::Rgb(led_core::RgbOrder::Rgb),
             buf: Box::new([0u8; 10 + DDP_MAX_PAYLOAD]),
             pixel_offset,
         })
     }
 
+    /// Cria um device com um [`ColorFormat`] explícito — é assim que o caminho pixel-nativo
+    /// emite RGBW (ADR-0011). A fragmentação passa a usar [`max_pixels_per_packet`], porque
+    /// RGBW cabe 365 px/pacote e não 487.
+    pub fn with_format(
+        addr: SocketAddr,
+        pixel_offset: u32,
+        format: ColorFormat,
+    ) -> std::io::Result<Self> {
+        let mut d = Self::new(addr, pixel_offset)?;
+        d.format = format;
+        Ok(d)
+    }
+
+    /// O formato de cor deste device.
+    pub fn format(&self) -> ColorFormat {
+        self.format
+    }
+
     /// Send `pixels` to the device, automatically fragmenting if needed.
     /// Each fragment's byte offset is derived from `pixel_offset + fragment_start`.
     pub fn send_pixels(&mut self, pixels: &[PixelColor]) -> std::io::Result<()> {
+        let channels = self.format.channels();
+        let max_px = max_pixels_per_packet(self.format);
         let mut sent = 0usize;
         while sent < pixels.len() {
-            let chunk_end = (sent + DDP_MAX_PIXELS).min(pixels.len());
+            let chunk_end = (sent + max_px).min(pixels.len());
             let chunk = &pixels[sent..chunk_end];
-            let byte_offset = (self.pixel_offset as usize + sent) as u32 * 3;
-            let len = build_ddp_packet(self.buf.as_mut(), self.seq, byte_offset, chunk);
+            let byte_offset = ((self.pixel_offset as usize + sent) * channels) as u32;
+            let len = build_ddp_packet_format(
+                self.buf.as_mut(),
+                self.seq,
+                byte_offset,
+                chunk,
+                self.format,
+            );
             self.socket.send(&self.buf[..len])?;
             self.seq = self.seq.wrapping_add(1);
             sent = chunk_end;
@@ -234,11 +342,88 @@ impl DdpDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use led_core::PixelColor;
+    use led_core::{ColorFormat, PixelColor};
 
     fn px(r: u8, g: u8, b: u8) -> PixelColor { PixelColor::rgb(r, g, b) }
 
     // ── Wire format ───────────────────────────────────────────────────────────
+
+    // ── RGBW pixel-nativo (A2) ────────────────────────────────────────────────
+
+    #[test]
+    fn packet_capacity_depends_on_the_colour_format() {
+        use led_core::{RgbOrder, WhiteMode};
+        assert_eq!(max_pixels_per_packet(ColorFormat::Rgb(RgbOrder::Rgb)), 487, "1462/3");
+        assert_eq!(
+            max_pixels_per_packet(ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::Min)),
+            365,
+            "1462/4 — RGBW cabe menos pixels por datagrama"
+        );
+    }
+
+    #[test]
+    fn rgbw_packet_carries_four_channels_with_the_white_derived_by_the_contract() {
+        use led_core::{RgbOrder, WhiteMode};
+        let fmt = ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::Min);
+        let mut buf = [0u8; 64];
+        let px = [px(10, 20, 30)];
+        let len = build_ddp_packet_format(&mut buf, 0, 0, &px, fmt);
+        assert_eq!(len, 14, "10 de cabeçalho + 4 canais");
+        // GRB + W = min(10,20,30) = 10 — mesma derivação do mapper (ADR-0011).
+        assert_eq!(&buf[10..14], &[20, 10, 30, 10]);
+    }
+
+    #[test]
+    fn the_data_type_byte_follows_the_colour_format() {
+        use led_core::{RgbOrder, WhiteMode};
+        let mut buf = [0u8; 64];
+        let px = [px(1, 2, 3)];
+        build_ddp_packet_format(&mut buf, 0, 0, &px, ColorFormat::Rgb(RgbOrder::Rgb));
+        assert_eq!(buf[3], DDP_DTYPE_RGB8, "RGB mantém o valor validado em hardware");
+        build_ddp_packet_format(&mut buf, 0, 0, &px, ColorFormat::Rgbw(RgbOrder::Rgb, WhiteMode::None));
+        assert_eq!(buf[3], DDP_DTYPE_RGBW8, "RGBW usa a codificação publicada (não validada em rig)");
+    }
+
+    /// Retrocompatibilidade: o builder de formato com RGB produz **exatamente** os mesmos
+    /// bytes do builder histórico — o caminho validado em hardware não mudou.
+    #[test]
+    fn rgb_via_format_builder_is_byte_identical_to_the_legacy_builder() {
+        use led_core::RgbOrder;
+        let pixels: Vec<PixelColor> = (0..50).map(|i| px(i as u8, (i * 2) as u8, (i * 3) as u8)).collect();
+        let mut a = [0u8; 10 + DDP_MAX_PAYLOAD];
+        let mut b = [0u8; 10 + DDP_MAX_PAYLOAD];
+        let la = build_ddp_packet(&mut a, 7, 300, &pixels);
+        let lb = build_ddp_packet_format(&mut b, 7, 300, &pixels, ColorFormat::Rgb(RgbOrder::Rgb));
+        assert_eq!(la, lb);
+        assert_eq!(a[..la], b[..lb], "RGB pelo novo caminho == RGB pelo caminho antigo");
+    }
+
+    #[test]
+    fn an_rgbw_device_fragments_at_365_pixels() {
+        use led_core::{RgbOrder, WhiteMode};
+        use std::net::UdpSocket;
+        let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(std::time::Duration::from_millis(500))).unwrap();
+        let addr = rx.local_addr().unwrap();
+
+        let fmt = ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::Min);
+        let mut dev = DdpDevice::with_format(addr, 0, fmt).unwrap();
+        assert_eq!(dev.format(), fmt);
+        // 400 px > 365 → dois pacotes.
+        dev.send_pixels(&vec![px(10, 20, 30); 400]).unwrap();
+
+        let mut buf = [0u8; 2048];
+        let n1 = rx.recv(&mut buf).expect("1º pacote");
+        let p1 = parse_ddp_packet(&buf[..n1]).expect("parse");
+        assert_eq!(p1.payload.len(), 365 * 4, "1º pacote cheio: 365 px RGBW");
+        assert_eq!(p1.offset_bytes, 0);
+        assert_eq!(p1.dtype, DDP_DTYPE_RGBW8);
+
+        let n2 = rx.recv(&mut buf).expect("2º pacote");
+        let p2 = parse_ddp_packet(&buf[..n2]).expect("parse");
+        assert_eq!(p2.payload.len(), 35 * 4, "resto: 400-365 = 35 px");
+        assert_eq!(p2.offset_bytes, 365 * 4, "offset em BYTES avança por 4 canais/pixel");
+    }
 
     #[test]
     fn ddp_header_flags_and_version() {

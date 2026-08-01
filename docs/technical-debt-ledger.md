@@ -331,6 +331,50 @@ note: |
 
 ---
 
+## TD-012 — M6: `CompiledLayout::compile` cresce de forma quadrática em escala
+
+```yaml
+td_id:     TD-012
+title:     "M6: CompiledLayout::compile is superlinear (O(n x universes)) at large pixel counts"
+severity:  Low
+status:    wontfix
+origin:    "Revisao Constitucional HardwareProfile (FASE 1), achado M6 [VALIDAR]"
+measured_on: 2026-07-30
+context: |
+  Em led-core/src/mapping.rs, `compile` faz por atribuicao uma busca linear no vetor de
+  devices (`per_device.iter().position`) e outra na lista de universos daquele device
+  (`.contains(&a.universe)`). A segunda cresce com o numero de universos; com um device
+  unico, universos ~ n/pixels_por_universo, o que da crescimento quadratico em n.
+measurement: |
+  Bench de medicao (sem alterar producao): crates/led-hal/tests/bench_compile_scale.rs
+  (#[ignore]). 1 device, 170 px/universo, dev macOS, build debug:
+      1.000 px ->   0,91 ms
+      6.200 px ->   5,37 ms   (x6,2 pixels -> x5,9 tempo: ainda ~linear)
+     25.000 px ->  46,12 ms   (x4,0 pixels -> x8,6 tempo: superlinear)
+     50.000 px -> 142,46 ms   (x2,0 pixels -> x3,1 tempo)
+    100.000 px -> 516,61 ms   (x2,0 pixels -> x3,6 tempo; quadratico seria x4)
+decision: |
+  RESOLVIDO - nenhuma otimizacao necessaria; otimizacao ADIADA.
+  O crescimento quadratico esta CONFIRMADO, mas `compile` roda UMA vez no startup e nunca
+  no hot path. No rig real (6.200 px) custa 5,4 ms - desprezivel. Mesmo a 100k px sao
+  ~0,5 s de startup em debug (release e substancialmente menor).
+guard: |
+  Guarda falsificavel que roda em toda suite:
+  compiling_the_real_rig_stays_well_under_a_second - 6.200 px deve compilar em < 1 s.
+  Se um dia falhar, a otimizacao deixou de ser opcional.
+revisit_when: |
+  - rigs acima de ~50.000 pixels
+  - startup passar a ser sensivel a latencia (hot-reload de layout, por exemplo)
+  Correcao natural: trocar as buscas lineares por HashMap<(DeviceId,u16), usize> em `compile`.
+  Custo: toca led-core (Frozen no CONTRATO, mas a mudanca seria interna ao corpo da funcao,
+  sem alterar assinatura) - avaliar com semver-guardian na epoca.
+note: |
+  status=wontfix conforme o Status legend deste arquivo. O audit_gate.py so exige
+  evidence_ref/negative_control para status=closed, portanto este registro nao altera o gate.
+```
+
+---
+
 ## Closed items — summary table
 
 | TD-ID   | Title (short)                         | Closed     | Commit   |

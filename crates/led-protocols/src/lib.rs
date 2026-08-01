@@ -39,7 +39,7 @@ pub use artnet::{
     discover_controllers, presence, DiscoveryResult,
     build_art_dmx, find_conflicts, parse_art_dmx, ArtNetDevice, ArtPollReply, ConflictReport,
 };
-pub use ddp::{build_ddp_packet, build_ddp_packet_bytes, parse_ddp_packet, DdpDevice, DdpPacket, DDP_MAX_PAYLOAD, DDP_MAX_PIXELS, DDP_PORT};
+pub use ddp::{build_ddp_packet, build_ddp_packet_bytes, build_ddp_packet_format, max_pixels_per_packet, DDP_MAX_PAYLOAD_BYTES, parse_ddp_packet, DdpDevice, DdpPacket, DDP_MAX_PAYLOAD, DDP_MAX_PIXELS, DDP_PORT};
 pub use device::{multicast_addr, SacnDevice};
 pub use heartbeat::{health, HealthStatus, Heartbeat, HEARTBEAT_MS};
 pub use pool::BufferPool;

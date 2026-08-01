@@ -164,6 +164,20 @@ impl DdpOutput {
             universes_equiv: pixel_count.div_ceil(170) as u16,
         })
     }
+
+    /// Saída DDP pixel-nativa com um [`ColorFormat`] explícito — é assim que um preset RGBW
+    /// (ADR-0011/0018) chega ao fio por DDP. O branco é derivado pelo mesmo contrato usado
+    /// no mapper; não há segunda implementação.
+    pub fn with_format(
+        addr: std::net::SocketAddr,
+        pixel_count: usize,
+        format: led_core::ColorFormat,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            dev: std::sync::Mutex::new(led_protocols::DdpDevice::with_format(addr, 0, format)?),
+            universes_equiv: pixel_count.div_ceil(170) as u16,
+        })
+    }
 }
 
 impl ProtocolOutput for DdpOutput {

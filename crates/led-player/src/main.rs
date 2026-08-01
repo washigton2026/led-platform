@@ -278,10 +278,11 @@ fn main() -> ExitCode {
     // Layout + calibração: de um HardwareProfile quando `--profile` é dado, senão o
     // comportamento histórico (RGB linear, 170 px/universo). O app é o ponto de composição —
     // é aqui que o descritor de design-time vira artefatos de runtime (ADR-0018/0019).
-    let (layout, calibration) = match &profile_name {
+    let (layout, calibration, profile_color) = match &profile_name {
         None => (
             CompiledLayout::compile(&linear_assignments(px, 0, first_universe, RgbOrder::Rgb)),
             led_hal::Calibration::new(),
+            None,
         ),
         Some(name) => {
             use led_hardware_profile as hwp;
@@ -325,7 +326,7 @@ fn main() -> ExitCode {
                 profile.calibration.gamma,
                 profile.calibration.brightness,
             );
-            (layout, cal)
+            (layout, cal, Some(profile.capabilities.color))
         }
     };
 
@@ -349,9 +350,16 @@ fn main() -> ExitCode {
     };
     let output: Box<dyn led_core::ProtocolOutput> = if let Some(dest) = ddp {
         // Pixel-native DDP: 487 px/datagram, no universe mapping (WLED-friendly).
-        match DdpOutput::new(dest, px) {
+        let built = match profile_color {
+            Some(fmt) => DdpOutput::with_format(dest, px, fmt),
+            None => DdpOutput::new(dest, px),
+        };
+        match built {
             Ok(o) => {
-                println!("output: DDP {dest} (pixel-native)");
+                match profile_color {
+                    Some(fmt) => println!("output: DDP {dest} (pixel-native, {fmt:?})"),
+                    None => println!("output: DDP {dest} (pixel-native)"),
+                }
                 if !calibration.is_empty() {
                     eprintln!(
                         "⚠ calibração do profile NÃO se aplica no caminho DDP pixel-nativo: \
