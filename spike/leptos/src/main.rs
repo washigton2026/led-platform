@@ -1,9 +1,10 @@
 //! Protótipo Leptos (CSR) para o spike de stack (ADR-0016). Mesma tela do protótipo React.
 //!
-//! ⚠️ NÃO compilado no ambiente do agente (faltam trunk + target wasm32). Rode você:
-//!   rustup target add wasm32-unknown-unknown && cargo install trunk && trunk serve
-//! Pequenos ajustes de API do Leptos 0.6 podem ser necessários ao rodar — isso é trabalho
-//! normal de spike; nada aqui foi "medido" nem carimbado pelo agente.
+//! **Compila** para `wasm32-unknown-unknown` (verificado em 2026-07-30, 44,98 s em debug),
+//! após 2 correções: `HtmlElement<Canvas>` precisa de `Deref` em vez de `.into()`, e
+//! `set_fill_style` está depreciado. Para SERVIR no browser ainda é preciso o `trunk`:
+//!   cargo install trunk && trunk serve
+//! Os eixos de leitor de tela e DX continuam sendo medição humana — ver spike/README.md.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -103,7 +104,9 @@ fn Preview() -> impl IntoView {
     let canvas_ref = create_node_ref::<html::Canvas>();
 
     canvas_ref.on_load(move |canvas| {
-        let canvas: web_sys::HtmlCanvasElement = canvas.into();
+        // Leptos 0.6: `HtmlElement<Canvas>` faz Deref para `web_sys::HtmlCanvasElement`;
+        // `.into()` NÃO existe para esse par (foi o 1º erro real de compilação do spike).
+        let canvas: web_sys::HtmlCanvasElement = (*canvas).clone();
         canvas.set_width(640);
         canvas.set_height(240);
         let ctx = canvas
@@ -122,9 +125,9 @@ fn Preview() -> impl IntoView {
         let g = f.clone();
         *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
             let (w, h) = (640.0, 240.0);
-            ctx.set_fill_style(&JsValue::from_str("#0b0b0b"));
+            ctx.set_fill_style_str("#0b0b0b");
             ctx.fill_rect(0.0, 0.0, w, h);
-            ctx.set_fill_style(&JsValue::from_str("#4fc3f7"));
+            ctx.set_fill_style_str("#4fc3f7");
             for p in pts.iter_mut() {
                 p.0 += p.2;
                 p.1 += p.3;

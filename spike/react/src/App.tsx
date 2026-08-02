@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import axe from 'axe-core'
 import { fixture, type Health } from './readmodel'
 
 // Colour-blind-safe status: never colour-only — a symbol + a word carry the meaning too.
@@ -75,7 +76,44 @@ export function App() {
         <h2 id="pv-h">Preview</h2>
         <Preview />
       </section>
+
+      <section aria-labelledby="ax-h">
+        <h2 id="ax-h">Acessibilidade (axe-core)</h2>
+        <AxeReport />
+      </section>
     </main>
+  )
+}
+
+/**
+ * Roda o axe-core na própria página e mostra a contagem de violações por severidade.
+ * É a medição do eixo de acessibilidade da ADR-0016 — reprodutível por qualquer pessoa que
+ * abra o protótipo, sem depender de extensão de browser.
+ */
+function AxeReport() {
+  const [out, setOut] = useState<string>('medindo…')
+  useEffect(() => {
+    const t = setTimeout(() => {
+      axe
+        .run(document, { resultTypes: ['violations'] })
+        .then((r) => {
+          const by: Record<string, number> = {}
+          for (const v of r.violations) by[v.impact ?? 'unknown'] = (by[v.impact ?? 'unknown'] ?? 0) + 1
+          const ids = r.violations.map((v) => `${v.id}(${v.impact})×${v.nodes.length}`).join(', ')
+          setOut(
+            `axe ${axe.version} · violações: ${r.violations.length}` +
+              (r.violations.length ? ` · ${JSON.stringify(by)} · ${ids}` : ' · nenhuma') +
+              ` · regras aprovadas: ${r.passes.length}`,
+          )
+        })
+        .catch((e) => setOut(`erro: ${String(e)}`))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [])
+  return (
+    <p data-testid="axe-report" style={{ fontFamily: 'monospace', fontSize: 13 }}>
+      {out}
+    </p>
   )
 }
 

@@ -15,6 +15,49 @@ WebGPU de ~10k pontos com fallback 2D.
 
 ---
 
+## Resultados MEDIDOS pelo agente (2026-07-30)
+
+Parte do spike **foi executada de verdade** — o que segue é evidência, não estimativa. O que
+não pôde ser medido está marcado como tal e continua com você.
+
+| Eixo | React/Vite | Leptos/WASM |
+|---|---|---|
+| **Compila de primeira** | ✅ sim | ❌ **2 correções** necessárias¹ |
+| **Build** | `vite build` **1,64 s** | `cargo build --target wasm32` **44,98 s** (debug)² |
+| **Bundle** | **47 kB gzip** | ⏳ precisa de `trunk` para empacotar |
+| **axe-core** | ✅ **0 violações · 37 regras aprovadas** (axe 4.12.1) | ⏳ não medido (precisa servir a página) |
+| **Árvore de a11y** | ✅ `main` · `status`+`aria-live=polite` · `region`+headings · `table`+caption · `img`+label | ⏳ não medido — o HTML é o mesmo, mas *não presumir* |
+| **WebGPU disponível** | ✅ `navigator.gpu = true` | mesmo browser |
+| **fps (Canvas2D, 10k pts)** | **3 fps** | ⏳ não medido (mesma abordagem, mesmo resultado esperado) |
+| **Leitor de tela real** | ❌ **só você** (VoiceOver/NVDA) | ❌ **só você** |
+| **Teclado interativo** | ⚠️ estrutura OK (`<button>` nativo); input sintético deu timeout | ❌ só você |
+| **DX subjetiva** | ❌ **só você** | ❌ **só você** |
+
+¹ As duas correções foram: `HtmlElement<Canvas>` não converte por `.into()` para
+`web_sys::HtmlCanvasElement` (precisa de `Deref`), e `set_fill_style` está depreciado
+(`set_fill_style_str`). **Ressalva de justiça:** esse código foi escrito às cegas pelo agente,
+sem poder compilar; um dev com a documentação aberta resolveria em minutos. O sinal é fraco.
+
+² Comparação imperfeita: `vite build` é bundle de produção, `cargo build` é wasm em debug.
+Serve para ordem de grandeza, não para um número final.
+
+### 🔴 O achado que muda o desenho: **3 fps**
+
+O critério da ADR-0016 é **≥ 30 fps**. O preview com **Canvas2D e 10k `fillRect` individuais
+entrega 3 fps** — reprovado por uma ordem de grandeza. Isso é independente de framework (as
+duas stacks usariam o mesmo canvas) e **prova empiricamente** o que o ADR-0015 assumia por
+teoria: o preview **precisa** ser WebGPU/instanced. Um preview ingênuo não é viável.
+
+> Ressalva: medido no painel de navegador do agente, que pode estar throttled; e o protótipo
+> **não** implementa o caminho WebGPU (só verifica que ele existe). O número real do WebGPU
+> continua por medir.
+
+### O que isto ainda NÃO decide
+
+Os dois eixos que a ADR-0016 trata como decisivos — **experiência com leitor de tela** e
+**DX** — continuam sendo julgamento humano. O agente não os carimbou. A a11y *estrutural* do
+desenho está provada (0 violações); a *experiência* não.
+
 ## Como rodar
 
 ### React/Vite (`spike/react/`) — roda com o Node deste ambiente
