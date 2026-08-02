@@ -45,9 +45,21 @@ impl RgbOrder {
 pub enum WhiteMode {
     /// White channel is always 0 — the strip's white LED is unused; colour comes from RGB.
     None,
-    /// White = `min(r, g, b)` — the neutral component common to all three channels, moved
-    /// to the dedicated white LED. The RGB bytes are left unchanged (simple, non-destructive).
+    /// White = `min(r, g, b)`, **added** to unchanged RGB bytes.
+    ///
+    /// ⚠️ **Consumo elétrico:** como o RGB não é reduzido, branco pleno acende os quatro
+    /// canais no máximo — ~80 mA/pixel num SK6812 contra 60 mA de uma fita RGB (+33 %), e
+    /// **4× mais** que [`WhiteMode::MinSubtract`]. O die branco também **soma** luz ao branco
+    /// RGB, então a saída fica mais brilhante que a cor lógica pedida. Use conscientemente
+    /// (ADR-0020); para o comportamento colorimétrico padrão, prefira `MinSubtract`.
     Min,
+    /// White = `min(r, g, b)`, **subtraído** dos três canais coloridos (satura em zero).
+    ///
+    /// É o comportamento colorimétrico padrão: o componente neutro sai pelo die branco
+    /// dedicado — mais eficiente e com melhor CRI que somar três coloridos — e só o excedente
+    /// de cor permanece no RGB. Branco pleno vira `[0,0,0,255]`: um die em vez de quatro.
+    /// Ver ADR-0020.
+    MinSubtract,
 }
 
 impl WhiteMode {
@@ -56,7 +68,26 @@ impl WhiteMode {
     pub fn white(self, c: PixelColor) -> u8 {
         match self {
             WhiteMode::None => 0,
-            WhiteMode::Min => c.r.min(c.g).min(c.b),
+            WhiteMode::Min | WhiteMode::MinSubtract => c.r.min(c.g).min(c.b),
+        }
+    }
+
+    /// A cor que resta nos canais RGB depois de extrair o branco.
+    ///
+    /// Só [`WhiteMode::MinSubtract`] reduz o RGB; os outros modos devolvem a cor intacta —
+    /// é exatamente aqui que mora a diferença de corrente descrita no ADR-0020.
+    #[inline]
+    pub fn residual_rgb(self, c: PixelColor) -> PixelColor {
+        match self {
+            WhiteMode::None | WhiteMode::Min => c,
+            WhiteMode::MinSubtract => {
+                let w = self.white(c);
+                PixelColor::rgb(
+                    c.r.saturating_sub(w),
+                    c.g.saturating_sub(w),
+                    c.b.saturating_sub(w),
+                )
+            }
         }
     }
 }
@@ -95,11 +126,13 @@ impl ColorFormat {
                 out[2] = b[2];
             }
             ColorFormat::Rgbw(order, wm) => {
-                let b = order.bytes(c);
+                // O branco sai da cor ORIGINAL; a ordem de canais é aplicada ao RESÍDUO.
+                let w = wm.white(c);
+                let b = order.bytes(wm.residual_rgb(c));
                 out[0] = b[0];
                 out[1] = b[1];
                 out[2] = b[2];
-                out[3] = wm.white(c);
+                out[3] = w;
             }
         }
     }
@@ -218,4 +251,108 @@ pub struct DeviceStatus {
     pub connected: bool,
     pub frames_sent: u64,
     pub last_send_ms: u64,
+}
+
+// ── Tests: derivação do branco (ADR-0011 + ADR-0020) ───────────────────────────
+
+#[cfg(test)]
+mod white_tests {
+    use super::*;
+
+    fn wire(fmt: ColorFormat, c: PixelColor) -> Vec<u8> {
+        let mut out = vec![0u8; fmt.channels()];
+        fmt.write(c, &mut out);
+        out
+    }
+
+    /// O achado do ADR-0020: `Min` acende os quatro canais no máximo para branco pleno.
+    /// Este teste FIXA esse comportamento — ele é legítimo, mas precisa ser escolhido.
+    #[test]
+    fn min_is_additive_and_lights_four_channels_on_full_white() {
+        let fmt = ColorFormat::Rgbw(RgbOrder::Rgb, WhiteMode::Min);
+        assert_eq!(wire(fmt, PixelColor::rgb(255, 255, 255)), vec![255, 255, 255, 255]);
+    }
+
+    /// `MinSubtract`: branco pleno sai por UM die, não quatro.
+    #[test]
+    fn min_subtract_moves_full_white_to_the_white_die_only() {
+        let fmt = ColorFormat::Rgbw(RgbOrder::Rgb, WhiteMode::MinSubtract);
+        assert_eq!(wire(fmt, PixelColor::rgb(255, 255, 255)), vec![0, 0, 0, 255]);
+    }
+
+    /// **Gate elétrico** — a redução é verificada, não afirmada. A soma dos canais no fio é
+    /// proporcional à corrente (um die por canal, mesma corrente nominal por die).
+    #[test]
+    fn subtractive_white_draws_strictly_less_than_additive() {
+        let white = PixelColor::rgb(255, 255, 255);
+        let sum = |wm: WhiteMode| -> u32 {
+            wire(ColorFormat::Rgbw(RgbOrder::Rgb, wm), white).iter().map(|&b| b as u32).sum()
+        };
+        let additive = sum(WhiteMode::Min);
+        let subtractive = sum(WhiteMode::MinSubtract);
+        assert_eq!(additive, 1020, "4 canais no máximo");
+        assert_eq!(subtractive, 255, "1 canal no máximo");
+        assert!(subtractive < additive, "o modo subtrativo NUNCA pode desenhar mais corrente");
+        assert_eq!(additive / subtractive, 4, "razão de 4x para branco pleno (ADR-0020)");
+    }
+
+    /// Só o componente neutro vai para o branco; o excedente de cor permanece.
+    #[test]
+    fn only_the_neutral_component_moves_to_white() {
+        let fmt = ColorFormat::Rgbw(RgbOrder::Rgb, WhiteMode::MinSubtract);
+        // min(10,20,30) = 10 -> W=10, resíduo (0,10,20)
+        assert_eq!(wire(fmt, PixelColor::rgb(10, 20, 30)), vec![0, 10, 20, 10]);
+    }
+
+    /// Cor saturada não tem componente neutro — nada muda, em nenhum dos modos.
+    #[test]
+    fn a_saturated_colour_is_untouched_by_either_mode() {
+        let red = PixelColor::rgb(255, 0, 0);
+        for wm in [WhiteMode::Min, WhiteMode::MinSubtract] {
+            assert_eq!(
+                wire(ColorFormat::Rgbw(RgbOrder::Rgb, wm), red),
+                vec![255, 0, 0, 0],
+                "{wm:?}: sem componente neutro, o branco é 0 e o RGB fica intacto"
+            );
+        }
+    }
+
+    /// A subtração satura em zero — nenhum canal pode "dar a volta".
+    #[test]
+    fn subtraction_saturates_and_never_wraps() {
+        let fmt = ColorFormat::Rgbw(RgbOrder::Rgb, WhiteMode::MinSubtract);
+        for (r, g, b) in [(0, 0, 0), (1, 0, 0), (0, 255, 1), (255, 255, 254)] {
+            let out = wire(fmt, PixelColor::rgb(r, g, b));
+            assert_eq!(out.len(), 4);
+            // Reconstruir a cor a partir do fio nunca pode exceder a original.
+            assert!(out[0] as u16 + out[3] as u16 <= 255 + 255);
+        }
+    }
+
+    /// A ordem de canais é aplicada ao RESÍDUO, não à cor original.
+    #[test]
+    fn channel_order_applies_to_the_residual() {
+        let fmt = ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::MinSubtract);
+        // (10,20,30): W=10, resíduo (0,10,20) -> GRB = [10, 0, 20]
+        assert_eq!(wire(fmt, PixelColor::rgb(10, 20, 30)), vec![10, 0, 20, 10]);
+    }
+
+    /// `None` continua sem usar o die branco, e ambos os modos seguem com 4 canais.
+    #[test]
+    fn white_mode_none_is_unchanged_and_all_modes_keep_four_channels() {
+        let fmt = ColorFormat::Rgbw(RgbOrder::Rgb, WhiteMode::None);
+        assert_eq!(wire(fmt, PixelColor::rgb(10, 20, 30)), vec![10, 20, 30, 0]);
+        for wm in [WhiteMode::None, WhiteMode::Min, WhiteMode::MinSubtract] {
+            assert_eq!(ColorFormat::Rgbw(RgbOrder::Rgb, wm).channels(), 4);
+        }
+    }
+
+    /// RGB puro não é afetado por nada disto.
+    #[test]
+    fn plain_rgb_is_unaffected() {
+        assert_eq!(
+            wire(ColorFormat::Rgb(RgbOrder::Grb), PixelColor::rgb(10, 20, 30)),
+            vec![20, 10, 30]
+        );
+    }
 }

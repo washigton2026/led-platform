@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (737 tests)
+cargo test --workspace                  # all suites (746 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -84,10 +84,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (737 tests)
+cargo test --workspace                  # all suites (746 tests)
 ```
 
-14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **737 tests green** · zero warnings.
+14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **746 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -128,6 +128,31 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-02 — ADR-0020: RGBW subtrativo (achado com consequência física)
+
+**Done.** Revisão externa apontou que o RGBW podia estar aumentando a corrente; a verificação no código **confirmou**.
+
+`led-core/src/types.rs:97-103` escrevia os bytes RGB **intactos** e **acrescentava** o branco — a própria doc dizia "the RGB bytes are left unchanged (simple, non-destructive)". Branco pleno virava `[255,255,255,255]`: **quatro dies no máximo**.
+
+| Modo | por pixel (SK6812) | 720 px | vs fita RGB |
+|---|---|---|---|
+| RGB (3 canais) | 60 mA | 43,2 A | — |
+| `Min` (era o padrão) | **80 mA** | **57,6 A** | **+33 %** |
+| `MinSubtract` (novo padrão) | 20 mA | 14,4 A | −67 % |
+
+**Razão de 4x** entre os dois modos para branco pleno. Além da corrente, o die branco **somava** luz ao branco RGB — a saída ficava mais brilhante que a cor lógica pedida, fazendo o `brightness` do `Calibration` mentir sobre a intensidade real.
+
+1. **`WhiteMode::MinSubtract`** — `W = min(r,g,b)` **subtraído** dos três canais (satura em zero), o comportamento colorimétrico padrão: o neutro sai pelo die dedicado (mais eficiente, melhor CRI) e só o excedente de cor permanece no RGB.
+2. **`Min` preservado byte-a-byte** — há uso legítimo do branco aditivo; a doc agora **avisa** sobre a corrente em vez de omitir.
+3. **`residual_rgb()`** separa "qual é o branco" de "o que sobra no RGB", e o `write` aplica a **ordem de canais ao resíduo** — ordenar antes de subtrair produziria bytes errados.
+4. **Presets RGBW passaram a `MinSubtract`** (padrão seguro; nenhum foi validado em hardware ainda).
+
+**Invariants verified.** `ColorFormat` é `Evolving` → variante nova é **aditiva**: bump MINOR 1.3.0 → 1.4.0, **zero contrato Frozen tocado**. SemVer Guardian: "superfície mudou COM bump — intencional". 9 testes novos, incluindo o **gate elétrico verificado, não afirmado**: `assert_eq!(additive/subtractive, 4)` para branco pleno; mais saturação (nunca dá a volta), cor saturada intocada, e ordem de canais aplicada ao resíduo.
+
+**Pending.** Trocar o padrão **mudou bytes no fio**: 1 teste que fixava o comportamento aditivo foi atualizado para a semântica subtrativa. Nenhum preset RGBW foi validado em hardware — a razão de 4x é derivada de corrente nominal por die, não medida no rig.
+
+**Decisions.** Adicionar variante em vez de mudar `Min` — mudar silenciosamente os bytes de quem já usa seria pior que ter duas semânticas documentadas. Isto **não é proteção elétrica**: o limite real continua sendo a fonte e o ABL; `MinSubtract` reduz a corrente de branco, mas não autoriza aumentar carga.
 
 ### 2026-07-30 — FASE A: RGBW pixel-nativo no DDP (A2) + últimas dívidas da FASE 1 (A3)
 

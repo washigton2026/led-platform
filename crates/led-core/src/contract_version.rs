@@ -45,9 +45,10 @@ pub const MUSICAL_SECTION_VERSION: &str = "1.0.0";
 
 /// The overall `led-core` contract version.
 /// Bump MINOR for additive changes, MAJOR for breaking.
+/// 1.4.0 — `WhiteMode::MinSubtract` + `residual_rgb` (ADR-0020, aditivo: `Min` inalterado).
 /// 1.3.0 — `ColorFormat`/`WhiteMode` added; `PixelPhysical.order` → `format` (ADR-0011,
 /// additive RGBW support; no Frozen seam signature changed).
-pub const LED_CORE_CONTRACT_VERSION: &str = "1.3.0";
+pub const LED_CORE_CONTRACT_VERSION: &str = "1.4.0";
 
 /// Contract stability guarantees as a structured record.
 #[derive(Debug, Clone, PartialEq)]

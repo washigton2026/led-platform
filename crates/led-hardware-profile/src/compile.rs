@@ -161,15 +161,16 @@ mod tests {
     #[test]
     fn rgbw_lays_out_four_channels_per_pixel() {
         let p = profile("generic-sk6812-rgbw-sacn"); // 128 px/universo, RGBW GRB + WhiteMode::Min
-        assert_eq!(p.capabilities.color, ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::Min));
+        assert_eq!(p.capabilities.color, ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::MinSubtract));
         let layout = compile_layout(&p, 256, 0, 1).expect("compila");
         assert_eq!(layout.universe_count(), 2, "256 px / 128 = 2 universos");
 
         let mut scratch = layout.make_scratch();
         let mut px = vec![PixelColor::default(); 256];
-        px[1] = PixelColor::rgb(10, 20, 30); // GRB + W=min(10,20,30)=10
+        px[1] = PixelColor::rgb(10, 20, 30);
         layout.apply(&LogicalFrame::new(px, 0), &mut scratch);
-        assert_eq!(&scratch[0].data[4..8], &[20, 10, 30, 10], "pixel 1 começa no canal 4");
+        // MinSubtract (ADR-0020): W=10, resíduo (0,10,20), ordem GRB -> [10, 0, 20].
+        assert_eq!(&scratch[0].data[4..8], &[10, 0, 20, 10], "pixel 1 começa no canal 4");
     }
 
     #[test]

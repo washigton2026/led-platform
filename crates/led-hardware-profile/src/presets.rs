@@ -157,6 +157,8 @@ pub const PRESETS: &[PresetRow] = &[
     },
     // Fita RGBW sobre sACN: RGBW é um VALOR de `color`, não um tipo de hardware. Note o
     // `pixels_per_universe` menor — 128 × 4 canais = 512, o limite que o validador cobra.
+    // `MinSubtract` é o padrão seguro (ADR-0020): branco pleno sai por um die em vez de
+    // quatro, o que evita ~4x de corrente. Quem quiser branco aditivo declara `Min`.
     PresetRow {
         name: "generic-sk6812-rgbw-sacn",
         vendor: "generic",
@@ -165,7 +167,7 @@ pub const PRESETS: &[PresetRow] = &[
         firmware_version: "n/a",
         protocol: Protocol::Sacn,
         output_interface: OutputInterface::Ethernet,
-        color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::Min),
+        color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::MinSubtract),
         supports_discovery: false,
         supports_metrics: false,
         pixels_per_universe: 128,
@@ -188,7 +190,7 @@ pub const PRESETS: &[PresetRow] = &[
         firmware_version: "16.0.1",
         protocol: Protocol::Ddp,
         output_interface: OutputInterface::Ethernet,
-        color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::Min),
+        color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::MinSubtract),
         supports_discovery: true,
         supports_metrics: true,
         pixels_per_universe: 128,

@@ -30,6 +30,7 @@ recuperada do changelog.
 | [0017](0017-blackout-intencional-vs-heartbeat.md) | Blackout intencional × invariante do heartbeat — decisão adiada | proposto (adiado) | 2026-07-26 |
 | [0018](0018-hardwareprofile-capacidades-design-time.md) | `HardwareProfile`: descritor de capacidades em design-time (presets são dado; compila para os seams) | aceito (pré-impl.) | 2026-07-29 |
 | [0019](0019-calibracao-por-output-no-hal.md) | Calibração por-output (gamma+brightness) aplicada no HAL, por device, sem tocar contrato Frozen | aceito | 2026-07-29 |
+| [0020](0020-whitemode-subtrativo.md) | `WhiteMode::MinSubtract`: derivação subtrativa do branco (RGBW deixa de somar ~4x de corrente) | aceito | 2026-08-02 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma
