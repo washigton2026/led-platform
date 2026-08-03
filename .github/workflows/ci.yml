@@ -40,7 +40,28 @@ jobs:
       - name: Build (sem feature gpu — hardware-gated)
         run: cargo build --workspace --all-targets --locked
       - name: Test
-        run: cargo test --workspace --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --locked --no-fail-fast 2>&1 | tee test-output.txt
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # A CI que falha sem dizer QUAL teste falhou é uma CI ruim. Emitimos anotações
+            # com file/line (extraídas do local do panic) porque essas aparecem mesmo para
+            # quem não está autenticado — logs e job summary exigem login.
+            echo "::group::falhas"
+            grep -aE '^test .* FAILED|panicked at|^\s+left:|^\s+right:' test-output.txt | head -40
+            echo "::endgroup::"
+            grep -aoE 'panicked at [^:]+:[0-9]+:[0-9]+' test-output.txt | sort -u | head -10 | \
+              while IFS= read -r loc; do
+                f=$(echo "$loc" | sed -E 's/panicked at ([^:]+):([0-9]+):.*/\1/')
+                l=$(echo "$loc" | sed -E 's/panicked at ([^:]+):([0-9]+):.*/\2/')
+                printf '::error file=%s,line=%s::teste falhou aqui (${{ matrix.os }})\n' "$f" "$l"
+              done
+            grep -aE '^test .* FAILED' test-output.txt | head -10 | \
+              while IFS= read -r t; do printf '::error::%s\n' "$t"; done
+          fi
+          exit $code
       - name: Clippy (-D warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
