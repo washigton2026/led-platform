@@ -293,10 +293,10 @@ autenticidade. Falta o **outro lado** — tocar isso dentro do traje.
 
 | # | Item | Nota |
 |---|---|---|
-| F1 | **ADR: wearable autônomo × streaming** | a decisão que abre a fase |
-| F2 | **`bake`**: show → artefato que roda no controlador | reusa `.lumyx` + manifest |
-| F3 | **Player embarcado** | firmware ou WLED preset — decisão de plataforma |
-| F4 | **Sync multi-traje**: start comum + medição de **drift** ao longo do número | `net_time` já resolve o análogo cabeado (±10 ms medido) |
+| F1 | **ADR: wearable autônomo × streaming** | 🟡 **[ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md) escrito — proposto, aguarda aceite.** 8 decisões, 10 critérios, 8 gates, 4 questões em aberto |
+| F2 | **`bake`**: show → artefato que roda no controlador | ⚠️ dimensionar antes: o artefato do rig tem **73 MB** (Q4 do ADR-0022) |
+| F3 | **Player embarcado** | firmware ou WLED preset — decisão de plataforma, **fora do escopo do ADR-0022** |
+| F4 | **Sync multi-traje**: start comum + medição de **drift** ao longo do número | `net_time` já resolve o análogo cabeado (±10 ms medido). **Achado do scan F1:** o `led-player` hoje é *livre-corrente* — precisa de pacing por instante absoluto (D3) |
 | F5 | **Orçamento wearable**: bateria, corrente, peso, calor, segurança de contato | aqui `MinSubtract` já paga: **−67 % de corrente** no branco |
 | F6 | **Degradação segura**: um traje que falha não pode derrubar o número | análogo ao failover de cluster |
 
