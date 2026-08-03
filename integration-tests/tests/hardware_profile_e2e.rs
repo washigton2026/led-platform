@@ -84,7 +84,7 @@ fn preset_to_wire_bytes_end_to_end() {
 fn rgbw_preset_reaches_the_device_as_four_channels() {
     let registry = HardwareRegistry::with_builtin();
     let profile = registry.profile("generic-sk6812-rgbw-sacn").expect("preset RGBW");
-    assert_eq!(profile.capabilities.color, ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::Min));
+    assert_eq!(profile.capabilities.color, ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::MinSubtract));
 
     let available = Available {
         interfaces: &[OutputInterface::Ethernet],
@@ -100,14 +100,15 @@ fn rgbw_preset_reaches_the_device_as_four_channels() {
     let hal = Hal::new(layout, vec![sim.clone() as Arc<dyn DeviceDriver>]);
 
     let mut pixels = vec![PixelColor::default(); 128];
-    pixels[1] = PixelColor::rgb(10, 20, 30); // GRB + W = min(10,20,30) = 10
+    pixels[1] = PixelColor::rgb(10, 20, 30);
     hal.send_frame(&LogicalFrame::new(pixels, 0)).expect("send");
 
-    // Pixel 1 começa no canal 4 porque o formato declarado tem 4 canais/pixel.
-    assert_eq!(sim.channel(FIRST_UNIVERSE, 4), Some(20), "G");
-    assert_eq!(sim.channel(FIRST_UNIVERSE, 5), Some(10), "R");
-    assert_eq!(sim.channel(FIRST_UNIVERSE, 6), Some(30), "B");
-    assert_eq!(sim.channel(FIRST_UNIVERSE, 7), Some(10), "W derivado no mapper (WhiteMode::Min)");
+    // Pixel 1 começa no canal 4 (4 canais/pixel). Com `MinSubtract` (ADR-0020):
+    // W = min(10,20,30) = 10; resíduo = (0,10,20); ordem GRB no resíduo = [10, 0, 20].
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 4), Some(10), "G do resíduo");
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 5), Some(0), "R do resíduo — o neutro saiu p/ o branco");
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 6), Some(20), "B do resíduo");
+    assert_eq!(sim.channel(FIRST_UNIVERSE, 7), Some(10), "W derivado no mapper");
 }
 
 /// Um `pixels_per_universe` **declarado abaixo do máximo** é honrado até os bytes — é a razão
