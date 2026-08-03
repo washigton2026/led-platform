@@ -40,9 +40,10 @@ jobs:
       - name: Build (sem feature gpu — hardware-gated)
         run: cargo build --workspace --all-targets --locked
       - name: Test
-        shell: bash
+        # `bash {0}` (sem -e): o padrao do GitHub e `bash -eo pipefail`, que mata o step no
+        # pipeline que falha — antes do diagnostico rodar. Mesma classe do KB-013 deste repo.
+        shell: bash {0}
         run: |
-          set -o pipefail
           cargo test --workspace --locked --no-fail-fast 2>&1 | tee test-output.txt
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
