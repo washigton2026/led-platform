@@ -322,7 +322,24 @@ revisit_when: |
   - cluster (SyncedCluster com múltiplos segmentos ativos)
   - multi-nó físico (2+ nós reais)
   - senders concorrentes de alta frequência (contenção deixa de ser rara)
+  - **QUALQUER mudança na forma do fan-out — em particular o ADR-0012 (fan-out paralelo)**
   Caminho natural se revisitado: ArcSwap/triple-buffer no scratch (precedente ADR-0002).
+adr_0012_link: |
+  Ligação com o ADR-0012, com o mecanismo CORRETO (uma revisão externa sugeriu que o
+  fan-out paralelo aumentaria a contenção; a verificação em hal.rs:151-175 mostra que
+  o mecanismo é outro):
+
+  Hoje o lock do scratch é adquirido UMA vez por send_frame e mantido durante TODO o
+  fan-out sequencial — os send_physical acontecem DENTRO do lock. Portanto:
+
+  - fan-out paralelo NAO acrescenta threads disputando o lock (ele paraleliza o lado
+    CONSUMIDOR; os produtores continuam sendo render + heartbeat);
+  - o que muda e o TEMPO DE POSSE do lock, que hoje domina a medicao. Sends
+    concorrentes tendem a ENCURTAR esse tempo, o que REDUZIRIA a contencao.
+
+  Conclusao: a medicao de TD-011 esta amarrada a forma atual do fan-out. Implementar o
+  ADR-0012 a torna NAO REPRESENTATIVA — em qualquer direcao — e exige RE-MEDIR antes de
+  qualquer conclusao. Nao e "vai piorar"; e "deixa de valer".
 note: |
   status=wontfix conforme o Status legend deste arquivo ("acknowledged, intentionally
   deferred"). O audit_gate.py só exige evidence_ref/negative_control para status=closed
