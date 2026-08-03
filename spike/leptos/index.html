@@ -5,5 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LUMYX Spike — Leptos</title>
   </head>
-  <body></body>
+  <body>
+    <!-- Mesma medição de a11y do protótipo React: axe roda na propria pagina e escreve o
+         resultado no DOM, para ser lido por qualquer um (e comparavel entre as duas stacks). -->
+    <link data-trunk rel="copy-file" href="axe.min.js" />
+    <script src="/axe.min.js"></script>
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (!window.axe) return;
+          window.axe.run(document, { resultTypes: ['violations'] }).then(function (r) {
+            var by = {};
+            r.violations.forEach(function (v) { by[v.impact] = (by[v.impact] || 0) + 1; });
+            var ids = r.violations.map(function (v) { return v.id + '(' + v.impact + ')x' + v.nodes.length; }).join(', ');
+            var p = document.createElement('p');
+            p.setAttribute('data-testid', 'axe-report');
+            p.style.fontFamily = 'monospace';
+            p.style.fontSize = '13px';
+            p.textContent = 'axe ' + window.axe.version + ' · violacoes: ' + r.violations.length +
+              (r.violations.length ? ' · ' + JSON.stringify(by) + ' · ' + ids : ' · nenhuma') +
+              ' · regras aprovadas: ' + r.passes.length;
+            var h = document.createElement('h2');
+            h.textContent = 'Acessibilidade (axe-core)';
+            (document.querySelector('main') || document.body).append(h, p);
+          });
+        }, 600);
+      });
+    </script>
+  </body>
 </html>

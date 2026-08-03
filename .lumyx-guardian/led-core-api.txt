@@ -33,6 +33,7 @@ pub fn linear
 pub fn linear_format
 pub fn make_scratch
 pub fn new
+pub fn residual_rgb
 pub fn simulator
 pub fn to_json
 pub fn universe_count
