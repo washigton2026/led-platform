@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (746 tests)
+cargo test --workspace                  # all suites (771 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -84,10 +84,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (746 tests)
+cargo test --workspace                  # all suites (771 tests)
 ```
 
-14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **746 tests green** · zero warnings.
+14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **771 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -98,7 +98,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-hal` | HAL + mapping + heartbeat + NetworkGuard (integrated into `Hal::new`/`with_guard`) |
 | `led-layout` | MegaTree + matrix-serpentine generators + LayoutMapper |
 | `led-protocols` | sACN (unicast + multicast) + ArtPoll + DDP + RouterDevice (sACN/DDP fan-out by universe) |
-| `led-pixel-engine` | effects + triple buffer + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
+| `led-pixel-engine` | effects (**13**: 5 base + biblioteca `Chase`/`Twinkle`/`Fire`/`ColorWash`/`Strobe`/`Meteor`/`Lightning`/`Ripple`, ADR-0021) + `noise` sem estado + triple buffer + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
 | `led-sequencer` | Timeline/Track/Clip/Keyframe + TempoMap + LiveTempoMap (real-time beat accumulator) |
 | `led-audio` | Hann FFT + band energy + spectral-flux beat |
 | `led-bridge` | adapt v1→v0 + BridgeHandle + SimLoop |
@@ -128,6 +128,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-03 — E1 (1ª fatia): biblioteca de efeitos + ADR-0021 (efeito é função pura)
+
+**Done.** O roadmap (`docs/ROADMAP.md`, escrito nesta sessão) mediu a maior lacuna de paridade com o xLights: **5 efeitos contra ~40**. Esta fatia leva a **13** e, mais importante, estabelece a regra que rege os ~25 restantes.
+
+**O conflito que a fatia resolveu.** Bibliotecas de LED (FastLED, WLED, xLights) guardam **estado por-pixel entre frames** — mapa de calor do fogo, `random()` avançando, posição acumulada. É o padrão do setor e é **incompatível** com o LUMYX: um efeito com estado renderiza diferente na segunda passada do mesmo `time_ms`, e todo o replay verificado por hash (+ assinatura Ed25519 + burn-in) deixa de valer. A assinatura já tinha decidido — `Effect::render(&self, …)` recebe `&self`; guardar estado exigiria **mudar o contrato**, não escrever um efeito.
+
+[ADR-0021](./docs/adr/0021-efeitos-funcoes-puras-estado-derivado.md), 3 regras: (1) função pura de `(time_ms, position, index)`; (2) aleatoriedade é **hash de coordenadas**, nunca fluxo; (3) parâmetro espacial é **taxa por metro**, nunca coordenada normalizada — o efeito não conhece o tamanho do rig, e onde a extensão é indispensável ela é **parâmetro declarado** (`Meteor::span_m`), na disciplina "injeção de dado" do ADR-0018.
+
+1. **`led-pixel-engine/src/noise.rs`** — `mix64`/`hash01`/`value_noise`/`fbm`. `mix64` compartilha as constantes do finalizador do SplitMix64 já presente em `show_intent.rs:143` e `chaos.rs:83`, **e isso está documentado**: não é terceira cópia — aqueles são geradores **com estado** (`fn(&mut u64)`), este é **função pura** (`fn(u64)`).
+2. **`led-pixel-engine/src/library.rs`** — 8 efeitos: `Chase`, `Twinkle`, `Fire`, `ColorWash`, `Strobe`, `Meteor`, `Lightning`, `Ripple`.
+3. **`led-pixel-engine/tests/no_alloc.rs` (novo)** — contraparte de render do gate que o `led-hal` já tinha no envio. Alocador contador, **2.000 frames × 512 px por efeito**, os 11 efeitos. **Com controle negativo** (KB-012): um efeito que aloca de propósito **tem que ser pego** — senão o gate não estaria provando nada.
+4. **Show real do usuário destravado** (`led-demo/examples/robot_sequence.rs`): `Lightning → Pulse 6 Hz` e `Meteors → Rainbow` eram aproximações **documentadas como tais**. Agora são `Lightning` e `Meteor` nativos. O `x_span` do rig é medido **do layout, no exemplo** — não pelo efeito (regra 3).
+5. **`led-demo/examples/effect_gallery.rs` (novo)** → `effect_gallery.gif`: 12 faixas, 200 frames. Efeito é coisa que se **vê**; teste de unidade prova geometria e pureza, não aparência.
+
+**Invariants verified.** `led-core` **intocado** — `Effect` vive no `led-pixel-engine` e **não** está em `certified_contracts()` (`contract_version.rs:74-83`): zero bump, zero seam Frozen tocado. Gate de pureza executável (`every_effect_is_a_pure_function_of_time`: renderiza `t`, depois `t+1`, depois `t` — estado interno faria a 3ª passada divergir da 1ª). Gate de alocação verde com controle negativo. Controle negativo de `NaN`/`∞` em posições e em ruído — a classe do **BUG-3** (`smoothstep(NaN)` propagando até posição de drone).
+
+**Erros meus nesta rodada.** (a) O 1º teste do `Ripple` falhou e a **falha era do teste**: tentei isolar a atenuação com comprimento de onda enorme, mas isso fez o termo da crista variar junto e dominar — isolamento correto é comparar pixels na **mesma fase**. (b) Escrevi `0xL1` e `0xC0_ME7A` como sementes: `L`, `M` e `R` **não são dígitos hexadecimais**. Duas vezes.
+
+**Pending.** ~25 efeitos para paridade. **`robot_sequence.lumyx` NÃO foi regenerado**: o hash `0xd8f1479ff3645e1e` é parâmetro de verificação do runbook de palco (`docs/runbooks/show-startup.md:65`, `--verify`), e regenerar o mudaria — decisão do operador, não do agente. Efeitos com difusão real (`Fire2012`, fluidos, `Life`) continuam fora: exigiriam um `StatefulEffect` com contrato próprio e **ADR próprio**.
+
+**Decisions.** `Fire` é ruído fractal, **não** `Fire2012` — visualmente próximo, algoritmicamente diferente, e isso está na doc do tipo em vez de escondido. `Strobe` expõe `SEIZURE_RISK_HZ`/`is_in_seizure_risk_band` e **não clampa em silêncio**: precedente do ADR-0018 (o componente declara, a camada com contexto decide) — estroboscópio que muda de frequência sozinho no palco é pior que parâmetro documentado.
 
 ### 2026-08-02 — ADR-0020: RGBW subtrativo (achado com consequência física)
 

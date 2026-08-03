@@ -9,19 +9,23 @@
 //! cargo run --release -p led-demo --example robot_sequence -- "<show dir>"
 //! ```
 //!
-//! Effect mapping (first slice — timing/targeting is exact, look is mapped):
-//! | xLights   | LUMYX                                   |
-//! |-----------|------------------------------------------|
-//! | Lightning | white strobe (`Pulse` 6 Hz)              |
-//! | Life      | organic plasma (`Plasma` slow, green-ish)|
-//! | Meteors   | scrolling rainbow (`Rainbow`)            |
+//! Effect mapping (timing/targeting was always exact; the *look* is now native):
+//! | xLights   | LUMYX                        | antes desta rodada          |
+//! |-----------|------------------------------|------------------------------|
+//! | Lightning | `Lightning` (clarões aperiódicos) | `Pulse` 6 Hz (periódico) |
+//! | Life      | `Plasma` (compute kernel)    | igual — já era adequado      |
+//! | Meteors   | `Meteor` (cabeça + cauda)    | `Rainbow` (varredura de matiz) |
+//!
+//! As duas substituições fecham aproximações que estavam **documentadas como tais**: um
+//! relâmpago não é periódico (o `Pulse` era), e um cometa tem cabeça e cauda (o `Rainbow`
+//! não tinha nenhuma das duas).
 
 use std::io::Cursor;
 use std::path::Path;
 
 use led_core::{CompiledLayout, LogicalFrame, PixelColor, ProtocolOutput};
 use led_hal::{Hal, SimulatorDevice};
-use led_pixel_engine::{ComputeEffect, Effect, Plasma, Pulse, Rainbow, Vec3};
+use led_pixel_engine::{ComputeEffect, Effect, Lightning, Meteor, Plasma, Pulse, Vec3};
 use led_show_recorder::replay::ReplayManifest;
 use led_show_recorder::{finalise_seekable, ShowReader, ShowRecord, ShowWriter};
 use led_xlights::{import_strings, parse_sequence_file};
@@ -52,6 +56,16 @@ fn main() {
         .collect();
     let px = positions.len();
 
+    // Extensão real do rig no eixo x. O EFEITO não conhece o tamanho do rig (regra 3 do
+    // ADR-0021) — quem monta o show conhece, e é aqui que ele é medido, uma vez, do layout.
+    let x_span = {
+        let (lo, hi) = positions.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+            (lo.min(p.x), hi.max(p.x))
+        });
+        (hi - lo).max(1.0)
+    };
+    println!("rig: extensão em x = {x_span:.1} (unidades do layout xLights)");
+
     // Resolve each span's target pixels once (groups → ranges).
     struct ActiveSpan {
         start_ms: u64,
@@ -69,9 +83,26 @@ fn main() {
                 return None;
             }
             let effect: Box<dyn Effect> = match s.effect.as_str() {
-                "Lightning" => Box::new(Pulse { color: PixelColor::rgb(255, 255, 255), hz: 6.0 }),
+                // Clarões aperiódicos: ~2,8 por segundo de oportunidade, 55 % efetivam,
+                // queda de 70 ms. O `seed` fixo mantém o show reproduzível quadro a quadro.
+                "Lightning" => Box::new(Lightning {
+                    color: PixelColor::rgb(255, 255, 255),
+                    window_ms: 360,
+                    probability: 0.55,
+                    decay_ms: 70,
+                    seed: 0x116E_1146, // fixo: o show tem que replayar igual
+                }),
                 "Life" => Box::new(ComputeEffect::new(Plasma { scale: 0.008, speed: 0.6 })),
-                "Meteors" => Box::new(Rainbow { speed_hz: 0.4, cycles_per_m: 0.002 }),
+                // Cauda de 12 % do rig, 2 voltas por show-span; o esfarelamento é o que
+                // distingue um cometa de um simples pulso deslizante.
+                "Meteors" => Box::new(Meteor {
+                    color: PixelColor::rgb(120, 200, 255),
+                    span_m: x_span,
+                    speed_m_s: x_span / 4.0,
+                    tail_m: x_span * 0.12,
+                    sparkle: 0.3,
+                    seed: 0x3E7E_0800,   // fixo: idem
+                }),
                 _ => Box::new(Pulse { color: PixelColor::rgb(128, 0, 255), hz: 1.0 }),
             };
             Some(ActiveSpan { start_ms: s.start_ms, end_ms: s.end_ms, effect, ranges })
@@ -140,6 +171,21 @@ fn main() {
         "replay must match"
     );
     println!("replay: VERIFIED — {:#018x} → robot_sequence.lumyx", manifest.aggregate_hash);
+
+    // O hash do show gravado é PARÂMETRO DE PALCO, não só um número de log:
+    // `docs/runbooks/show-startup.md` manda o operador rodar
+    //     led-player robot_sequence.lumyx --verify <hash>
+    // com um hash fixo. Regerar o show muda esse hash e o runbook para de bater — em
+    // silêncio, na hora errada. Este aviso existe para que a atualização seja consciente.
+    const RUNBOOK_HASH: u64 = 0xd8f1_479f_f364_5e1e;
+    if manifest.aggregate_hash != RUNBOOK_HASH {
+        println!(
+            "\n⚠  ATENÇÃO — o hash mudou: runbook {RUNBOOK_HASH:#018x} → agora {:#018x}\n\
+             ⚠  Atualize `docs/runbooks/show-startup.md` (--verify) ANTES do próximo show,\n\
+             ⚠  ou o gate de integridade vai reprovar um show que na verdade está correto.",
+            manifest.aggregate_hash
+        );
+    }
 
     // ── GIF excerpt: the Lightning cascade (0–31s) at 10 fps ─────────────
     let excerpt: Vec<&ShowRecord> = records
