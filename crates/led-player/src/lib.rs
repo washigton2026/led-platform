@@ -13,6 +13,15 @@
 
 use std::time::Duration;
 
+pub mod stream;
+/// Playback em fluxo — **caminho de bancada, não de palco** (TD-013).
+///
+/// `play_streaming_unverified` emite o 1º quadro sem verificar assinatura nem integridade.
+/// O caminho autenticado é o do binário (`--verify-key` → `verify_manifest_pinned` → tocar).
+pub use stream::{
+    play_streaming_unverified, Pacing, PacingPolicy, StreamError, StreamReport,
+};
+
 use led_core::{LogicalFrame, OutputError, PixelPhysical, ProtocolOutput, RgbOrder};
 use led_show_recorder::replay::ReplayManifest;
 use led_show_recorder::ShowRecord;

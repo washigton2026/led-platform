@@ -40,6 +40,7 @@
 
 use std::io::{self, Read, Write};
 
+pub mod bake;
 pub mod drone_bridge;
 pub mod replay;
 pub mod signing;
@@ -47,6 +48,7 @@ pub mod signing;
 pub use drone_bridge::{
     DroneBridge, DroneAnnotation, DroneFormationHint, SectionEvent,
 };
+pub use bake::{artifact_bytes, bake, subset_len, validate_subset, BakeError};
 pub use replay::{cross_node_verify, record_and_manifest, verify_replay, ReplayManifest};
 
 use led_core::{LogicalFrame, PixelColor};

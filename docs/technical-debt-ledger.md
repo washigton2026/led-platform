@@ -392,6 +392,61 @@ note: |
 
 ---
 
+## TD-013 — F2: artefato recortado não é autenticado antes do playback
+
+```yaml
+td_id:     TD-013
+title:     "Artefato de bake não tem manifesto/assinatura, e play_streaming_unverified emite sem verificar"
+severity:  High
+status:    open
+origin:    "Revisão de segurança da 1a fatia do F2 (ADR-0022 D1/D3), 2026-08-03"
+context: |
+  Provado por leitura de codigo, nao presumido:
+  1. signing.rs:46-56 — canonical_bytes assina
+     SIGNING_VERSION | frame_count | pixel_count | aggregate_hash | frame_hashes[..].
+     No recorte pixel_count muda, aggregate_hash muda e TODO frame_hashes muda. Logo a
+     assinatura do show do rig NAO autentica o artefato derivado — por aritmetica, nao
+     por politica.
+  2. bake.rs — bake() devolve apenas u32 (contagem de quadros). Nao produz ReplayManifest
+     nem sidecar para o artefato. grep por ReplayManifest/sign em bake.rs: so comentario.
+  3. led-player/src/stream.rs — play_streaming_unverified le um quadro e envia. grep por
+     verify/pinned: so comentario. O binario faz certo
+     (main.rs:175 collect_all -> 218 from_records -> 219 compara sidecar -> 226
+     verify_manifest_pinned -> 412 play), e faz certo PORQUE tudo esta em RAM.
+  4. Estrutural: ReplayManifest::from_records exige &[ShowRecord] — exatamente o que o modo
+     fluxo se recusa a materializar.
+impact: |
+  Um traje poderia tocar bytes nao autenticados. Sem rede durante o numero (ADR-0022 D4/D6)
+  nao ha ninguem do outro lado para notar — o mesmo cegamento que motivou a D7.
+mitigation_now: |
+  A funcao chama-se play_streaming_unverified: o risco viaja para todo call-site e todo grep,
+  nao fica escondido em documentacao. Alcance verificado em 2026-08-03: reexport publico em
+  led-player/src/lib.rs; ZERO chamadas no binario; ZERO flags CLI; ZERO exemplos; ZERO
+  runbooks. Nenhum comando de producao alcanca este caminho.
+required_fix: |
+  Proxima fatia obrigatoria do F2. Reusar ADR-0004 integralmente — mesmo ReplayManifest,
+  mesma ShowSigner, mesmo verify_manifest_pinned, mesmo sidecar. PROIBIDO criar segunda
+  assinatura, segundo formato ou politica paralela.
+  a) Construtor INCREMENTAL de ReplayManifest, alimentado quadro a quadro.
+  b) bake() passa a devolver o ReplayManifest derivado, para o estudio assinar o artefato
+     com a MESMA chave e o MESMO formato de sidecar.
+  c) Verificacao integral com chave pinada ANTES do 1o quadro: passada 1 constroi o
+     manifesto e verifica; so entao passada 2 emite.
+required_test: manifesto_incremental_identico_ao_materializado
+negative_control: |
+  DOIS controles, ambos obrigatorios:
+  1. Equivalencia: manifesto incremental deve ser IDENTICO ao de from_records (byte a byte,
+     incluindo aggregate_hash e todo frame_hashes). Se divergir, a assinatura nao fecha e o
+     gate tem de reprovar — senao ele nao prova equivalencia nenhuma.
+  2. Adulteracao re-assinada: artefato recortado com UM pixel alterado, re-assinado com
+     chave de atacante, verificado com a chave do estudio fixada => o playback tem de
+     recusar ANTES do 1o quadro, provado por frames_played == 0. Analogo direto de
+     redteam_resigned_tamper_defeats_unpinned_verify (RT-001).
+review_by: "proxima fatia do F2 — bloqueia qualquer uso do modo fluxo em traje ou palco"
+```
+
+---
+
 ## Closed items — summary table
 
 | TD-ID   | Title (short)                         | Closed     | Commit   |
@@ -411,6 +466,7 @@ note: |
 | TD-ID  | Severity | Title (short)                 | Milestone |
 |--------|----------|-------------------------------|-----------|
 | TD-004 | High     | wgpu→Metal block on startup   | MEDIUM-1  |
+| TD-013 | High     | artefato de bake não autenticado | F2 fatia 2 |
 
 ## Note — tokio async sleeps in led-protocols (NOT part of TD-003)
 
