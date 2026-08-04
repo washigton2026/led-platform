@@ -32,7 +32,7 @@ recuperada do changelog.
 | [0019](0019-calibracao-por-output-no-hal.md) | Calibração por-output (gamma+brightness) aplicada no HAL, por device, sem tocar contrato Frozen | aceito | 2026-07-29 |
 | [0020](0020-whitemode-subtrativo.md) | `WhiteMode::MinSubtract`: derivação subtrativa do branco (RGBW deixa de somar ~4x de corrente) | aceito | 2026-08-02 |
 | [0021](0021-efeitos-funcoes-puras-estado-derivado.md) | Efeito é função pura de `(tempo, posição, índice)`; aleatoriedade é hash, nunca fluxo; estado é derivado, nunca armazenado | aceito | 2026-08-03 |
-| [0022](0022-wearable-playback-autonomo-sync-deterministico.md) | Traje de LED: playback autônomo + sincronização por relógio comum (o traje é *player*, não *device*); ADR-0005 intacto | **proposto** | 2026-08-03 |
+| [0022](0022-wearable-playback-autonomo-sync-deterministico.md) | Traje de LED: playback autônomo + sincronização por relógio comum (o traje é *player*, não *device*); ADR-0005 intacto | aceito | 2026-08-03 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma

@@ -1,12 +1,14 @@
 # ADR-0022 — Traje de LED: playback autônomo com sincronização determinística
 
-- **Status:** 🟡 **proposto** — decisão estrutural, aguarda aceite. Nenhuma linha de firmware,
-  rádio ou `bake` deve ser escrita antes do aceite.
+- **Status:** ✅ **aceito** (2026-08-03) — as 4 questões em aberto foram decididas; ver a seção
+  final. Continua valendo: **nenhuma linha de firmware, rádio ou `bake`** antes do F2 abrir.
 - **Data:** 2026-08-03
 - **Fonte:** FASE F1 do roadmap (`docs/ROADMAP.md`) — trajes de LED para performance de dança
 - **Relaciona-se com:** ADR-0001 (replay determinístico), ADR-0004 (Ed25519 com chave fixada),
   **ADR-0005 (WiFi proibido ao vivo — permanece íntegro)**, ADR-0010 (failover parcial),
-  ADR-0013 (isolamento de falha), ADR-0017 (blackout — **ainda pendente**)
+  ADR-0013 (isolamento de falha), **ADR-0021 (efeito é função pura — condição *necessária*,
+  não suficiente, para render a bordo: pureza ≠ paridade bit a bit; ver Q4)**. **Não** depende
+  do ADR-0017: um traje autônomo não tem heartbeat (ver Q1)
 
 ---
 
@@ -28,7 +30,7 @@ um traje?" pressupõe que o traje precisa receber quadros durante o número. Nã
 **O traje toca o show sozinho, a partir de um artefato assado localmente. O que o mantém
 junto com os outros não é um fluxo de dados — é um relógio comum.**
 
-Sete decisões derivadas:
+Oito decisões derivadas:
 
 ### D1 — O traje é um *player*, não um *device*
 
@@ -107,9 +109,13 @@ rede: o único caminho de dados durante o show é interno ao traje. **O ADR-0005
 literalmente intacto e o `NetworkGuard` não é tocado.**
 
 O que **é** proibido explicitamente por este ADR: usar rádio (WiFi, ESP-NOW, ISM, W-DMX)
-para **transportar quadros** durante o número. Um sinal de rádio de **disparo/tempo** é uma
-questão em aberto (ver Q2), governado por critério próprio — porque um pacote de tempo
-perdido degrada precisão, enquanto um quadro perdido apaga o corpo do bailarino.
+para **transportar quadros** durante o número — porque um pacote de tempo perdido degrada
+precisão, enquanto um quadro perdido **apaga o corpo do bailarino**.
+
+Um sinal de rádio de **disparo/tempo** foi **decidido na Q2: também não durante o número.**
+O show tem de estar correto com o rádio ausente, interferido ou hostil; o sincronismo é
+100 % pré-show e cabeado, e o abortamento é físico/local. Um canal remoto de aborto
+autenticado fica para **ADR próprio** — ver a justificativa em Q2.
 
 ### D5 — Deriva é orçamento declarado, medido, e com gatilho
 
@@ -148,9 +154,10 @@ Portanto:
 - A detecção é **pré-show**, não em runtime: um gate de prontidão (show verificado, relógio
   sincronizado, bateria, integridade da fita) que **reprova o traje antes de ele subir**.
 - A falha em cena tem **estado definido e seguro**, decidido por quem monta o show — não um
-  comportamento emergente. **Qual é esse estado depende do ADR-0017 (blackout), que
-  continua pendente** — um traje que "apaga" e um traje que "congela o último quadro" são
-  decisões de palco diferentes, e este ADR não as toma por antecipação.
+  comportamento emergente. **Decidido na Q1:** o traje **apaga o conteúdo do show**, e o
+  estado de falha é um **parâmetro declarado pelo show cujo padrão é preto**. Isto **não**
+  depende do ADR-0017: aquele ADR trata do que o *heartbeat* reenvia num rig transmitido, e
+  aqui não há heartbeat nem rede.
 
 ### D8 — Autenticidade viaja com o show
 
@@ -173,7 +180,7 @@ Explicitamente fora de escopo, e **não** deve ser implementado ou presumido:
 |---|---|
 | Plataforma embarcada (firmware próprio × preset WLED × outro) | Decisão de engenharia com trade-off real; merece ADR próprio depois de medida |
 | Meio físico do sincronismo pré-show | O ADR fixa o **contrato de tempo**, não o fio |
-| Rádio de disparo/tempo durante o número | Questão em aberto Q2 — critério próprio |
+| Rádio de disparo/tempo durante o número | **Decidido na Q2: não.** Canal de aborto remoto autenticado → **ADR próprio** |
 | Bateria, peso, dissipação, segurança de contato | Engenharia elétrica; entra depois do orçamento medido |
 | Formato do artefato assado | `.lumyx` é o candidato natural (`LUMX`/v1, header 16 B — `crates/led-show-recorder/src/lib.rs:56-58`), mas 73 MB para 6.200 px × 3.925 quadros não cabe num traje sem compressão ou redução de escopo. **Dimensionar antes de decidir.** |
 
@@ -193,7 +200,7 @@ Um critério só conta se houver uma execução descrita que o faça **reprovar*
 | V6 | **Deriva real medida**, não presumida | Número com origem, condição e temperatura; enquanto não existir, o valor é *não medido* |
 | V7 | **ADR-0005 intacto** | Nenhuma variante nova de `OutputInterface` autoriza rádio ao vivo; `NetworkGuard` inalterado |
 | V8 | **Nenhum seam Frozen tocado** | Superfície de seam inalterada no guardião |
-| V9 | **Estado de falha é definido** | Um traje que para tem comportamento declarado — **bloqueado pelo ADR-0017** |
+| V9 | **Estado de falha é definido** | Um traje que para **apaga o conteúdo do show**; o estado é parâmetro declarado, padrão preto (Q1) — **não** bloqueado pelo ADR-0017 |
 | V10 | **Prontidão é pré-show** | Traje não pronto é reprovado antes de subir, nunca descoberto em cena |
 
 ---
@@ -220,14 +227,126 @@ provado em cima de nada físico.
 
 ---
 
-## Questões em aberto (precisam de decisão, não de código)
+## Questões em aberto — **resolvidas** (2026-08-03)
 
-| # | Questão | Bloqueia |
-|---|---|---|
-| **Q1** | Um traje que falha em cena **apaga** ou **congela o último quadro válido**? | D7 / V9 — depende do **ADR-0017**, ainda pendente |
-| **Q2** | Rádio de **disparo/tempo** (não de quadros) é admissível durante o número, ou o sincronismo é 100 % pré-show? | D4 — muda o desenho de re-sincronismo |
-| **Q3** | Qual a duração máxima de número sem re-sincronizar? | Sai de G6; sem a medição, não há resposta honesta |
-| **Q4** | O show cabe no traje? 73 MB (6.200 px × 3.925 quadros) é o tamanho atual do artefato do rig | Formato do bake — compressão, subconjunto de pixels, ou redução de taxa |
+### Q1 — falha em cena: **apaga**, com estado declarado ✅ decidido
+
+**Correção de uma imprecisão da primeira redação deste ADR.** A versão original disse que a
+Q1 dependia do ADR-0017. **Não depende.** O ADR-0017 pergunta o que o *heartbeat* reenvia
+quando o blackout é comandado; um traje autônomo **não tem heartbeat e não tem rede**. As
+duas perguntas são independentes, e a Q1 foi decidida sem esperar aquela.
+
+**Decisão:** o traje que falha **apaga o conteúdo do show**. Congelar é pior — um corpo
+parado num quadro estático enquanto os outros animam **denuncia a falha**; escuro se lê como
+saída de cena.
+
+**Mas o estado de falha é um parâmetro declarado pelo show, cujo padrão é preto — não uma
+constante.** A razão é física, não estética: num número de trajes o palco é preto e **as
+roupas são a única fonte de luz**. Um traje totalmente apagado torna o bailarino invisível
+para os outros bailarinos, que se movem rápido no escuro — risco de colisão. Quem decide se
+um corpo pode sumir é a coreografia, e para decidir precisa que o parâmetro exista.
+
+### Q2 — rádio: **nenhum no caminho crítico** ✅ decidido
+
+**Quadros por rádio: proibido, permanentemente.** É a linha do ADR-0005 e não se negocia.
+
+**O show tem de estar correto com o rádio ausente, interferido ou hostil.** Sincronismo é
+100 % pré-show e cabeado (D4). Abortamento durante o número é **físico/local**.
+
+Um canal remoto de aborto **não entra neste ADR** e vai para ADR próprio, por duas razões
+que se opõem e precisam ser pesadas juntas: sem ele **não existe parada de emergência** (se
+um bailarino cai, os trajes tocam até o fim); com ele mal projetado, **um kill-switch por
+rádio não autenticado é superfície de ataque** — um SDR barato apaga um show de visibilidade
+alta, e sem contador/nonce um comando capturado pode ser **reproduzido**. O F2 não deve
+herdar uma superfície de segurança ainda não desenhada.
+
+### Q3 — duração sem re-sincronizar: **quociente, não escolha** ✅ forma definida
+
+Continua **sem número**, e isso é honesto: o denominador vem do G6. O que fica definido é a
+**forma** do orçamento, para o G6 saber o que medir:
+
+> A tolerância é **menos de um quadro à taxa do show** — a 40 fps, **25 ms**. Acima disso
+> dois trajes exibem literalmente quadros diferentes.
+
+O limite é derivado da taxa do show, **não** de psicofísica (o limiar perceptual de
+assincronia é outra pergunta, não respondida aqui). Daí:
+
+```
+duração_máxima = orçamento_de_desvio ÷ taxa_de_deriva_medida (G6)
+```
+
+### Q4 — tamanho do artefato: **a duração domina, e o E1 abriu uma saída melhor** ✅ enquadrada
+
+**Erro corrigido:** a primeira redação tratou "73 MB" como se o show inteiro fosse para cada
+traje. Não vai — pela D1 cada traje é um player **dos seus próprios pixels**. Mas a correção
+seguinte é mais importante: os 73 MB são de um show de **98 s**, e um número de dança tem
+3–5 min. **A duração é o termo dominante.**
+
+Formato atual (cru, 3 B/px + 9 B/quadro + 16 B de cabeçalho — verificado ao byte contra
+`robot_sequence.lumyx`: 73 005 000 crus + 35 341 de overhead = 73 040 341):
+
+| flash | teto de pixels (número de **4 min** @ 40 fps) |
+|---|---|
+| 4 MB | 142 px |
+| 8 MB | **288 px** |
+| 16 MB | 579 px |
+| 32 MB | 1 162 px |
+
+**Envelope de projeto** (derivado do rig do usuário: 430 modelos ≈ 20 px cada, 1 240 px por
+robô; silhueta humana em fita ≈ 4–5 m a 60–144 px/m): **150–750 px por traje**. O número real
+é entrada de gate, não bloqueio do F2.
+
+**Três alavancas, em ordem de custo — compressão é a última, não a primeira:**
+
+1. **Taxa de quadros.** 400 px / 4 min: 40 fps = 11,1 MB → **25 fps = 6,9 MB** (−38 %).
+   Grátis; preserva seek O(1); zero CPU; zero classe de falha nova.
+2. **Render a bordo em vez de replay de quadros** — *direção candidata, **não** aprovada.*
+   O **ADR-0021** tornou todo efeito uma **função pura do tempo**, então um traje poderia
+   guardar a *timeline* (spans + parâmetros) e renderizar: **kilobytes, não megabytes**.
+   Pureza, porém, **não é o mesmo que paridade bit a bit** — ver a ressalva abaixo, que é
+   bloqueante.
+3. **Compressão.** Só se 1 e 2 não bastarem. Compra tamanho pagando CPU, bateria e um modo
+   de falha inédito num dispositivo que não pode falhar no meio do número.
+
+### A ressalva que bloqueia o render a bordo
+
+> **Correção de uma afirmação forte demais numa redação anterior deste ADR.** Chegou a estar
+> escrito que a divergência de `f32` "não se aplica entre trajes, que são hardware idêntico".
+> **Isso não tem evidência e está retirado.**
+
+`integration-tests/tests/determinism_vector.rs:9-12` atribui a divergência a
+**implementações de libm** — não a arquiteturas diferentes. Hardware idêntico remove *uma*
+fonte de variação e **não remove as outras**: toolchain e versão do compilador, flags de
+otimização, `libm`/`compiler-builtins` do alvo, versão de firmware, presença e modo da FPU,
+configuração de arredondamento do MCU, contração de multiply-add. Dois trajes "iguais" podem
+ter sido gravados em semanas diferentes com toolchains diferentes — e ninguém notaria até o
+palco.
+
+E o modo de falha é assimétrico: no replay de quadros, uma divergência é **impossível** (os
+bytes já estão assados); no render a bordo, ela aparece como **dois bailarinos com cores
+levemente diferentes**, sem erro, sem log, sem ninguém a bordo para notar (D6/D7).
+
+**Portanto, condição de adoção — não negociável:**
+
+1. **Contrato de determinismo explícito**, escrito antes de qualquer código: o que
+   exatamente é garantido idêntico, sob quais versões de toolchain e firmware fixadas.
+2. **Gate executável** que compare artefatos/quadros renderizados entre **no mínimo dois
+   dispositivos físicos com firmware idêntico**, e reprove com divergência de **um** byte.
+   Sem essa comparação em hardware real, o render a bordo permanece **não adotado**.
+
+**Direção preferencial** — registrada como direção, **não** como implementação pronta e
+**não** como solução verificada: onde a paridade byte a byte for exigida, usar **aritmética
+inteira/ponto-fixo ou LUTs determinísticas** em vez de trigonometria em `f32`. É a mesma
+mitigação que o próprio `determinism_vector.rs:12` já aponta ("table-based or fixed-point
+trig in kernels"), e a mesma disciplina do ADR-0019 (gamma e brilho dobrados numa LUT de 256
+entradas, sem `powf` no caminho quente). Nenhum número de custo ou de erro é afirmado aqui:
+**não medido**.
+
+**Consequência para o F2:** o fork real **não é "comprimir ou não"** — é **replay de quadros
+× render a bordo**. E os dois lados **não estão empatados**: o replay é o caminho
+conservador e já provado (bytes assados, divergência impossível); o render a bordo é a
+opção de tamanho, e **começa reprovado** até existirem o contrato e o gate de dois
+dispositivos acima. Essa é a primeira decisão do F2, não um detalhe de formato.
 
 ---
 

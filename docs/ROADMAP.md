@@ -293,8 +293,8 @@ autenticidade. Falta o **outro lado** — tocar isso dentro do traje.
 
 | # | Item | Nota |
 |---|---|---|
-| F1 | **ADR: wearable autônomo × streaming** | 🟡 **[ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md) escrito — proposto, aguarda aceite.** 8 decisões, 10 critérios, 8 gates, 4 questões em aberto |
-| F2 | **`bake`**: show → artefato que roda no controlador | ⚠️ dimensionar antes: o artefato do rig tem **73 MB** (Q4 do ADR-0022) |
+| F1 | **ADR: wearable autônomo × streaming** | ✅ **[ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md) aceito.** 8 decisões, 10 critérios, 8 gates; **as 4 questões foram decididas** (falha apaga c/ estado declarado · sem rádio no caminho crítico · orçamento = <1 quadro, duração sai do G6 · fork replay×render) |
+| F2 | **`bake`**: show → artefato que roda no controlador | 🔺 **1ª decisão do F2 é o fork replay-de-quadros × render-a-bordo** (Q4). A duração domina o tamanho: 4 min @40 fps ⇒ 8 MB de flash comportam só **288 px**. Alavancas em ordem de custo: taxa de quadros → render a bordo → compressão. ⚠️ **Render a bordo começa REPROVADO**: pureza (ADR-0021) não é paridade bit a bit, e hardware idêntico não elimina divergência de toolchain/libm/flags/FPU. Exige contrato de determinismo + gate comparando quadros entre **≥2 dispositivos físicos** com firmware idêntico. Direção preferencial (não verificada): inteiro/ponto-fixo ou LUT no lugar de trig `f32` |
 | F3 | **Player embarcado** | firmware ou WLED preset — decisão de plataforma, **fora do escopo do ADR-0022** |
 | F4 | **Sync multi-traje**: start comum + medição de **drift** ao longo do número | `net_time` já resolve o análogo cabeado (±10 ms medido). **Achado do scan F1:** o `led-player` hoje é *livre-corrente* — precisa de pacing por instante absoluto (D3) |
 | F5 | **Orçamento wearable**: bateria, corrente, peso, calor, segurança de contato | aqui `MinSubtract` já paga: **−67 % de corrente** no branco |
