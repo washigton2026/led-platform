@@ -12,5 +12,17 @@ release/
 *.lumyx
 *.gif
 
+# Saídas de execução — mesma razão das de cima, e a evidência CITÁVEL delas já vive
+# noutro sítio: o hash do burn-in está em docs/ROADMAP.md e em docs/runbooks/, e a
+# validação de hardware em docs/certification/. O .jsonl solto na raiz é a reprodução
+# local de uma alegação já registada, não a alegação.
+burnin-*.jsonl
+show_report.json
+show_drone.json
+
+# Assinaturas Ed25519 sidecar: regeneráveis por `led-show-recorder --example sign_show`,
+# e o .lumyx que elas cobrem já é ignorado acima. A chave privada nunca entra (release/).
+*.sig
+
 # Ephemeral Claude Code agent worktrees (scratch — never part of the product).
 .claude/worktrees/
