@@ -8,7 +8,10 @@
 > Este documento é o mapa completo: **o que já existe com evidência**, **o que falta**, e
 > **em que ordem**, com o que bloqueia o quê.
 >
-> Data desta revisão: **2026-08-03** · HEAD `80c2a6c` · `led-core` **1.4.0**
+> Data desta revisão: **2026-08-05** · HEAD `5416241` · `led-core` **1.4.0** · **791 testes**
+>
+> *Revisão anterior (2026-08-03, HEAD `80c2a6c`) ficou 3 commits atrás e listava como
+> disponíveis frentes que já tinham sido entregues. Ver PARTE III.*
 
 ---
 
@@ -29,6 +32,54 @@ medição, está escrito *não medido* — nunca estimado e apresentado como fat
 
 ---
 
+## O Golden Slice — o critério que ordena tudo abaixo
+
+**Definição registada em 2026-08-05. É o significado canónico de "Golden Slice" no LUMYX.**
+
+> **Golden Slice = vertical slice do produto.** O **menor fluxo completo** que atravessa
+> toda a plataforma, do início ao fim, **funcionando em produção**.
+
+```
+Criar ou importar um show
+        ↓
+Editar na timeline
+        ↓
+Pré-visualizar
+        ↓
+Configurar controladores
+        ↓
+Enviar via Ethernet (DDP / Art-Net / sACN)
+        ↓
+Executar em hardware real
+        ↓
+Validar o resultado
+```
+
+**O que ele não é:** não é funcionalidade isolada e não é demonstração. É um **caminho
+completo do operador** através de todas as camadas do sistema.
+
+### Por que isto muda a leitura do resto do documento
+
+Uma camada "✅" na tabela I.1 **não** significa que o Golden Slice avançou. O que conta é se
+existe um **caminho contínuo** — e hoje não existe. Estado elo a elo:
+
+| Elo | Estado | Onde quebra |
+|---|---|---|
+| Criar / importar show | ✅ | import xLights com gate de conflito (2.701 achados no projeto real), `RigBuilder`, `ShowIntent` |
+| Editar na timeline | 🔴 | o motor existe (`led-sequencer`); **a interface não** — FASE D, bloqueada por **B2** |
+| Pré-visualizar | 🔴 | só GIF offline no `led-demo`; o preview do console é **D4**, também atrás de B2 |
+| Configurar controladores | 🟡 | `led-hardware-profile` compila o layout, mas o WLED é configurado **à mão** (E6) e o profile tem **porta física única** (FASE C) |
+| Enviar via **Ethernet** | 🔴 | os protocolos estão prontos e validados; o **meio** não — toda validação de hardware foi sobre **WiFi**, que o ADR-0005 proíbe ao vivo |
+| Executar em hardware real | 🟡 | **1 nó de 5** (720 px de 6.200), e sobre WiFi |
+| Validar o resultado | ✅ | replay por hash, Ed25519 com chave fixada, métricas ao vivo durante show real |
+
+**Os dois elos ausentes são exatamente os dois gargalos do produto:** a **interface**
+(bloqueada pela decisão **B2**, que é sua) e o **Ethernet** (bloqueado por recurso físico,
+não por código). Enquanto qualquer um dos dois estiver aberto, **não há Golden Slice** —
+há um motor forte com dois vãos no caminho do operador.
+
+---
+
 # PARTE I — Onde estamos
 
 ## I.1 — Maturidade por camada
@@ -39,19 +90,19 @@ medição, está escrito *não medido* — nunca estimado e apresentado como fat
 | **HAL** (`led-hal`) | ✅ | mapeamento aplicado **uma vez**, zero alocação no hot-path (contador real), heartbeat, NetworkGuard, calibração por-output | fan-out sequencial (ADR-0012, adiado até 2º nó) |
 | **Layout** (`led-layout`) | ✅ | MegaTree, matriz serpentina, `RigBuilder` livre de conflito por construção | editor visual não existe |
 | **Protocolos** (`led-protocols`) | ✅ | sACN unicast+multicast, Art-Net ArtDmx+ArtPoll, DDP, RouterDevice | RGBW-sobre-DDP `dtype 0x33` **não validado em hardware** |
-| **Engine de render** (`led-pixel-engine`) | 🟡 | triple buffer Miri-limpo, pipeline, GPU compute (wgpu) | **5 efeitos visuais** contra ~40 do xLights |
+| **Engine de render** (`led-pixel-engine`) | 🟡 | triple buffer Miri-limpo, pipeline, GPU compute (wgpu), efeitos como **funções puras** (ADR-0021) com gate de pureza e de alocação | **13 efeitos** contra ~40 do xLights — faltam ~25 (E1) |
 | **Sequencer** (`led-sequencer`) | ✅ | Timeline não-destrutiva, clips, keyframes, blend, TempoMap, beat-sync, `ShowIntent` | sem UI |
 | **Áudio** (`led-audio`, `audio-core`) | ✅ | Hann→FFT→bandas→flux-beat→BPM→seções musicais, zero-alloc, ring SPSC Miri-limpo | — |
-| **Gravação / replay** (`led-show-recorder`) | ✅ | formato `.lumyx`, manifest, hash FNV-1a, Ed25519 **com chave fixada** | sem playback embarcado (ver FASE F) |
+| **Gravação / replay** (`led-show-recorder`) | ✅ | formato `.lumyx`, manifest, hash FNV-1a, Ed25519 **com chave fixada**, `bake` por traje + leitura em fluxo | playback **embarcado** (no traje) não existe — F3 |
 | **Migração xLights** (`led-xlights`) | ✅ | import + gate de conflito + auto-fix + **export bidirecional** | `.fseq` **não existe** (interop FPP) |
 | **Perfil de hardware** (`led-hardware-profile`) | ✅ | descritor de capacidades, validador, presets como **dado**, compilação | **porta física única** por profile (FASE C) |
 | **Read-model** (`led-readmodel`) | ✅ | snapshot read-only, JSON à mão, bind loopback-only | nenhuma UI consome |
 | **Console do operador** | ⬜ | — | **a maior peça faltante** (FASE D) |
 | **Observabilidade** | ✅ | Prometheus + Grafana + 5 alertas + 4 SLOs, scrape ao vivo em show real | — |
 | **Segurança** | ✅ | cosign, SBOM, attestation, Ed25519 pinado, red-team com achado CRITICAL fechado | — |
-| **Governança** | ✅ | 20 ADRs, ledger de TD com gate executável, 27 agentes, guardiões mecânicos, CI verde | — |
+| **Governança** | ✅ | **22 ADRs**, ledger de TD com gate executável (hook de pre-commit), 27 agentes, guardiões mecânicos, CI verde | 2 ADRs por decidir: **B1** (0017) e **B2** (0016) |
 | **Hardware real** | 🟡 | **1 nó de 5** validado ponta-a-ponta (720 px de 6.200) | Ethernet, Falcon, FPP, 72h (FASE G) |
-| **Trajes de dança** | ⬜ | — | **bifurcação arquitetural não decidida** (FASE F) |
+| **Trajes de dança** | 🟡 | bifurcação **decidida** (ADR-0022: playback autônomo); `bake` por traje + playback em fluxo com pacing absoluto (F2, `9b89501`) | player embarcado (F3) e sync multi-traje (F4) não existem; autenticação pré-playback é **TD-013** |
 
 ## I.2 — Parâmetros medidos
 
@@ -265,9 +316,12 @@ conflito de canais que o próprio xLights não tem (2.701 conflitos achados no p
 
 ---
 
-## FASE F — Trajes de LED para dança ⬜ 🔴 *bifurcação não decidida*
+## FASE F — Trajes de LED para dança 🟡 *bifurcação decidida, execução em curso*
 
-**Este é o item que mais precisa de uma decisão arquitetural, e ainda não tem ADR.**
+> **Atualização 2026-08-05.** O título desta fase dizia *"bifurcação não decidida"* e a
+> primeira linha dizia *"ainda não tem ADR"*. **As duas caducaram:** o [ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md)
+> foi aceito (caminho **(a)**, playback autônomo) e o F2 já landou (`9b89501`). O conflito
+> abaixo fica registado porque é o **porquê** da decisão, não uma pergunta em aberto.
 
 ### O conflito
 
@@ -293,8 +347,8 @@ autenticidade. Falta o **outro lado** — tocar isso dentro do traje.
 
 | # | Item | Nota |
 |---|---|---|
-| F1 | **ADR: wearable autônomo × streaming** | ✅ **[ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md) aceito.** 8 decisões, 10 critérios, 8 gates; **as 4 questões foram decididas** (falha apaga c/ estado declarado · sem rádio no caminho crítico · orçamento = <1 quadro, duração sai do G6 · fork replay×render) |
-| F2 | **`bake`**: show → artefato que roda no controlador | 🔺 **1ª decisão do F2 é o fork replay-de-quadros × render-a-bordo** (Q4). A duração domina o tamanho: 4 min @40 fps ⇒ 8 MB de flash comportam só **288 px**. Alavancas em ordem de custo: taxa de quadros → render a bordo → compressão. ⚠️ **Render a bordo começa REPROVADO**: pureza (ADR-0021) não é paridade bit a bit, e hardware idêntico não elimina divergência de toolchain/libm/flags/FPU. Exige contrato de determinismo + gate comparando quadros entre **≥2 dispositivos físicos** com firmware idêntico. Direção preferencial (não verificada): inteiro/ponto-fixo ou LUT no lugar de trig `f32` |
+| F1 | **ADR: wearable autônomo × streaming** | ✅ **feito.** **[ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md) aceito.** 8 decisões, 10 critérios, 8 gates; **as 4 questões foram decididas** (falha apaga c/ estado declarado · sem rádio no caminho crítico · orçamento = <1 quadro, duração sai do G6 · fork replay×render) |
+| F2 | **`bake`**: show → artefato que roda no controlador | 🟡 **1ª fatia feita** (`9b89501`): `bake` por traje em **fluxo** (pico de memória independe da duração), mesmo formato `.lumyx` com menos pixels, faixas de pixels como **dado**; recusa faixa vazia/degenerada/fora de alcance/**sobreposta**; teste de não-vazamento com marcador proibido. `play_streaming_unverified` com `Pacing::Absolute` (quadro superado é **descartado**, nunca empurra o erro). ⚠️ **É fundação de BANCADA**: autenticação pré-playback não existe — **TD-013**. O fork replay × render-a-bordo (Q4) continua em aberto.
 | F3 | **Player embarcado** | firmware ou WLED preset — decisão de plataforma, **fora do escopo do ADR-0022** |
 | F4 | **Sync multi-traje**: start comum + medição de **drift** ao longo do número | `net_time` já resolve o análogo cabeado (±10 ms medido). **Achado do scan F1:** o `led-player` hoje é *livre-corrente* — precisa de pacing por instante absoluto (D3) |
 | F5 | **Orçamento wearable**: bateria, corrente, peso, calor, segurança de contato | aqui `MinSubtract` já paga: **−67 % de corrente** no branco |
@@ -350,20 +404,30 @@ HOJE ───┤                          D6 blackout no console
         │
         ├── C portas múltiplas ──────► (não bloqueado — pode começar agora)
         │
-        ├── E1..E8 paridade xLights ──► (E1 efeitos não depende de nada)
+        ├── E2..E8 paridade xLights ─► (E1 efeitos: 1ª tranche FEITA — 13 de ~40)
         │
-        ├── F1 ADR wearable ─ F2 bake ─ F3 player ─ F4 sync ─ F5 orçamento ─ F6 degradação
+        ├── F1 ✅ ─ F2 🟡 ─ F3 player ─ F4 sync ─ F5 orçamento ─ F6 degradação
         │
         └── G1..G8 certificação ──────► (bloqueada por hardware/tempo, não por código)
 ```
 
-**Três frentes podem correr em paralelo hoje mesmo:**
+> **Correção de 2026-08-05.** A versão anterior deste diagrama listava **E1** e **F1** como
+> frentes disponíveis. **As duas já tinham sido entregues** — E1 na 1ª tranche de efeitos
+> (13 de ~40, ADR-0021) e F1 no ADR-0022. Priorizar sobre o mapa antigo mandaria refazer
+> trabalho concluído.
 
-1. **C** — portas múltiplas (aditivo, sem decisão pendente)
-2. **E1** — biblioteca de efeitos (a maior lacuna de paridade, zero dependência)
-3. **F1** — o ADR do wearable (é escrita e decisão, não implementação)
+**O que pode correr hoje, sem esperar por decisão:**
 
-**Duas frentes estão paradas esperando você:** B1 (uma resposta) e B2 (três medições).
+1. **C** — portas físicas múltiplas (aditivo, sem decisão pendente) — **a única frente
+   inteiramente livre**
+2. **E1 (continuação)** — ~25 efeitos para paridade; o molde (`ComputeKernel` + ADR-0021)
+   já existe, cada efeito é aditivo e testável
+3. **F3/F4** — player embarcado e sync multi-traje. **Atenção:** F3 é *decisão de
+   plataforma* (firmware próprio × preset WLED), explicitamente fora do escopo do ADR-0022
+
+**Duas frentes continuam paradas esperando você:** B1 (uma resposta) e B2 (três medições).
+Enquanto B2 não fechar, **toda a FASE D — o console — não começa**, e é o console que
+converte este motor em produto.
 
 ---
 
@@ -372,7 +436,7 @@ HOJE ───┤                          D6 blackout no console
 | Risco | Probabilidade | Impacto | Mitigação |
 |---|---|---|---|
 | **Escopo do console** — D é maior que tudo que foi feito até agora | alta | alto | fatiar por PR com gate; D1–D3 entregam valor antes do resto |
-| **Trajes exigem firmware embarcado** — competência diferente da do repo | alta | alto | F1 decidir **antes** de codar; considerar WLED preset em vez de firmware próprio |
+| **Trajes exigem firmware embarcado** — competência diferente da do repo | alta | alto | F1 ✅ decidido (ADR-0022) **antes** de codar, como previsto. O risco **migra para F3**: a escolha firmware próprio × preset WLED continua aberta e está fora do escopo do ADR-0022 |
 | **Paridade de efeitos é trabalho longo e repetitivo** | alta | médio | o `ComputeKernel` já é o molde certo; cada efeito é aditivo e testável |
 | **Rig continua offline** | média | alto | tudo que era gateável sem hardware **já foi feito** — a fila G está pronta, só falta energia |
 | **O `compile` O(n²)** morde acima de 50k px | baixa | médio | TD-012 com gatilho e guarda falsificável que roda sempre |
@@ -382,9 +446,14 @@ HOJE ───┤                          D6 blackout no console
 
 # PARTE V — Onde estamos, em uma frase
 
-**O motor está pronto e provado; o produto ainda não tem rosto.**
+**O motor está pronto e provado; o produto ainda não tem rosto — e o Golden Slice tem dois
+vãos.**
 
 O núcleo — determinismo, contratos, protocolos, áudio, replay, segurança, observabilidade —
 está em estado que xLights e Vixen não alcançam. O que falta é quase tudo **acima** do
-motor: o console que torna isso operável, os efeitos que tornam isso expressivo, e a
-decisão de wearable que torna isso vestível.
+motor: o console que torna isso operável e os efeitos que tornam isso expressivo. A decisão
+de wearable, que era a terceira lacuna, **foi tomada** (ADR-0022) e está em execução.
+
+Medido contra o Golden Slice, sobram **dois elos rompidos**: **editar/pré-visualizar** (a
+interface, travada na decisão B2) e **enviar por Ethernet** (o meio, travado em recurso
+físico). Nenhum dos dois se resolve escrevendo mais motor.
