@@ -1,0 +1,10 @@
+[package]
+name = "led-daemon"
+version = "0.1.0"
+edition = "2021"
+
+# Sem dependências, nem `led-core`. A máquina de estados não toca frames, pixels nem
+# dispositivos — só posição, ciclo de vida e vereditos de pré-voo, que chegam como DADO
+# (ADR-0023 §7). Manter o crate sem dependências é o que garante que ele não pode, por
+# construção, alcançar o hot-path nem o output.
+[dependencies]

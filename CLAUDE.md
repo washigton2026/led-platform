@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (771 tests)
+cargo test --workspace                  # all suites (808 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -39,6 +39,7 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
 | `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
 | `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
+| `led-daemon` | **NEW** — a superfície de transporte do engine (ADR-0023): `State` (8 estados), `Command`, `Event`, `ShowRuntime`. **Zero dependências** — nem `led-core`; o pré-voo chega como dado | — |
 | `led-bridge` | **integration seam** — the only crate that imports both `audio-core` (v1) and `led-pixel-engine` (v0). Owns: `adapt`/`adapt_into` (v1→v0 adapter), `BridgeHandle` (watch→AudioShare thread), `SimLoop` (hardware-free end-to-end live loop) | — |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
@@ -84,10 +85,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (771 tests)
+cargo test --workspace                  # all suites (808 tests)
 ```
 
-14 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **771 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **808 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -106,6 +107,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-show-recorder` | **NEW** — `.lumyx` binary format: write/read `LogicalFrame` + `AudioSnapshot` streams; `pixel_hash` for regression replay comparison |
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
 | `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
+| `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023). Matriz exaustiva 8×10 = 80 pares testada; recusa nunca muda estado; tempo injetado (determinístico, testes sem `sleep`) |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -128,6 +130,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-05 — GS1: superfície de transporte do engine (ADR-0023) + `led-daemon`
+
+**Done.** O `control-protocol.md` mediu a lacuna e foi explícito: *"a superfície de transporte do engine (play/pause/seek — **não existe**; precisa de **ADR próprio**)"*. Esta fatia fecha isso — ADR primeiro, código contra ele.
+
+[ADR-0023](./docs/adr/0023-superficie-de-transporte-do-engine.md) + crate novo **`led-daemon`**, com **zero dependências** (nem `led-core`): a máquina não toca frames, pixels nem dispositivos, e o pré-voo chega como **dado**. É o que garante, por construção, que ela não alcança o hot-path.
+
+**As decisões que valem a pena registar:**
+
+1. **`Loaded` e `Ready` são estados distintos.** Carregar não é estar pronto. `Ready` é onde os gates que já existem passam a ter lugar no ciclo de vida: `--verify <hash>`, `Hal::check_network()` (ADR-0005) e discovery `--require-all`. Fundir os dois apagaria a distinção que impede um show de começar sobre WiFi ou com um controlador ausente.
+2. **O tempo é injetado** (`apply(cmd, now_ms)`) — a máquina nunca lê o relógio. Determinismo por construção, e **nenhum teste dorme** (a lição do TD-003). Relógio retrógrado é **clampado**, não pânico (precedente do `SharedClock`).
+3. **`Stop`/`Pause` NÃO apagam o palco.** Transporte é avanço do tempo; apagar é **saída**. Em `Paused`/`Stopped`/`Finished` o heartbeat continua a reenviar o último frame válido. É a mesma separação que Eos e MagicQ fazem (ver [anexo do ADR-0017](./docs/adr/0017-anexo-analise-e-proposta.md)), e **não existe comando aqui capaz de zerar saída** — há um teste que falha se alguém acrescentar `blackout`/`dbo`/`grand_master`/`intensity` à lista de comandos.
+4. **`Play` a partir de `Finished` é recusado.** Rebobinar implicitamente é a classe de surpresa que faz um show **recomeçar no palco** com um toque acidental. O caminho é `Stop`/`Seek` e depois `Play`.
+5. **Recusa nunca muda o estado** — `Result<Vec<Event>, Rejected>`, com códigos enumerados (nunca string livre, como o modelo de erro do `control-protocol.md` exige).
+
+**Invariants verified.** `led-core` **intocado** — zero bump, nenhum seam `Frozen` tocado. **Matriz exaustiva de 8 estados × 10 comandos = 80 pares**, cada um com destino ou código de recusa declarado; a tabela **é a especificação executável do ADR-0023**. Invariantes estruturais verificadas **depois de cada** aplicação (`Idle` sem show, `Error` sempre com falha, posição nunca excede a duração). Workspace **808 testes**, clippy `-D warnings` exit 0.
+
+**O gate foi falsificado, não presumido** (KB-012). Plantei `Play` aceite a partir de `Finished` e confirmei que a matriz **reprova** com diagnóstico exato — `(Finished, play): esperava recusa: [Transitioned { from: Finished, to: Playing }]` — e que o controle negativo dispara junto. Restaurado e verde.
+
+**Pending.** O *processo* daemon e o IPC (GS2/ADR-0014) — esta fatia é a máquina, não o servidor. Nenhuma fonte de frames está ligada: `ShowDescriptor` é descritor, e quem carrega o `.lumyx` será o daemon. O `to_json()` ainda não é consumido pelo `led-readmodel`.
+
+**Decisions.** Crate **sem dependências** em vez de depender de `led-core` — não precisa, e não depender é uma garantia mais forte que uma convenção. `State::as_str()` escrito à mão em vez de derivado de `Debug`: é superfície observável pelo control-plane e `Debug` pode mudar num refactor. Sem comando `Resume` — `Play` a partir de `Paused` já é retomar, e um comando a mais é uma linha a mais na matriz sem semântica nova.
 
 ### 2026-08-03 — E1 (1ª fatia): biblioteca de efeitos + ADR-0021 (efeito é função pura)
 

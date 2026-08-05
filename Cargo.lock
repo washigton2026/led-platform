@@ -830,6 +830,10 @@ name = "led-core"
 version = "0.1.0"
 
 [[package]]
+name = "led-daemon"
+version = "0.1.0"
+
+[[package]]
 name = "led-demo"
 version = "0.1.0"
 dependencies = [
