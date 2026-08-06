@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (839 tests)
+cargo test --workspace                  # all suites (870 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (839 tests)
+cargo test --workspace                  # all suites (870 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **839 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **870 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -109,7 +109,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
 | `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
-| `led-daemon-bin` | **NEW** — processo daemon (GS2): carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
+| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)**: protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -132,6 +132,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-05e — GS3: IPC sobre UDS owner-only + `ledctl`
+
+**Done.** O daemon passou a ser controlável. Protocolo v1 em `docs/architecture/ipc-protocol-v1.md`; implementação em `json.rs` (parser), `proto.rs` (tipos), `server.rs` (UDS) e o cliente `ledctl`. **`led-daemon` intocado** — `git diff -- crates/led-daemon/` vazio: o contrato congelado na GS1.6 atravessou o fio sem mudar.
+
+**A decisão de arquitetura: um só aplicador.** As threads de ligação **nunca tocam** o `ShowRuntime` — analisam, validam e **enfileiram**; o laço aplica no limite do tick. Não é só conformidade com o `control-protocol.md`: é o que faz o determinismo do ADR-0023 **sobreviver à chegada da concorrência**. E `status` não passa pela fila (lê um snapshot publicado), então **consultar nunca compete com comandar**.
+
+**Três escolhas de segurança que não são estéticas.** (a) Socket `0o600` — e **sem TCP**, `0.0.0.0` não é sequer representável, o que é mais forte que verificá-lo em runtime. (b) **Limite de 64 KiB por linha** — sem ele, um cliente que nunca envie `\n` faz o daemon crescer sem limite. (c) **Limite de profundidade no parser JSON** — `[[[[[…` recursivo estouraria a pilha; um cliente derrubaria o daemon com uma linha de texto.
+
+**`shutdown` em duas fases**, embora o enunciado não pedisse. A spec exige duas fases para ações irreversíveis e já define `confirmation_required`; hoje o daemon não tem saída, mas no GS4 terá — e **acrescentar confirmação depois de existirem clientes custa versão de protocolo**. Token de uso único; não é segredo criptográfico (o socket já é owner-only), existe contra o **engano**.
+
+**O gate do pré-voo ficou visível no fio.** `load` sem `assume_integrity` deixa em `loaded`, e o `play` seguinte devolve **`not_armed`** — em vez de um arm implícito que esconderia a decisão do ADR-0023 do cliente.
+
+**Invariants verified.** **870 testes** (839 + 31), clippy `-D warnings` exit 0. Os códigos de recusa do runtime vão **inalterados** para o fio (`no_show_loaded` significa o mesmo dos dois lados — foi para isto que se congelou o contrato). O `id` sobrevive a qualquer erro analisável: é extraído **antes** de validar o resto, para o cliente nunca ficar à espera de uma resposta que não vem.
+
+**Prova real com os dois binários**, não só testes: `ping`/`version`/`status` → ok; `load` sem integridade → `loaded` e `play` → `not_armed` (exit 1); com `--assume-integrity` → `ready` → `playing`, `status` a 1 s = `position_ms:998`, `duration_ms:8100`, `ticks:52`; `seek 4000` → 4000; `pause` → `paused` em 4074; `shutdown --yes` → `confirmation_required` e depois `shutting_down`, exit 0, e o daemon encerrou com `ShutdownRequested · ticks=56 · skipped=5`.
+
+**Erro meu nesta rodada.** Nos testes extraí o token de confirmação com `split('"').nth(1)`, que devolve `confirm` — o **rótulo**, não o valor (o `ledctl` usava `nth(3)`, correto). Um teste de duas fases com o token errado testa a **rejeição**, não a aceitação. Substituí por uma função `token_de()` que procura a marca `"confirm":"`, com o porquê no comentário. Também levei ~10 min a suspeitar de um travamento que era **tempo de compilação**: isolei teste a teste e todos passavam.
+
+**Pending.** Sem TCP/token/mTLS (same-host por agora; a LAN é do ADR-0014 e espera por appliance). Sem `SIGINT` ainda — mas agora há `shutdown` remoto, que era a via prevista. `ClientRegistry` está declarado e vazio (identidade por ligação é do GS4).
+
+**Decisions.** JSON **parser próprio** (o repo já emite à mão e já tem precedente de parser em `led-xlights`) — nenhuma dependência nova no workspace. Eventos assíncronos **não têm `id`**: é assim que o cliente os distingue de uma resposta, sem campo extra. Subscritor morto é **podado**, senão o `Sender` acumula para sempre.
 
 ### 2026-08-05d — GS2: o processo daemon (`led-daemon-bin`)
 

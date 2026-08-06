@@ -22,12 +22,18 @@
 //! o `shutdown` por IPC é entrega do GS3. Ctrl-C termina o processo, mas **abruptamente**:
 //! sem a linha final de estado nem o *flush* do journal.
 
+pub mod json;
 pub mod journal;
 pub mod loader;
 pub mod pacer;
+pub mod proto;
 pub mod run;
+#[cfg(unix)]
+pub mod server;
 
 pub use journal::Journal;
 pub use loader::{descriptor_from_path, descriptor_from_reader, Integrity, LoadError};
 pub use pacer::{Pacer, SystemPacer};
 pub use run::{run, Config, ExitReason, Outcome};
+#[cfg(unix)]
+pub use server::{ControlPlane, Server, Snapshot};

@@ -220,6 +220,178 @@ fn finish<P: Pacer, W: Write>(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GS3 — o laço com plano de controlo
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Campos de resposta ao cliente, ou a recusa.
+#[cfg(unix)]
+pub type IpcReply = Result<Vec<(&'static str, String)>, crate::proto::ProtoError>;
+
+/// O que aplicar um comando de IPC produz: a resposta **e** os eventos a difundir.
+#[cfg(unix)]
+pub type IpcOutcome = (IpcReply, Vec<led_daemon::Event>);
+
+/// Aplica um comando vindo do IPC. **Só o laço chama isto** — é o aplicador único.
+#[cfg(unix)]
+fn apply_ipc(rt: &mut ShowRuntime, cmd: &crate::proto::Cmd, now: u64) -> IpcOutcome {
+    use crate::proto::Cmd;
+    use crate::server::{load_error, runtime_result_to_reply};
+    use led_daemon::{Command, ShowId};
+
+    // `load` é o único que traduz argumentos externos em estado: lê o ficheiro e, se a
+    // integridade for AFIRMADA, arma logo a seguir. Sem essa afirmação fica em `Loaded` e o
+    // `play` recusa com `not_armed` — o gate do ADR-0023 fica **visível no fio**, em vez de
+    // ser escondido por um arm implícito.
+    if let Cmd::Load { path, assume_integrity } = cmd {
+        let desc = match crate::loader::descriptor_from_path(path, ShowId(1)) {
+            Ok(d) => d,
+            Err(e) => return (Err(load_error(e.to_string())), Vec::new()),
+        };
+        let mut eventos = match rt.apply(Command::Load(desc), now) {
+            Ok(evs) => evs,
+            Err(rej) => {
+                return (runtime_result_to_reply(Err(rej), rt.state(), rt.position_ms()), Vec::new())
+            }
+        };
+        if *assume_integrity {
+            let report = preflight_for_no_output(Integrity::AssumedByOperator);
+            match rt.apply(Command::Arm(report), now) {
+                Ok(evs) => eventos.extend(evs),
+                Err(rej) => {
+                    return (
+                        runtime_result_to_reply(Err(rej), rt.state(), rt.position_ms()),
+                        eventos,
+                    )
+                }
+            }
+        }
+        let reply = runtime_result_to_reply(Ok(eventos.clone()), rt.state(), rt.position_ms());
+        return (reply, eventos);
+    }
+
+    let core = match cmd {
+        Cmd::Unload => Command::Unload,
+        Cmd::Play => Command::Play,
+        Cmd::Pause => Command::Pause,
+        Cmd::Stop => Command::Stop,
+        Cmd::Seek { to_ms } => Command::Seek { to_ms: *to_ms },
+        outro => {
+            return (
+                Err(crate::proto::ProtoError::new(
+                    crate::proto::code::UNKNOWN_COMMAND,
+                    outro.name(),
+                )),
+                Vec::new(),
+            )
+        }
+    };
+    let r = rt.apply(core, now);
+    let eventos = r.clone().unwrap_or_default();
+    (runtime_result_to_reply(r, rt.state(), rt.position_ms()), eventos)
+}
+
+/// O laço, com plano de controlo ligado.
+///
+/// `inicial` é opcional: com IPC o show pode chegar por `load`, e o daemon arranca em `Idle`
+/// à espera. Sem plano de controlo isso seria um daemon que nunca faz nada — com ele, é o
+/// modo normal de operação.
+#[cfg(unix)]
+pub fn run_with_control<P: Pacer, W: Write>(
+    rt: &mut ShowRuntime,
+    inicial: Option<ShowDescriptor>,
+    cfg: &Config,
+    pacer: &mut P,
+    journal: &mut Journal<W>,
+    shutdown: &AtomicBool,
+    cp: &crate::server::ControlPlane,
+) -> Outcome {
+    use led_daemon::Command;
+
+    journal.line(&notice_to_json(
+        pacer.now_ms(),
+        "mode",
+        "no-output + ipc — nenhum frame deixa este processo (GS3); a saída chega no GS4",
+    ));
+
+    let mut duration_ms = 0;
+    if let Some(desc) = inicial {
+        duration_ms = desc.duration_ms;
+        if let Ok(evs) = rt.apply(Command::Load(desc), pacer.now_ms()) {
+            for e in &evs {
+                journal.line(&event_to_json(pacer.now_ms(), e));
+            }
+        }
+        if cfg.autoplay && cfg.integrity == Integrity::AssumedByOperator {
+            let report = preflight_for_no_output(cfg.integrity);
+            let _ = rt.apply(Command::Arm(report), pacer.now_ms());
+            let _ = rt.apply(Command::Play, pacer.now_ms());
+        }
+    }
+
+    let mut ticks: u64 = 0;
+    let mut skipped: u64 = 0;
+    let period = cfg.tick_ms.max(1);
+    let mut deadline = pacer.now_ms() + period;
+
+    let reason = loop {
+        if shutdown.load(Ordering::Relaxed) {
+            break ExitReason::ShutdownRequested;
+        }
+        if let Some(max) = cfg.max_ticks {
+            if ticks >= max {
+                break ExitReason::MaxTicks;
+            }
+        }
+
+        // ── Comandos do IPC, aplicados NO LIMITE DO TICK ─────────────────────
+        for job in cp.drain_jobs() {
+            let now = pacer.now_ms();
+            let (reply, eventos) = apply_ipc(rt, &job.cmd, now);
+            for e in &eventos {
+                let linha = event_to_json(now, e);
+                journal.line(&linha);
+                cp.broadcast(&linha);
+            }
+            if let Some(d) = rt.show().map(|s| s.duration_ms) {
+                duration_ms = d;
+            }
+            let _ = job.reply.send(reply); // cliente desligou: não é erro do daemon
+        }
+
+        pacer.sleep_until(deadline);
+        let now = pacer.now_ms();
+        for e in rt.apply(Command::Tick, now).unwrap_or_default() {
+            let linha = event_to_json(now, &e);
+            journal.line(&linha);
+            cp.broadcast(&linha);
+        }
+        ticks += 1;
+
+        // Snapshot para o `status` — publicado, não bloqueado atrás do runtime.
+        *cp.snapshot.lock().expect("snapshot") = crate::server::Snapshot {
+            state: rt.state().as_str().to_string(),
+            position_ms: rt.position_ms(),
+            show_id: rt.show().map(|s| s.id.0),
+            duration_ms,
+            ticks,
+        };
+
+        deadline += period;
+        if now >= deadline {
+            skipped += (now - deadline) / period + 1;
+            deadline = now + period;
+        }
+
+        if cfg.exit_on_finish && rt.state() == State::Finished {
+            break ExitReason::ReachedEnd;
+        }
+    };
+
+    finish(rt, pacer, journal, ticks, skipped, reason)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

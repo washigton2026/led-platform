@@ -22,6 +22,9 @@ OPÇÕES:
                           NÃO é verificação — nenhum hash é recomputado, e o
                           journal regista que foi afirmado. Sem isto o pré-voo
                           reprova e o daemon não toca.
+    --socket CAMINHO      Abre o socket de controlo (UDS, owner-only 0600).
+                          Com --socket, o <SHOW.lumyx> é OPCIONAL: o show pode
+                          chegar por `load` do ledctl.
     --no-autoplay         Carrega mas não arma nem toca
     --keep-running        Não encerra ao chegar ao fim do show
     -h, --help            Esta ajuda
@@ -39,13 +42,15 @@ ESCOPO (GS2):
 
 #[derive(Debug)]
 struct Args {
-    show: String,
+    show: Option<String>,
+    socket: Option<String>,
     cfg: Config,
     log: Option<String>,
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut show: Option<String> = None;
+    let mut socket: Option<String> = None;
     let mut cfg = Config { integrity: Integrity::NotVerified, ..Config::default() };
     let mut log = None;
 
@@ -66,6 +71,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                     Some(valor("--max-ticks")?.parse().map_err(|_| "--max-ticks inválido")?)
             }
             "--log" => log = Some(valor("--log")?),
+            "--socket" => socket = Some(valor("--socket")?),
             "--assume-integrity" => cfg.integrity = Integrity::AssumedByOperator,
             "--no-autoplay" => cfg.autoplay = false,
             "--keep-running" => cfg.exit_on_finish = false,
@@ -80,7 +86,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         i += 1;
     }
 
-    Ok(Args { show: show.ok_or("falta o ficheiro <SHOW.lumyx>")?, cfg, log })
+    if show.is_none() && socket.is_none() {
+        return Err("falta o ficheiro <SHOW.lumyx> (ou use --socket para carregar por IPC)".into());
+    }
+    Ok(Args { show, socket, cfg, log })
 }
 
 /// Lê o stdin numa thread própria e sinaliza o encerramento na linha `shutdown`.
@@ -120,12 +129,15 @@ fn main() {
         }
     };
 
-    let desc = match descriptor_from_path(&args.show, ShowId(1)) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("erro ao carregar {}: {e}", args.show);
-            std::process::exit(1);
-        }
+    let desc = match &args.show {
+        Some(p) => match descriptor_from_path(p, ShowId(1)) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("erro ao carregar {p}: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => None,
     };
 
     let stdout = std::io::stdout();
@@ -147,7 +159,31 @@ fn main() {
 
     let mut rt = ShowRuntime::new();
     let mut pacer = SystemPacer::new();
-    let outcome = run(&mut rt, desc, &args.cfg, &mut pacer, &mut journal, &flag);
+
+    let outcome = match &args.socket {
+        Some(path) => {
+            let cp = led_daemon_bin::ControlPlane::new(Arc::clone(&flag));
+            let srv = match led_daemon_bin::Server::bind(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("erro: não consigo abrir o socket {path}: {e}");
+                    std::process::exit(1);
+                }
+            };
+            srv.spawn(Arc::clone(&cp));
+            led_daemon_bin::run::run_with_control(
+                &mut rt, desc, &args.cfg, &mut pacer, &mut journal, &flag, &cp,
+            )
+        }
+        None => run(
+            &mut rt,
+            desc.expect("sem --socket o show é obrigatório (verificado no parse)"),
+            &args.cfg,
+            &mut pacer,
+            &mut journal,
+            &flag,
+        ),
+    };
 
     std::process::exit(match outcome.reason {
         ExitReason::NeverStarted => 1,
@@ -166,7 +202,7 @@ mod tests {
     #[test]
     fn parse_minimo() {
         let a = args(&["show.lumyx"]).unwrap();
-        assert_eq!(a.show, "show.lumyx");
+        assert_eq!(a.show.as_deref(), Some("show.lumyx"));
         assert_eq!(a.cfg.tick_ms, 20);
         assert_eq!(a.cfg.integrity, Integrity::NotVerified, "integridade NÃO é o padrão");
     }
@@ -196,7 +232,8 @@ mod tests {
 
     #[test]
     fn erros_de_cli_sao_explicitos() {
-        assert!(args(&[]).is_err(), "sem ficheiro tem de falhar");
+        assert!(args(&[]).is_err(), "sem ficheiro nem socket tem de falhar");
+        assert!(args(&["--socket", "/tmp/s.sock"]).is_ok(), "com socket o show é opcional");
         assert!(args(&["a.lumyx", "b.lumyx"]).is_err(), "dois ficheiros");
         assert!(args(&["a.lumyx", "--tick-ms"]).is_err(), "opção sem valor");
         assert!(args(&["a.lumyx", "--tick-ms", "abc"]).is_err(), "valor não numérico");
