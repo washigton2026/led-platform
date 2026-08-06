@@ -1,6 +1,10 @@
 # ADR-0023 — Superfície de transporte do engine (estado de show em runtime)
 
-- **Status:** 🟢 **aceito** — implementado em `crates/led-daemon` nesta fatia (GS1)
+- **Status:** 🟢 **aceito** — implementado em `crates/led-daemon` (GS1)
+- **Auditoria de contrato (GS1.5):** [anexo com a tabela completa dos 80 pares](0023-anexo-tabela-de-contrato.md).
+  **Veredito: não congelar ainda** — 4 divergências de superfície observável (F1–F4) que o
+  IPC do GS3 serializaria. Nenhuma é bug de estado; as 5 propriedades de consistência
+  passam exceto "origem única de evento" (`PositionChanged` tem 4 origens).
 - **Data:** 2026-08-05
 - **Exigido por:** `docs/architecture/control-protocol.md` §Fora de escopo — *"a superfície de
   transporte do engine (play/pause/seek — não existe; precisa de **ADR próprio** ... antes de

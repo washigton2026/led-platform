@@ -131,6 +131,37 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-05b — GS1.5: auditoria de contrato do daemon (tabela dos 80 pares)
+
+**Done.** Antes de congelar o contrato para o IPC, auditá-lo. [Anexo do ADR-0023](./docs/adr/0023-anexo-tabela-de-contrato.md) com a **tabela completa dos 80 pares** — `estado → comando → resultado → eventos → próximo estado` — **gerada executando a máquina de produção** (`cargo run -p led-daemon --example contract_table`), não escrita à mão. Uma tabela manual está correta no instante em que se escreve e apodrece no commit seguinte.
+
+**Máquina de estados intocada:** `git diff -- crates/led-daemon/src` vazio. O único código novo é o gerador (ferramenta de documentação; não corre na CI, não afirma veredito).
+
+**As 5 propriedades — 4 passam, 1 falha:**
+
+| Propriedade | Veredito |
+|---|---|
+| Comandos com semântica única | ✅ com ressalva — `Play` de `Ready`/`Paused`/`Stopped` **não** é sobrecarga: a semântica é uma só, "avançar a partir da posição corrente" |
+| Eventos com origem única | ❌ **falha** — `PositionChanged` tem **4 origens** |
+| Sem tempo implícito | ✅ — `grep Instant\|SystemTime\|now()\|elapsed()` devolve **só um comentário** |
+| Nenhum estado inalcançável | ✅ — os 8 têm caminho de entrada, provado por construção |
+| Nenhum estado terminal por acidente | ✅ — `Error` é absorvente **por decisão**, com 2 saídas |
+
+**Quatro divergências encontradas (F1–F4), nenhuma é bug de estado:**
+
+- **F1 🔴** — a doc de `Command::Tick` diz *"aceite em qualquer estado... o daemon não deve ter de saber o estado"*, mas `Tick` é **recusado em `Error`**. Um daemon a ticar em cadência fixa — exatamente o que a doc descreve — recebe um fluxo de recusas. A razão declarada e o comportamento contradizem-se.
+- **F2 🔴** — `PositionChanged` sai de `seek`, `pause`, `stop` e `tick`. Um consumidor **não distingue** avanço contínuo de salto do operador — que é exatamente a distinção de que uma timeline de console precisa.
+- **F3 🟡** — em `Idle`, `pause` devolve `not_applicable` mas `stop`/`play`/`seek` devolvem `no_show_loaded`. **Mesma causa raiz, dois códigos**, num modelo de erro que é consumido por máquina.
+- **F4 🟡** — `ready + arm` emite `Transitioned{from == to}`: evento de mudança onde nada mudou. É a **única** auto-transição que emite.
+
+**Verificado, não deduzido:** o gerador computa a injetividade de `(from→to) → comando` e confirma que **`Transitioned` é inequívoco** apesar de 9 origens — o consumidor deduz a causa do par, sem campo extra. Foi assim que se separou o evento que está bem do que não está.
+
+**Recomendação registada: não congelar ainda.** F1 e F2 são a superfície que o IPC vai serializar; enquanto o contrato só existe em Rust, mudá-los é uma edição — depois de existir no fio com `v` negociado, é versão de protocolo e migração de cliente.
+
+**Pending.** Decisão do responsável sobre F1–F4. Se optar por congelar como está, F1 e F2 devem entrar no ledger de dívida com gatilho no GS3.
+
+**Decisions.** Fragilidade registada sem correção: `cmd_play` tem `State::Error => unreachable!()`, de facto inalcançável, mas a ausência de pânico depende de uma guarda **noutra função** — um refactor que mova a guarda transforma-a em pânico em produção.
+
 ### 2026-08-05 — GS1: superfície de transporte do engine (ADR-0023) + `led-daemon`
 
 **Done.** O `control-protocol.md` mediu a lacuna e foi explícito: *"a superfície de transporte do engine (play/pause/seek — **não existe**; precisa de **ADR próprio**)"*. Esta fatia fecha isso — ADR primeiro, código contra ele.
