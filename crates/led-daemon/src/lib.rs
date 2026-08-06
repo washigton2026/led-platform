@@ -229,8 +229,13 @@ pub enum Command {
     Stop,
     /// Salta para um instante absoluto.
     Seek { to_ms: u64 },
-    /// Avanço de tempo. Só tem efeito em `Playing`; noutros estados é aceite e inócuo,
-    /// porque o daemon tica em cadência fixa e não deve ter de saber o estado para o fazer.
+    /// Avanço de tempo. Só tem efeito em `Playing`; **em todos os outros estados é aceite e
+    /// inócuo — incluindo `Error`**.
+    ///
+    /// O daemon tica em cadência fixa e **não deve ter de conhecer o estado** para o fazer.
+    /// Recusar `Tick` em `Error` daria um fluxo de recusas a um laço que não pode fazer nada
+    /// com elas (F1 da auditoria GS1.5). Isto **não** enfraquece a absorção de `Error`: essa
+    /// propriedade é sobre **transições**, e `Tick` fora de `Playing` não faz nenhuma.
     Tick,
     /// O motor reporta uma falha de runtime.
     Fault(FaultCode),
@@ -239,6 +244,29 @@ pub enum Command {
 }
 
 impl Command {
+    /// O comando exige um show carregado?
+    ///
+    /// **É esta função que dá a regra de F3 uma forma estrutural.** Sem ela, cada handler
+    /// decidia por si se olhava primeiro para o show ou para o estado, e `pause` acabou a
+    /// devolver `not_applicable` onde os irmãos devolviam `no_show_loaded` — mesma causa
+    /// raiz, dois códigos. Com a guarda única em [`ShowRuntime::apply`], a classe de erro
+    /// deixa de ser possível, não só esta instância.
+    ///
+    /// `load` não exige (é o que carrega), `tick` não exige (é inócuo), e `clear_fault`
+    /// depende de estar em `Error`, não de haver show.
+    pub fn requires_show(&self) -> bool {
+        matches!(
+            self,
+            Command::Unload
+                | Command::Arm(_)
+                | Command::Play
+                | Command::Pause
+                | Command::Stop
+                | Command::Seek { .. }
+                | Command::Fault(_)
+        )
+    }
+
     /// Nome estável, para diagnóstico e para a matriz de transições.
     pub fn name(&self) -> &'static str {
         match self {
@@ -294,13 +322,42 @@ impl Rejected {
     }
 }
 
+/// Por que a posição mudou (F2 da auditoria GS1.5).
+///
+/// Sem isto, `PositionChanged` sai de quatro comandos e o consumidor **não distingue** um
+/// avanço contínuo de um salto do operador — que é exatamente a distinção de que uma
+/// timeline de console precisa para decidir entre animar o playhead e reposicioná-lo.
+///
+/// **Três causas para quatro origens, e isso é deliberado:** `pause` e `tick` são ambos
+/// `Advanced`, porque pausar **avança** a posição até ao instante da pausa antes de parar.
+/// Uma quarta variante só para `pause` descreveria o comando, não a causa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionCause {
+    /// O tempo correu: `tick` em `Playing`, ou o avanço final ao pausar.
+    Advanced,
+    /// O operador saltou para um instante (`seek`).
+    Sought,
+    /// Reposto a zero (`stop`).
+    Reset,
+}
+
+impl PositionCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PositionCause::Advanced => "advanced",
+            PositionCause::Sought => "sought",
+            PositionCause::Reset => "reset",
+        }
+    }
+}
+
 /// O que aconteceu. Emitido **só** quando o comando é aceite.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Transitioned { from: State, to: State },
     ShowLoaded(ShowId),
     ShowUnloaded(ShowId),
-    PositionChanged { ms: u64 },
+    PositionChanged { ms: u64, cause: PositionCause },
     ReachedEnd,
     Faulted(FaultCode),
     FaultCleared,
@@ -404,13 +461,20 @@ impl ShowRuntime {
         let now_ms = now_ms.max(self.last_now_ms);
         self.last_now_ms = now_ms;
 
-        // `Error` é absorvente: só se sai por `ClearFault` ou `Unload`.
+        // `Error` é absorvente: só se sai por `ClearFault` ou `Unload`. `Tick` passa por ser
+        // **inerte** — não transiciona, logo não fere a absorção (F1).
         if self.state == State::Error
-            && !matches!(cmd, Command::ClearFault | Command::Unload)
+            && !matches!(cmd, Command::ClearFault | Command::Unload | Command::Tick)
         {
             return Err(Rejected::InErrorState(
                 self.fault.expect("estado Error sempre tem falha registada"),
             ));
+        }
+
+        // F3 — guarda ÚNICA para "não há show". Aqui, e não em cada handler: é o que impede
+        // que dois comandos com a mesma causa raiz devolvam códigos diferentes.
+        if cmd.requires_show() && self.show.is_none() {
+            return Err(Rejected::NoShowLoaded);
         }
 
         match cmd {
@@ -429,10 +493,20 @@ impl ShowRuntime {
 
     // ── handlers ─────────────────────────────────────────────────────────────
 
-    fn transition(&mut self, to: State) -> Event {
+    /// Muda de estado e devolve o evento **apenas se o estado mudou** (F4).
+    ///
+    /// Devolver `Vec` em vez de `Event` é o que torna a regra estrutural: `Transitioned`
+    /// passa a significar *"o estado mudou"* **por construção**, para esta e para qualquer
+    /// transição futura. Um evento de mudança onde nada mudou obriga todo o consumidor a
+    /// comparar `from` com `to` antes de reagir.
+    fn transition(&mut self, to: State) -> Vec<Event> {
         let from = self.state;
         self.state = to;
-        Event::Transitioned { from, to }
+        if from == to {
+            Vec::new()
+        } else {
+            vec![Event::Transitioned { from, to }]
+        }
     }
 
     fn cmd_load(&mut self, desc: ShowDescriptor) -> Result<Vec<Event>, Rejected> {
@@ -444,36 +518,39 @@ impl ShowRuntime {
         }
         self.show = Some(desc);
         self.position_ms = 0;
-        Ok(vec![self.transition(State::Loaded), Event::ShowLoaded(desc.id)])
+        let mut ev = self.transition(State::Loaded);
+        ev.push(Event::ShowLoaded(desc.id));
+        Ok(ev)
     }
 
     fn cmd_unload(&mut self) -> Result<Vec<Event>, Rejected> {
-        match self.state {
-            State::Idle => Err(Rejected::NoShowLoaded),
-            // Descarregar com o transporte a correr é a classe de erro que apaga um palco a
-            // meio do número. Parar primeiro é explícito e barato.
-            State::Playing => Err(Rejected::NotApplicable { state: self.state, command: "unload" }),
-            _ => {
-                let id = self.show.expect("estado com show tem descritor").id;
-                self.show = None;
-                self.position_ms = 0;
-                self.play_started_at = None;
-                self.play_started_from = 0;
-                self.fault = None;
-                Ok(vec![self.transition(State::Idle), Event::ShowUnloaded(id)])
-            }
+        // "Não há show" já foi filtrado pela guarda de `apply` (F3).
+        // Descarregar com o transporte a correr é a classe de erro que apaga um palco a meio
+        // do número. Parar primeiro é explícito e barato.
+        if self.state == State::Playing {
+            return Err(Rejected::NotApplicable { state: self.state, command: "unload" });
         }
+        let id = self.show.expect("a guarda de apply garante o descritor").id;
+        self.show = None;
+        self.position_ms = 0;
+        self.play_started_at = None;
+        self.play_started_from = 0;
+        self.fault = None;
+        let mut ev = self.transition(State::Idle);
+        ev.push(Event::ShowUnloaded(id));
+        Ok(ev)
     }
 
     fn cmd_arm(&mut self, report: PreflightReport) -> Result<Vec<Event>, Rejected> {
         match self.state {
-            State::Idle => Err(Rejected::NoShowLoaded),
             State::Loaded | State::Stopped | State::Finished | State::Ready => {
                 if !report.is_clear() {
                     // Recusa NÃO muda o estado: o operador corrige a rede e re-arma.
                     return Err(Rejected::PreflightFailed(report));
                 }
-                Ok(vec![self.transition(State::Ready)])
+                // Re-armar em `Ready` é legítimo (re-corre o pré-voo) e, por F4, **não emite
+                // `Transitioned`** — nada mudou. O `Ok` vazio é a confirmação.
+                Ok(self.transition(State::Ready))
             }
             _ => Err(Rejected::NotApplicable { state: self.state, command: "arm" }),
         }
@@ -481,13 +558,13 @@ impl ShowRuntime {
 
     fn cmd_play(&mut self, now_ms: u64) -> Result<Vec<Event>, Rejected> {
         match self.state {
-            State::Idle => Err(Rejected::NoShowLoaded),
             State::Loaded => Err(Rejected::NotArmed),
             State::Ready | State::Paused | State::Stopped => {
                 self.play_started_at = Some(now_ms);
                 self.play_started_from = self.position_ms;
-                Ok(vec![self.transition(State::Playing)])
+                Ok(self.transition(State::Playing))
             }
+            State::Idle => unreachable!("a guarda de requires_show em apply() filtra Idle"),
             State::Playing => Err(Rejected::NotApplicable { state: self.state, command: "play" }),
             // ADR-0023 §4: rebobinar implicitamente faria um show recomeçar no palco com um
             // toque acidental. O caminho é `Stop`/`Seek` e depois `Play`.
@@ -502,7 +579,12 @@ impl ShowRuntime {
         }
         self.advance_position(now_ms);
         self.play_started_at = None;
-        Ok(vec![self.transition(State::Paused), Event::PositionChanged { ms: self.position_ms }])
+        // Causa `Advanced`, não uma quarta variante: pausar **avança** até ao instante da
+        // pausa antes de parar. A causa descreve o que aconteceu à posição, não o comando.
+        let ms = self.position_ms;
+        let mut ev = self.transition(State::Paused);
+        ev.push(Event::PositionChanged { ms, cause: PositionCause::Advanced });
+        Ok(ev)
     }
 
     fn cmd_stop(&mut self) -> Result<Vec<Event>, Rejected> {
@@ -511,17 +593,16 @@ impl ShowRuntime {
                 self.position_ms = 0; // ADR-0023 §5 — como o xLights
                 self.play_started_at = None;
                 self.play_started_from = 0;
-                Ok(vec![self.transition(State::Stopped), Event::PositionChanged { ms: 0 }])
+                let mut ev = self.transition(State::Stopped);
+                ev.push(Event::PositionChanged { ms: 0, cause: PositionCause::Reset });
+                Ok(ev)
             }
-            State::Idle => Err(Rejected::NoShowLoaded),
             _ => Err(Rejected::NotApplicable { state: self.state, command: "stop" }),
         }
     }
 
     fn cmd_seek(&mut self, to_ms: u64, now_ms: u64) -> Result<Vec<Event>, Rejected> {
-        let Some(show) = self.show else {
-            return Err(Rejected::NoShowLoaded);
-        };
+        let show = self.show.expect("a guarda de requires_show em apply() garante o show");
         if !matches!(
             self.state,
             State::Loaded | State::Ready | State::Playing | State::Paused | State::Stopped | State::Finished
@@ -537,7 +618,7 @@ impl ShowRuntime {
             self.play_started_at = Some(now_ms);
             self.play_started_from = to_ms;
         }
-        Ok(vec![Event::PositionChanged { ms: to_ms }])
+        Ok(vec![Event::PositionChanged { ms: to_ms, cause: PositionCause::Sought }])
     }
 
     fn cmd_tick(&mut self, now_ms: u64) -> Vec<Event> {
@@ -547,22 +628,21 @@ impl ShowRuntime {
             return Vec::new();
         }
         self.advance_position(now_ms);
-        let mut events = vec![Event::PositionChanged { ms: self.position_ms }];
+        let mut events =
+            vec![Event::PositionChanged { ms: self.position_ms, cause: PositionCause::Advanced }];
 
         let duration = self.show.expect("Playing exige show").duration_ms;
         if self.position_ms >= duration {
             self.position_ms = duration;
             self.play_started_at = None;
-            events.push(self.transition(State::Finished));
+            events.extend(self.transition(State::Finished));
             events.push(Event::ReachedEnd);
         }
         events
     }
 
     fn cmd_fault(&mut self, code: FaultCode, now_ms: u64) -> Result<Vec<Event>, Rejected> {
-        if self.state == State::Idle {
-            return Err(Rejected::NoShowLoaded);
-        }
+        // "Não há show" já foi filtrado pela guarda de `apply` (F3).
         // Preserva a posição onde a falha aconteceu — é o que o operador precisa para saber
         // em que ponto do show o problema surgiu.
         if self.state == State::Playing {
@@ -570,7 +650,9 @@ impl ShowRuntime {
         }
         self.play_started_at = None;
         self.fault = Some(code);
-        Ok(vec![self.transition(State::Error), Event::Faulted(code)])
+        let mut ev = self.transition(State::Error);
+        ev.push(Event::Faulted(code));
+        Ok(ev)
     }
 
     fn cmd_clear_fault(&mut self) -> Result<Vec<Event>, Rejected> {
@@ -580,7 +662,9 @@ impl ShowRuntime {
         self.fault = None;
         // Volta a `Loaded`, nunca a `Ready`: depois de uma falha o pré-voo tem de correr
         // outra vez. Voltar direto a armado seria confiar num veredito anterior à falha.
-        Ok(vec![self.transition(State::Loaded), Event::FaultCleared])
+        let mut ev = self.transition(State::Loaded);
+        ev.push(Event::FaultCleared);
+        Ok(ev)
     }
 
     /// Avança `position_ms` pelo tempo decorrido desde o início do `Play` corrente,
@@ -761,6 +845,81 @@ mod tests {
         let p = rt.position_ms();
         rt.apply(Command::Tick, 10).unwrap(); // salto para trás
         assert!(rt.position_ms() >= p, "a posição nunca retrocede por salto de relógio");
+    }
+
+    // ── GS1.6 — as quatro correções da auditoria ─────────────────────────────
+
+    /// **F1.** `Tick` é aceite em `Error` e é inerte. O daemon tica em cadência fixa sem ter
+    /// de conhecer o estado, e a absorção de `Error` continua intacta.
+    #[test]
+    fn f1_tick_e_aceite_em_error_e_nao_transiciona() {
+        let mut rt = playing();
+        rt.apply(Command::Tick, 3_000).unwrap();
+        rt.apply(Command::Fault(FaultCode::DeviceLost), 3_000).unwrap();
+        let pos = rt.position_ms();
+
+        let evs = rt.apply(Command::Tick, 9_999).expect("Tick tem de ser aceite em Error");
+        assert!(evs.is_empty(), "Tick em Error é inerte: nenhum evento");
+        assert_eq!(rt.state(), State::Error, "e NÃO transiciona — a absorção fica intacta");
+        assert_eq!(rt.position_ms(), pos, "nem move a posição");
+        // Os outros comandos continuam recusados: a exceção é só para o inerte.
+        assert!(rt.apply(Command::Play, 9_999).is_err());
+    }
+
+    /// **F2.** A causa distingue avanço, salto e reposição — que é o que uma timeline precisa.
+    #[test]
+    fn f2_position_changed_carrega_a_causa() {
+        let mut rt = playing();
+
+        let evs = rt.apply(Command::Tick, 3_000).unwrap();
+        assert!(evs.contains(&Event::PositionChanged { ms: 2_000, cause: PositionCause::Advanced }));
+
+        let evs = rt.apply(Command::Seek { to_ms: 7_000 }, 3_000).unwrap();
+        assert!(evs.contains(&Event::PositionChanged { ms: 7_000, cause: PositionCause::Sought }));
+
+        // Pausar é `Advanced`, não uma quarta causa: pausar AVANÇA até ao instante da pausa.
+        let evs = rt.apply(Command::Pause, 4_000).unwrap();
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, Event::PositionChanged { cause: PositionCause::Advanced, .. })));
+
+        let evs = rt.apply(Command::Stop, 4_000).unwrap();
+        assert!(evs.contains(&Event::PositionChanged { ms: 0, cause: PositionCause::Reset }));
+    }
+
+    /// **F3.** Mesma causa raiz ⇒ mesmo código, garantido pela guarda única em `apply`.
+    #[test]
+    fn f3_sem_show_todos_os_comandos_dao_o_mesmo_codigo() {
+        for cmd in [
+            Command::Unload,
+            Command::Arm(PreflightReport::all_clear()),
+            Command::Play,
+            Command::Pause,
+            Command::Stop,
+            Command::Seek { to_ms: 0 },
+            Command::Fault(FaultCode::DeviceLost),
+        ] {
+            let mut rt = ShowRuntime::new();
+            assert_eq!(
+                rt.apply(cmd, 0).unwrap_err(),
+                Rejected::NoShowLoaded,
+                "`{}` devia dar no_show_loaded em Idle",
+                cmd.name()
+            );
+        }
+    }
+
+    /// **F4.** Re-armar em `Ready` é aceite e **não** emite `Transitioned` — nada mudou.
+    #[test]
+    fn f4_auto_transicao_nao_emite_evento() {
+        let mut rt = ShowRuntime::new();
+        rt.apply(Command::Load(show()), 0).unwrap();
+        rt.apply(Command::Arm(PreflightReport::all_clear()), 0).unwrap();
+        assert_eq!(rt.state(), State::Ready);
+
+        let evs = rt.apply(Command::Arm(PreflightReport::all_clear()), 0).unwrap();
+        assert!(evs.is_empty(), "from == to não pode emitir Transitioned, veio {evs:?}");
+        assert_eq!(rt.state(), State::Ready, "mas o comando foi aceite");
     }
 
     #[test]

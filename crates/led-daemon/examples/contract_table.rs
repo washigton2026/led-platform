@@ -88,7 +88,9 @@ fn ev(e: &Event) -> String {
         Event::Transitioned { from, to } => format!("Transitioned({from}→{to})"),
         Event::ShowLoaded(id) => format!("ShowLoaded({})", id.0),
         Event::ShowUnloaded(id) => format!("ShowUnloaded({})", id.0),
-        Event::PositionChanged { ms } => format!("PositionChanged({ms})"),
+        Event::PositionChanged { ms, cause } => {
+            format!("PositionChanged({ms}, {})", cause.as_str())
+        }
         Event::ReachedEnd => "ReachedEnd".into(),
         Event::Faulted(c) => format!("Faulted({})", c.as_str()),
         Event::FaultCleared => "FaultCleared".into(),
@@ -154,8 +156,9 @@ fn main() {
     // ── Sinais para a auditoria do contrato ──────────────────────────────────
     println!("## Sinais extraídos da execução\n");
     println!(
-        "- **`PositionChanged` tem {} origens distintas:** `{}`. Um consumidor que receba \
-         só o evento **não distingue** um avanço contínuo de um salto do operador.",
+        "- **`PositionChanged` sai de {} comandos** (`{}`) — mas agora **carrega a causa**, \
+         então o consumidor distingue avanço, salto e reposição sem saber o comando (F2 \
+         fechado na GS1.6).",
         pos_changed_por_comando.len(),
         pos_changed_por_comando.join("`, `")
     );

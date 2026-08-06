@@ -4,11 +4,18 @@
 O único código novo é `crates/led-daemon/examples/contract_table.rs`, o **gerador** desta
 tabela — ferramenta de documentação, não gate e não produção.
 
-> **Veredito: o contrato ainda NÃO deveria ser congelado.** A máquina está correta e os 80
-> pares comportam-se como declarado, mas a auditoria achou **quatro divergências de
-> contrato** (§3). Nenhuma é um bug de estado — são inconsistências na *superfície observável*
-> (eventos e códigos de recusa). Congelar agora **serializa-as no fio** no GS3, e mudá-las
-> depois custa versão de protocolo. Detalhe e recomendação em §3 e §5.
+> **Veredito da GS1.5: não congelar ainda** — 4 divergências (§3).
+> **✅ GS1.6: as quatro foram fechadas.** O contrato está **congelado**. As secções §3 e §5
+> ficam como **registo histórico** do que foi encontrado e por quê; a resolução de cada uma
+> está no [ADR-0023 §8](0023-superficie-de-transporte-do-engine.md). A tabela da §2 e os
+> sinais foram **regenerados** após as correções.
+>
+> | # | Divergência | Resolução |
+> |---|---|---|
+> | F1 | `Tick` recusado em `Error`, contra a doc | **Opção (A)** — aceite em todos os estados, inerte |
+> | F2 | `PositionChanged` com 4 origens indistinguíveis | `PositionCause { Advanced, Sought, Reset }` |
+> | F3 | `pause` em `Idle` divergia dos irmãos | Guarda **única** em `apply` via `requires_show()` |
+> | F4 | `ready + arm` emitia `Transitioned{from==to}` | `transition()` só emite quando o estado muda |
 
 ---
 
@@ -21,9 +28,9 @@ tabela — ferramenta de documentação, não gate e não produção.
 posição corrente"*. O que muda entre os três é a posição, que já era o que era. É por isso
 que não existe `Resume` (ADR-0023, alternativas descartadas).
 
-`Tick` **não** tem semântica única — ver **F1** em §3.
+~~`Tick` **não** tem semântica única — ver **F1**.~~ ✅ **Fechado na GS1.6**: `Tick` é aceite em **todos** os estados e é inerte fora de `Playing`.
 
-### (b) Todos os eventos possuem origem única — ❌ **falha em `PositionChanged`**
+### (b) Todos os eventos possuem origem única — ✅ **(era ❌ na GS1.5; fechado por F2)**
 
 | Evento | Origens | Inequívoco? |
 |---|---|---|
@@ -33,7 +40,7 @@ que não existe `Resume` (ADR-0023, alternativas descartadas).
 | `ReachedEnd` | `tick` | ✅ |
 | `Faulted` | `fault` | ✅ |
 | `FaultCleared` | `clear_fault` | ✅ |
-| **`PositionChanged{ms}`** | **`seek`, `pause`, `stop`, `tick`** | ❌ **não** — ver **F2** |
+| **`PositionChanged{ms, cause}`** | `seek`, `pause`, `stop`, `tick` | ✅ **sim (GS1.6)** — a `cause` distingue as origens |
 
 **Por que `Transitioned` passa apesar de 9 origens.** O gerador verifica a injetividade: cada
 par `(from→to)` é produzido por **exatamente um** comando. O consumidor deduz a causa do par,
@@ -90,7 +97,7 @@ cargo run -p led-daemon --example contract_table
 | 2 | `idle` | `unload` | ❌ `no_show_loaded` | *(nenhum)* | `idle *(inalterado)*` |
 | 3 | `idle` | `arm` | ❌ `no_show_loaded` | *(nenhum)* | `idle *(inalterado)*` |
 | 4 | `idle` | `play` | ❌ `no_show_loaded` | *(nenhum)* | `idle *(inalterado)*` |
-| 5 | `idle` | `pause` | ❌ `not_applicable` | *(nenhum)* | `idle *(inalterado)*` |
+| 5 | `idle` | `pause` | ❌ `no_show_loaded` | *(nenhum)* | `idle *(inalterado)*` |
 | 6 | `idle` | `stop` | ❌ `no_show_loaded` | *(nenhum)* | `idle *(inalterado)*` |
 | 7 | `idle` | `seek` | ❌ `no_show_loaded` | *(nenhum)* | `idle *(inalterado)*` |
 | 8 | `idle` | `tick` | ✅ aceite | *(nenhum)* | `idle` |
@@ -102,17 +109,17 @@ cargo run -p led-daemon --example contract_table
 | 14 | `loaded` | `play` | ❌ `not_armed` | *(nenhum)* | `loaded *(inalterado)*` |
 | 15 | `loaded` | `pause` | ❌ `not_applicable` | *(nenhum)* | `loaded *(inalterado)*` |
 | 16 | `loaded` | `stop` | ❌ `not_applicable` | *(nenhum)* | `loaded *(inalterado)*` |
-| 17 | `loaded` | `seek` | ✅ aceite | PositionChanged(1000) | `loaded` |
+| 17 | `loaded` | `seek` | ✅ aceite | PositionChanged(1000, sought) | `loaded` |
 | 18 | `loaded` | `tick` | ✅ aceite | *(nenhum)* | `loaded` |
 | 19 | `loaded` | `fault` | ✅ aceite | Transitioned(loaded→error) · Faulted(device_lost) | `error` |
 | 20 | `loaded` | `clear_fault` | ❌ `not_applicable` | *(nenhum)* | `loaded *(inalterado)*` |
 | 21 | `ready` | `load` | ❌ `show_already_loaded` | *(nenhum)* | `ready *(inalterado)*` |
 | 22 | `ready` | `unload` | ✅ aceite | Transitioned(ready→idle) · ShowUnloaded(42) | `idle` |
-| 23 | `ready` | `arm` | ✅ aceite | Transitioned(ready→ready) | `ready` |
+| 23 | `ready` | `arm` | ✅ aceite | *(nenhum)* | `ready` |
 | 24 | `ready` | `play` | ✅ aceite | Transitioned(ready→playing) | `playing` |
 | 25 | `ready` | `pause` | ❌ `not_applicable` | *(nenhum)* | `ready *(inalterado)*` |
 | 26 | `ready` | `stop` | ❌ `not_applicable` | *(nenhum)* | `ready *(inalterado)*` |
-| 27 | `ready` | `seek` | ✅ aceite | PositionChanged(1000) | `ready` |
+| 27 | `ready` | `seek` | ✅ aceite | PositionChanged(1000, sought) | `ready` |
 | 28 | `ready` | `tick` | ✅ aceite | *(nenhum)* | `ready` |
 | 29 | `ready` | `fault` | ✅ aceite | Transitioned(ready→error) · Faulted(device_lost) | `error` |
 | 30 | `ready` | `clear_fault` | ❌ `not_applicable` | *(nenhum)* | `ready *(inalterado)*` |
@@ -120,10 +127,10 @@ cargo run -p led-daemon --example contract_table
 | 32 | `playing` | `unload` | ❌ `not_applicable` | *(nenhum)* | `playing *(inalterado)*` |
 | 33 | `playing` | `arm` | ❌ `not_applicable` | *(nenhum)* | `playing *(inalterado)*` |
 | 34 | `playing` | `play` | ❌ `not_applicable` | *(nenhum)* | `playing *(inalterado)*` |
-| 35 | `playing` | `pause` | ✅ aceite | Transitioned(playing→paused) · PositionChanged(0) | `paused` |
-| 36 | `playing` | `stop` | ✅ aceite | Transitioned(playing→stopped) · PositionChanged(0) | `stopped` |
-| 37 | `playing` | `seek` | ✅ aceite | PositionChanged(1000) | `playing` |
-| 38 | `playing` | `tick` | ✅ aceite | PositionChanged(0) | `playing` |
+| 35 | `playing` | `pause` | ✅ aceite | Transitioned(playing→paused) · PositionChanged(0, advanced) | `paused` |
+| 36 | `playing` | `stop` | ✅ aceite | Transitioned(playing→stopped) · PositionChanged(0, reset) | `stopped` |
+| 37 | `playing` | `seek` | ✅ aceite | PositionChanged(1000, sought) | `playing` |
+| 38 | `playing` | `tick` | ✅ aceite | PositionChanged(0, advanced) | `playing` |
 | 39 | `playing` | `fault` | ✅ aceite | Transitioned(playing→error) · Faulted(device_lost) | `error` |
 | 40 | `playing` | `clear_fault` | ❌ `not_applicable` | *(nenhum)* | `playing *(inalterado)*` |
 | 41 | `paused` | `load` | ❌ `show_already_loaded` | *(nenhum)* | `paused *(inalterado)*` |
@@ -131,8 +138,8 @@ cargo run -p led-daemon --example contract_table
 | 43 | `paused` | `arm` | ❌ `not_applicable` | *(nenhum)* | `paused *(inalterado)*` |
 | 44 | `paused` | `play` | ✅ aceite | Transitioned(paused→playing) | `playing` |
 | 45 | `paused` | `pause` | ❌ `not_applicable` | *(nenhum)* | `paused *(inalterado)*` |
-| 46 | `paused` | `stop` | ✅ aceite | Transitioned(paused→stopped) · PositionChanged(0) | `stopped` |
-| 47 | `paused` | `seek` | ✅ aceite | PositionChanged(1000) | `paused` |
+| 46 | `paused` | `stop` | ✅ aceite | Transitioned(paused→stopped) · PositionChanged(0, reset) | `stopped` |
+| 47 | `paused` | `seek` | ✅ aceite | PositionChanged(1000, sought) | `paused` |
 | 48 | `paused` | `tick` | ✅ aceite | *(nenhum)* | `paused` |
 | 49 | `paused` | `fault` | ✅ aceite | Transitioned(paused→error) · Faulted(device_lost) | `error` |
 | 50 | `paused` | `clear_fault` | ❌ `not_applicable` | *(nenhum)* | `paused *(inalterado)*` |
@@ -142,7 +149,7 @@ cargo run -p led-daemon --example contract_table
 | 54 | `stopped` | `play` | ✅ aceite | Transitioned(stopped→playing) | `playing` |
 | 55 | `stopped` | `pause` | ❌ `not_applicable` | *(nenhum)* | `stopped *(inalterado)*` |
 | 56 | `stopped` | `stop` | ❌ `not_applicable` | *(nenhum)* | `stopped *(inalterado)*` |
-| 57 | `stopped` | `seek` | ✅ aceite | PositionChanged(1000) | `stopped` |
+| 57 | `stopped` | `seek` | ✅ aceite | PositionChanged(1000, sought) | `stopped` |
 | 58 | `stopped` | `tick` | ✅ aceite | *(nenhum)* | `stopped` |
 | 59 | `stopped` | `fault` | ✅ aceite | Transitioned(stopped→error) · Faulted(device_lost) | `error` |
 | 60 | `stopped` | `clear_fault` | ❌ `not_applicable` | *(nenhum)* | `stopped *(inalterado)*` |
@@ -151,8 +158,8 @@ cargo run -p led-daemon --example contract_table
 | 63 | `finished` | `arm` | ✅ aceite | Transitioned(finished→ready) | `ready` |
 | 64 | `finished` | `play` | ❌ `not_applicable` | *(nenhum)* | `finished *(inalterado)*` |
 | 65 | `finished` | `pause` | ❌ `not_applicable` | *(nenhum)* | `finished *(inalterado)*` |
-| 66 | `finished` | `stop` | ✅ aceite | Transitioned(finished→stopped) · PositionChanged(0) | `stopped` |
-| 67 | `finished` | `seek` | ✅ aceite | PositionChanged(1000) | `finished` |
+| 66 | `finished` | `stop` | ✅ aceite | Transitioned(finished→stopped) · PositionChanged(0, reset) | `stopped` |
+| 67 | `finished` | `seek` | ✅ aceite | PositionChanged(1000, sought) | `finished` |
 | 68 | `finished` | `tick` | ✅ aceite | *(nenhum)* | `finished` |
 | 69 | `finished` | `fault` | ✅ aceite | Transitioned(finished→error) · Faulted(device_lost) | `error` |
 | 70 | `finished` | `clear_fault` | ❌ `not_applicable` | *(nenhum)* | `finished *(inalterado)*` |
@@ -163,7 +170,7 @@ cargo run -p led-daemon --example contract_table
 | 75 | `error` | `pause` | ❌ `in_error_state` | *(nenhum)* | `error *(inalterado)*` |
 | 76 | `error` | `stop` | ❌ `in_error_state` | *(nenhum)* | `error *(inalterado)*` |
 | 77 | `error` | `seek` | ❌ `in_error_state` | *(nenhum)* | `error *(inalterado)*` |
-| 78 | `error` | `tick` | ❌ `in_error_state` | *(nenhum)* | `error *(inalterado)*` |
+| 78 | `error` | `tick` | ✅ aceite | *(nenhum)* | `error` |
 | 79 | `error` | `fault` | ❌ `in_error_state` | *(nenhum)* | `error *(inalterado)*` |
 | 80 | `error` | `clear_fault` | ✅ aceite | Transitioned(error→loaded) · FaultCleared | `loaded` |
 
@@ -171,13 +178,13 @@ cargo run -p led-daemon --example contract_table
 
 ## Sinais extraídos da execução
 
-- **`PositionChanged` tem 4 origens distintas:** `seek`, `pause`, `stop`, `tick`. Um consumidor que receba só o evento **não distingue** um avanço contínuo de um salto do operador.
-- **Auto-transições que emitem `Transitioned` com `from == to`:** `ready+arm`. O consumidor recebe um evento de mudança onde nada mudou.
+- **`PositionChanged` sai de 4 comandos** (`seek`, `pause`, `stop`, `tick`) — mas agora **carrega a causa**, então o consumidor distingue avanço, salto e reposição sem saber o comando (F2 fechado na GS1.6).
+- Nenhuma auto-transição emite `Transitioned`.
 - **`Transitioned` é inequívoco:** cada par `(from→to)` é produzido por **exatamente um** comando — o consumidor deduz a causa sem campo extra.
 
 ---
 
-## 3. Divergências encontradas
+## 3. Divergências encontradas *(registo histórico da GS1.5 — todas fechadas na GS1.6)*
 
 ### F1 — `Tick` é recusado em `Error`, contra a razão declarada 🔴
 

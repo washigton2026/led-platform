@@ -1,10 +1,9 @@
 # ADR-0023 — Superfície de transporte do engine (estado de show em runtime)
 
 - **Status:** 🟢 **aceito** — implementado em `crates/led-daemon` (GS1)
-- **Auditoria de contrato (GS1.5):** [anexo com a tabela completa dos 80 pares](0023-anexo-tabela-de-contrato.md).
-  **Veredito: não congelar ainda** — 4 divergências de superfície observável (F1–F4) que o
-  IPC do GS3 serializaria. Nenhuma é bug de estado; as 5 propriedades de consistência
-  passam exceto "origem única de evento" (`PositionChanged` tem 4 origens).
+- **Auditoria de contrato:** [anexo com a tabela completa dos 80 pares](0023-anexo-tabela-de-contrato.md).
+  **GS1.5** achou 4 divergências (F1–F4); **GS1.6 fechou as quatro** (§8). O contrato está
+  **congelado** para o GS2/GS3.
 - **Data:** 2026-08-05
 - **Exigido por:** `docs/architecture/control-protocol.md` §Fora de escopo — *"a superfície de
   transporte do engine (play/pause/seek — não existe; precisa de **ADR próprio** ... antes de
@@ -86,6 +85,51 @@ nunca string livre, como o modelo de erro do `control-protocol.md` já exige.
 `Command::Arm(PreflightReport)` recebe o **veredito**. A máquina não sabe verificar hash nem
 sondar rede — quem sabe é o daemon. Mantém o crate **leaf e sem dependências**, na disciplina
 de injeção de dado do ADR-0018.
+
+### 8. Fechamento das divergências da auditoria (GS1.6)
+
+Cada uma foi resolvida pela opção que elimina a **classe** do problema, não a instância.
+
+#### 8.1 F1 — `Tick` é aceite em **todos** os estados, incluindo `Error`
+
+**Opção (A).** O daemon tica em cadência fixa e **não deve ter de conhecer o estado**;
+recusar daria um fluxo de recusas a um laço que não pode fazer nada com elas.
+
+**Por que isto não enfraquece a absorção de `Error`:** essa propriedade é sobre
+**transições**, e `Tick` fora de `Playing` não faz nenhuma — é inerte. Aceitar um comando que
+não muda nada não é uma saída do estado. Os restantes continuam recusados com
+`in_error_state`.
+
+#### 8.2 F2 — `PositionChanged { ms, cause }`
+
+`PositionCause` com **três** variantes: `Advanced`, `Sought`, `Reset`.
+
+**Três causas para quatro origens, e isso é deliberado.** `pause` e `tick` são ambos
+`Advanced`, porque pausar **avança** a posição até ao instante da pausa antes de parar. Uma
+quarta variante só para `pause` descreveria o **comando**, não a **causa** — e o consumidor
+já sabe o comando pelo `Transitioned`.
+
+Escolhido campo enumerado em vez de eventos separados: mantém um evento por conceito
+(*"a posição mudou"*), e acrescentar uma causa futura é aditivo.
+
+#### 8.3 F3 — a regra dos códigos de recusa, aplicada **estruturalmente**
+
+> **Se o comando exige um show e não há show, o código é `no_show_loaded` — sempre.**
+> `not_applicable` fica para "há show, mas o comando não se aplica a este estado".
+
+Implementado como `Command::requires_show()` + **guarda única** em `apply`, não como
+verificação em cada handler. Era a verificação por-handler que deixou `pause` divergir dos
+irmãos. Com a guarda única, a classe deixa de ser possível — e há um teste que percorre
+**todos** os comandos que exigem show, não só o `pause`.
+
+#### 8.4 F4 — `from == to` ⇒ **nenhum evento**
+
+`Transitioned` passa a significar *"o estado mudou"* **por construção**: `transition()`
+devolve `Vec<Event>` e só emite quando `from != to`. Re-armar em `Ready` continua aceite —
+o `Ok` vazio é a confirmação.
+
+Alternativa descartada: emitir um evento `Rearmed` próprio. Seria funcionalidade nova para
+um caso que o `Ok` já cobre.
 
 ## Escopo / Não-escopo
 

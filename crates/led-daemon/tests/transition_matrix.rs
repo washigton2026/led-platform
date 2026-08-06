@@ -106,7 +106,7 @@ fn expected(state: State, cmd: &Command) -> Expect {
         (State::Idle, "unload") => E("no_show_loaded"),
         (State::Idle, "arm") => E("no_show_loaded"),
         (State::Idle, "play") => E("no_show_loaded"),
-        (State::Idle, "pause") => E("not_applicable"),
+        (State::Idle, "pause") => E("no_show_loaded"), // F3 — mesma causa dos irmãos
         (State::Idle, "stop") => E("no_show_loaded"),
         (State::Idle, "seek") => E("no_show_loaded"),
         (State::Idle, "tick") => O(State::Idle),
@@ -193,7 +193,7 @@ fn expected(state: State, cmd: &Command) -> Expect {
         (State::Error, "pause") => E("in_error_state"),
         (State::Error, "stop") => E("in_error_state"),
         (State::Error, "seek") => E("in_error_state"),
-        (State::Error, "tick") => E("in_error_state"),
+        (State::Error, "tick") => O(State::Error), // F1 — inerte, não transiciona
         (State::Error, "fault") => E("in_error_state"),
         (State::Error, "clear_fault") => O(State::Loaded),
 
@@ -230,6 +230,28 @@ fn assert_invariants(rt: &ShowRuntime, ctx: &str) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// **F3 como invariante, não como linha de tabela.** Se um comando exige show e não há show,
+/// o código TEM de ser `no_show_loaded` — nunca `not_applicable`. Testar a regra em vez das
+/// instâncias é o que impede que um comando novo repita o erro do `pause`.
+#[test]
+fn f3_sem_show_o_codigo_e_sempre_o_mesmo() {
+    for cmd in commands() {
+        if !cmd.requires_show() {
+            continue;
+        }
+        let mut rt = ShowRuntime::new(); // Idle: sem show
+        let err = rt
+            .apply(cmd, 0)
+            .expect_err(&format!("`{}` exige show e devia recusar em Idle", cmd.name()));
+        assert_eq!(
+            err.code(),
+            "no_show_loaded",
+            "`{}`: mesma causa raiz tem de dar o mesmo código",
+            cmd.name()
+        );
+    }
+}
+
 /// **O gate.** Percorre os 80 pares e verifica cada um contra a tabela declarada.
 #[test]
 fn matriz_completa_de_transicoes() {
@@ -244,6 +266,7 @@ fn matriz_completa_de_transicoes() {
 
             let before = rt.state();
             let result = rt.apply(*cmd, now);
+            let eventos: Vec<Event> = result.clone().unwrap_or_default();
             let ctx = format!("({state:?}, {})", cmd.name());
 
             match expected(state, cmd) {
@@ -259,6 +282,31 @@ fn matriz_completa_de_transicoes() {
                         before,
                         "{ctx}: RECUSA MUDOU O ESTADO — invariante central violada"
                     );
+                }
+            }
+
+            // ── F4: `Transitioned` significa que o estado MUDOU ──────────────
+            {
+                let evs = &eventos;
+                for e in evs {
+                    if let Event::Transitioned { from, to } = e {
+                        assert_ne!(
+                            from, to,
+                            "{ctx}: `Transitioned` com from == to — F4 regrediu"
+                        );
+                    }
+                }
+                // ── F2: a causa tem de casar com o comando ───────────────────
+                for e in evs {
+                    if let Event::PositionChanged { cause, .. } = *e {
+                        let esperada = match cmd.name() {
+                            "seek" => PositionCause::Sought,
+                            "stop" => PositionCause::Reset,
+                            "pause" | "tick" => PositionCause::Advanced,
+                            outro => panic!("{ctx}: `{outro}` não devia emitir PositionChanged"),
+                        };
+                        assert_eq!(cause, esperada, "{ctx}: causa errada");
+                    }
                 }
             }
 

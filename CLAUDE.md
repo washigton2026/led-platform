@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (808 tests)
+cargo test --workspace                  # all suites (813 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -85,10 +85,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (808 tests)
+cargo test --workspace                  # all suites (813 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **808 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **813 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -107,7 +107,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-show-recorder` | **NEW** — `.lumyx` binary format: write/read `LogicalFrame` + `AudioSnapshot` streams; `pixel_hash` for regression replay comparison |
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
 | `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
-| `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023). Matriz exaustiva 8×10 = 80 pares testada; recusa nunca muda estado; tempo injetado (determinístico, testes sem `sleep`) |
+| `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -130,6 +130,27 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-05c — GS1.6: fechamento do contrato do daemon (F1–F4)
+
+**Done.** As quatro divergências da auditoria GS1.5 foram fechadas. Contrato **congelado** para o GS2/GS3. Cada uma foi resolvida pela opção que elimina a **classe** do problema, não a instância — que é a diferença entre corrigir `pause` e impedir que o próximo comando repita o erro do `pause`.
+
+| # | Decisão | Por que esta opção |
+|---|---|---|
+| **F1** | `Tick` aceite em **todos** os estados, incl. `Error` | A absorção de `Error` é sobre **transições**, e `Tick` fora de `Playing` não faz nenhuma. O laço de cadência do daemon fica livre de estado |
+| **F2** | `PositionChanged { ms, cause }` · `PositionCause { Advanced, Sought, Reset }` | **3 causas para 4 origens, deliberadamente**: `pause` e `tick` são ambos `Advanced` — pausar **avança** até ao instante da pausa. Uma 4ª variante descreveria o *comando*, não a *causa* |
+| **F3** | `requires_show()` + **guarda única** em `apply` | Era a verificação por-handler que deixou `pause` divergir. Com guarda única a classe deixa de ser possível |
+| **F4** | `transition()` devolve `Vec` e só emite se `from != to` | `Transitioned` passa a significar "o estado mudou" **por construção**, para toda transição futura |
+
+**Invariants verified.** `led-core` intocado. **813 testes** (808 + 5), clippy `-D warnings` exit 0, build 0 warnings. Tabela dos 80 pares **regenerada** — o diff mostra exatamente 4 classes de mudança e nada mais. Os três sinais do gerador passam agora: `PositionChanged` carrega causa · **nenhuma** auto-transição emite `Transitioned` · `Transitioned` continua inequívoco (injetividade de `(from→to) → comando` computada, não afirmada).
+
+**Gate falsificado 4×, um bug por correção** (KB-012): (F1) recusar `Tick` em `Error`; (F2) trocar a causa de `seek` para `Advanced`; (F3) `pause` a saltar a guarda; (F4) `transition` a emitir sempre. **As quatro reprovaram.** Produção restaurada e verde.
+
+**Reforço estrutural dos gates:** F2/F4 viraram invariantes verificadas em **todos** os 80 pares (nenhum `Transitioned` com `from == to`; toda `cause` casa com o comando), e F3 virou um teste que percorre **todos** os comandos que exigem show — não só o `pause`. Testar a regra em vez das instâncias é o que impede a reincidência.
+
+**Pending / honestidade.** Numa das execuções de `cargo test --workspace` **um** teste do `led-bridge` falhou; isolado, os 38 passam, e duas execuções seguintes do workspace deram 813/0. **Não capturei qual era** — registo isto como instabilidade observada, não como diagnóstico. O `led-bridge` não depende do `led-daemon`, mas acrescentar um crate ao workspace aumenta a carga paralela, e este repo já tem precedente documentado desta classe (2026-07-09: "3 testes de latência flaky em debug sob carga paralela → budgets condicionais"). Se reaparecer, é candidato a TD.
+
+**Decisions.** Campo `cause` em vez de eventos separados: mantém **um evento por conceito** ("a posição mudou") e uma causa nova é aditiva. Evento `Rearmed` descartado — o `Ok` vazio já confirma o re-armar, e seria funcionalidade nova para um caso já coberto.
 
 ### 2026-08-05b — GS1.5: auditoria de contrato do daemon (tabela dos 80 pares)
 
