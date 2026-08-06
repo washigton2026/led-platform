@@ -834,6 +834,15 @@ name = "led-daemon"
 version = "0.1.0"
 
 [[package]]
+name = "led-daemon-bin"
+version = "0.1.0"
+dependencies = [
+ "led-core",
+ "led-daemon",
+ "led-show-recorder",
+]
+
+[[package]]
 name = "led-demo"
 version = "0.1.0"
 dependencies = [

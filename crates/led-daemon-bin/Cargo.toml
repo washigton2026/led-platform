@@ -1,0 +1,24 @@
+[package]
+name = "led-daemon-bin"
+version = "0.1.0"
+edition = "2021"
+
+# O PROCESSO. A maquina de estados vive no `led-daemon`, que continua sem dependencias
+# (ADR-0023). Separar os dois e o que impede o relogio, o I/O e o CLI de entrarem no crate
+# que define o contrato.
+[dependencies]
+led-daemon = { path = "../led-daemon" }
+led-show-recorder = { path = "../led-show-recorder" }
+
+[dev-dependencies]
+# Só nos testes do `loader`, para escrever um .lumyx de fixture.
+led-core = { path = "../led-core" }
+led-show-recorder = { path = "../led-show-recorder" }
+
+[lib]
+name = "led_daemon_bin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "led-daemon"
+path = "src/main.rs"

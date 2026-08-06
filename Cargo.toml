@@ -17,6 +17,7 @@ members = [
     "crates/led-readmodel",
     "crates/led-hardware-profile",
     "crates/led-daemon",
+    "crates/led-daemon-bin",
     "integration-tests",
 ]
 # Throwaway UI-stack spike (ADR-0016). Excluded so its Leptos Cargo.toml never joins the

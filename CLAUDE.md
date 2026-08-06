@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (813 tests)
+cargo test --workspace                  # all suites (839 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -39,6 +39,7 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
 | `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
 | `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
+| `led-daemon-bin` | **NEW** — o **processo** (GS2): laço, pacer injetável, journal JSONL, loader `.lumyx`. Bin `led-daemon`. **Sem saída** — nenhum frame deixa o processo | — |
 | `led-daemon` | **NEW** — a superfície de transporte do engine (ADR-0023): `State` (8 estados), `Command`, `Event`, `ShowRuntime`. **Zero dependências** — nem `led-core`; o pré-voo chega como dado | — |
 | `led-bridge` | **integration seam** — the only crate that imports both `audio-core` (v1) and `led-pixel-engine` (v0). Owns: `adapt`/`adapt_into` (v1→v0 adapter), `BridgeHandle` (watch→AudioShare thread), `SimLoop` (hardware-free end-to-end live loop) | — |
 
@@ -85,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (813 tests)
+cargo test --workspace                  # all suites (839 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **813 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **839 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -108,6 +109,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
 | `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
+| `led-daemon-bin` | **NEW** — processo daemon (GS2): carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -130,6 +132,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-05d — GS2: o processo daemon (`led-daemon-bin`)
+
+**Done.** A máquina de estados ganhou um processo. Crate novo `led-daemon-bin` (lib + bin `led-daemon`), com `led-daemon` **intocado** — o contrato congelado na GS1.6 não mudou uma linha, e o crate da máquina continua **sem dependências**.
+
+**Três decisões que podiam virar mentira, e como as resolvi:**
+
+1. **Pré-voo sem rede nem dispositivos.** O GS2 **não tem saída**: nenhum frame deixa o processo. Logo `network_ok` e `devices_present` são **vacuosamente** verdadeiros — um show que não envia nada não pode enviar por WiFi nem perder um controlador. É logicamente correto, não um atalho, e a vacuidade **desaparece sozinha** quando o GS4 ligar a saída. O journal regista-a em cada arranque (`preflight_vacuous`).
+2. **Integridade.** `pixel_hash` recebe `&[ShowRecord]` — exige o show inteiro em RAM (`robot_sequence.lumyx` são 73 MB). Hash em fluxo não existe. Então o daemon **não verifica**: exige `--assume-integrity`, e o journal diz `AFIRMADA pelo operador, NAO verificada`. `Integrity` é um enum, não um `bool`, precisamente para que "assumido" e "verificado" não fiquem indistinguíveis. **Sem a flag, o pré-voo reprova e o daemon não toca.**
+3. **"Sem busy-loop" testável.** `Pacer` é **injetável**. Testar com relógio de parede seria instável sob carga (TD-003). Com pacer virtual, "dormiu a cada iteração" vira asserção determinística — e os prazos são **absolutos** (`20,40,60,80,100`), então o período não deriva com o custo do trabalho. **Nenhum teste deste crate dorme.**
+
+**Mais duas escolhas.** O `.lumyx` é percorrido **em fluxo**, um quadro de cada vez — o pico de memória não pode depender da duração (lição da F2 do wearable); e o loader **não confia** no `frame_count` do cabeçalho, que vem a zero em escritores não-*seekable* (há teste que afirma essa premissa). A serialização JSON vive no **bin**, não no `led-daemon`: o formato do fio é contrato do GS3 e não deve ser congelado antes de existir cliente.
+
+**Invariants verified.** **839 testes** (813 + 26), clippy `-D warnings` exit 0, `led-core` e `led-daemon` intocados. Tick superado é **saltado**, nunca acumulado como dívida (mesma regra do `Pacing::Absolute` do player).
+
+**Executado de verdade, não só testado.** `./target/release/led-daemon striptest.lumyx --assume-integrity --max-ticks 5 --log /tmp/daemon.jsonl` → 14 linhas JSONL, `MaxTicks · ticks=5 · skipped=0`, exit 0. Fim de show real: `ReachedEnd · ticks=17`, `position_ms=8100` = duração exata. Encerramento por stdin: `ShutdownRequested`. Exit codes lidos **sem pipe** (KB-013): 1 sem integridade, 0 com, 1 para ficheiro ausente, 2 para CLI inválida.
+
+**Erro meu nesta rodada.** Na 1.ª verificação usei `timeout` (não existe no macOS — a mesma família do KB-013c, `grep -P`) e li o exit code **através de um pipe**, medindo o `tail` em vez do daemon. Refiz sem pipe; foi assim que confirmei os quatro códigos.
+
+**Pending / gap nomeado.** **Não há tratamento de `SIGINT`/`SIGTERM`** — exigiria uma dependência de sinais, e o `shutdown` por IPC é entrega do GS3. Ctrl-C termina o processo mas **abruptamente**: sem linha final de estado nem flush. Está no `--help` e na doc do módulo, não escondido. Também pendente: verificação de integridade a sério (precisa de hash em fluxo no `led-show-recorder`).
+
+**Decisions.** EOF no stdin **não** encerra, só a linha `shutdown` — um daemon supervisionado corre com stdin fechado, e fazer o EOF encerrar mataria o processo com `/dev/null` na entrada. Falha ao escrever o ficheiro de log **não derruba o daemon**: é reportada em stdout e o laço continua (disco cheio não pode parar um show).
 
 ### 2026-08-05c — GS1.6: fechamento do contrato do daemon (F1–F4)
 
