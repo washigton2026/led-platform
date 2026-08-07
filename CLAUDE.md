@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (870 tests)
+cargo test --workspace                  # all suites (901 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (870 tests)
+cargo test --workspace                  # all suites (901 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **870 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **901 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -109,7 +109,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
 | `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
-| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN) e `FrameSource`, com pipeline `.lumyx`→fio provado em UDP real — **ainda não ligados ao laço**. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
+| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN), `FrameSource` e `Stage` — **ligados ao laço**, com pré-voo real (WifiBlockGuard + ArtPoll) e heartbeat conduzido pelo tick. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -132,6 +132,41 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07b — GS4.2 (integração): a saída entra no laço e a vacuidade do pré-voo acaba
+
+**Done.** O `--output` deixou de ser uma peça ao lado. `run` e `run_with_control` chamam agora `Stage::on_tick`, o pré-voo consulta rede e controladores a sério, e o heartbeat mantém o palco vivo. `led-daemon` continua **intocado** (`git diff -- crates/led-daemon/` vazio): o contrato congelado na GS1.6 atravessou mais uma fatia sem mudar.
+
+**Um só caminho, e é uma decisão, não uma preferência.** [`stage.rs`](./crates/led-daemon-bin/src/stage.rs) é o **único** sítio do daemon que põe bytes no fio, e os dois laços chamam a mesma função. O heartbeat **não corre numa thread própria** — é conduzido pelo tick: uma segunda thread a enviar seria exatamente o caminho paralelo a evitar, e faria o determinismo do laço passar a depender do escalonador. Para o fechar por construção, `OutputManager` passou a **ser** um `ProtocolOutput`, e o `Heartbeat` do `led-hal` usa-o diretamente — mesmo socket, mesmas estatísticas.
+
+**A vacuidade desapareceu sozinha, como estava escrito que desapareceria.** O changelog do GS2 prometia: *"quando o GS4 ligar a saída, os dois passam a ser verificações reais e a vacuidade desaparece sozinha"*. [`preflight.rs`](./crates/led-daemon-bin/src/preflight.rs) cumpre-o — `network_ok` vem do `WifiBlockGuard` (ADR-0005) e `devices_present` da descoberta ArtPoll (a mesma do `--require-all`, RT-003).
+
+**Provado contra alvo real, não só em teste.** `led-daemon striptest.lumyx --output ddp://192.168.2.156`:
+
+```
+network_refused  · WiFi ATIVO em en0 — ADR-0005 proibe show ao vivo
+devices_missing  · SEM resposta de 192.168.2.156 — palco escuro se o show comecar
+arm_refused      · preflight_failed
+shutdown         · NeverStarted · ticks=0 · skipped=0        (exit 1)
+```
+
+**Os dois gates dispararam ao mesmo tempo, um por razão diferente**, e o daemon não tocou. E contra loopback, o caminho feliz: 40 ticks → **80 datagramas DDP** (720 px fragmentam em 2 por frame), exit 0.
+
+**Sondas injetadas.** `preflight` recebe `NetworkGuard` e `DevicePresence` como **dados** — a mesma disciplina do validador do ADR-0018. É o que torna a *lógica* do pré-voo falsificável sem rede, sem WiFi e sem hardware, que é precisamente a parte que não se pode testar num rig que não existe.
+
+**A exceção do loopback, e porque não é um bypass.** Um alvo `127.0.0.1` não atravessa interface nenhuma, por isso o gate do ADR-0005 não se lhe aplica — mesmo raciocínio da vacuidade do GS2, aplicado a um caso concreto. Não é uma porta dos fundos: um show apontado ao loopback não chega a rig nenhum, logo não há nada que a regra pudesse salvar. E a sonda de presença **recusa-se a inventar um rig** ali: emite `devices_unverified`, nunca `devices_checked`. O controle negativo `num_alvo_de_rede_o_wifi_ativo_reprova_mesmo` fica vermelho se o ramo alastrar.
+
+**Transporte não apaga o palco, agora em código executável.** A decisão 3 do ADR-0023 e o invariante do heartbeat do `LUMYX_GOSL` passaram a ser a mesma linha: em `Paused`/`Stopped`/`Finished`/`Ready` sai o **último quadro válido** a cada 800 ms. Testes afirmam que o keep-alive reenvia o byte real (não zeros), que o maior intervalo fica **abaixo dos 2400 ms**, e que **antes do primeiro quadro nada sai** — nunca se fabrica um preto para um palco que não tocou.
+
+**Invariants verified.** `led-daemon` e `led-core` intocados. **84 testes** em `led-daemon-bin` (61 lib + 4 bin + 4 e2e-output + 3 e2e + 14 IPC + 2 pipeline), clippy `-D warnings` exit 0.
+
+**Gate falsificado 2×** (KB-012). (1) Removida a chamada a `tick_do_palco` do laço: `o_daemon_envia_frames_reais_em_ddp_artnet_e_sacn` reprovou com *"NENHUM datagrama saiu do daemon — a saída não está ligada"*. (2) Trocado `if cfg.addr.ip().is_loopback()` por `if true` (o ramo do loopback a alastrar, que **apagaria o gate do WiFi**): 4 testes de pré-voo reprovaram, incluindo o controle negativo. Produção restaurada e verde nos dois casos.
+
+**Erro de envio não derruba o laço**, e também não inunda o journal: a primeira falha é registada como `output_error`, a contagem completa vive em `OutputStats`. Falhar em silêncio é que é proibido.
+
+**Pending.** Um erro de saída **não muda o estado** da máquina — o show continua a avançar com o fio partido, e só o journal e as estatísticas o dizem. Passar isso a `Fault` exigiria uma política de quantas falhas consecutivas contam, e essa política não está decidida: fica nomeado, não escondido. `--output` aceita **um** alvo; multi-controlador continua a ser outra fatia. GS4.3–GS4.7 seguem bloqueados pelo rig (ver runbook).
+
+**Decisions.** `Config` deixou de ser `Copy` (ganhou `output: Option<String>`) — é sempre passada por referência, não custa nada. Saída impossível é **`NeverStarted`**, não um aviso: um show que não alcança o rig não deve fingir que toca. O palco é reaberto a cada `load` por IPC, porque é o **show** que dimensiona a saída — um show de 720 px não pode sair por uma saída de 300.
 
 ### 2026-08-07 — GS4.1/GS4.2: a camada de saída e o primeiro frame no fio
 

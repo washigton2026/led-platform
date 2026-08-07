@@ -181,6 +181,20 @@ impl OutputManager {
     }
 }
 
+/// **`OutputManager` é ele próprio um `ProtocolOutput`.**
+///
+/// É isto que faz o `Heartbeat` do `led-hal` usar exatamente o mesmo remetente que o laço:
+/// o keep-alive conta nas mesmas estatísticas e sai pelo mesmo socket. Um segundo caminho
+/// para o heartbeat seria a definição de caminho paralelo.
+impl led_core::ProtocolOutput for OutputManager {
+    fn send_frame(&self, frame: &LogicalFrame) -> Result<(), OutputError> {
+        self.send(frame)
+    }
+    fn universe_count(&self) -> u16 {
+        self.out.universe_count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

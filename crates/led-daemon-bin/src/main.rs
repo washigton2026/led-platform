@@ -22,6 +22,10 @@ OPÇÕES:
                           NÃO é verificação — nenhum hash é recomputado, e o
                           journal regista que foi afirmado. Sem isto o pré-voo
                           reprova e o daemon não toca.
+    --output SPEC         Saída Ethernet: ddp://IP[:4048], artnet://IP[:6454]
+                          ou sacn://IP[:5568]. SEM esta opção nenhum frame
+                          deixa o processo, e o pré-voo de rede/dispositivos
+                          é VACUOSO (fica dito no journal).
     --socket CAMINHO      Abre o socket de controlo (UDS, owner-only 0600).
                           Com --socket, o <SHOW.lumyx> é OPCIONAL: o show pode
                           chegar por `load` do ledctl.
@@ -35,9 +39,15 @@ ENCERRAMENTO:
     `shutdown` por IPC é entrega do GS3. Ctrl-C termina o processo, mas de forma
     ABRUPTA — sem a linha final de estado nem o flush do journal.
 
-ESCOPO (GS2):
-    Este processo NÃO TEM SAÍDA. Nenhum frame o deixa: não há HAL, dispositivos
-    nem rede. IPC é GS3; Ethernet é GS4.
+PRÉ-VOO:
+    COM --output o pré-voo é REAL: WifiBlockGuard (ADR-0005, WiFi proibido ao
+    vivo) e descoberta ArtPoll dos controladores. Uma sonda que não consegue
+    medir deixa prosseguir COM AVISO — e o journal nunca diz `verificado`
+    quando não verificou.
+
+HEARTBEAT:
+    Pause/Stop/Finished NÃO apagam o palco: o último frame válido é reenviado
+    a cada 800 ms. Nenhum caminho deste processo envia zeros.
 ";
 
 #[derive(Debug)]
@@ -71,6 +81,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                     Some(valor("--max-ticks")?.parse().map_err(|_| "--max-ticks inválido")?)
             }
             "--log" => log = Some(valor("--log")?),
+            "--output" => cfg.output = Some(valor("--output")?),
             "--socket" => socket = Some(valor("--socket")?),
             "--assume-integrity" => cfg.integrity = Integrity::AssumedByOperator,
             "--no-autoplay" => cfg.autoplay = false,
@@ -131,7 +142,7 @@ fn main() {
 
     let desc = match &args.show {
         Some(p) => match descriptor_from_path(p, ShowId(1)) {
-            Ok(d) => Some(d),
+            Ok(d) => Some((p.clone(), d)),
             Err(e) => {
                 eprintln!("erro ao carregar {p}: {e}");
                 std::process::exit(1);
@@ -175,14 +186,18 @@ fn main() {
                 &mut rt, desc, &args.cfg, &mut pacer, &mut journal, &flag, &cp,
             )
         }
-        None => run(
+        None => {
+            let (path, d) = desc.expect("sem --socket o show é obrigatório (verificado no parse)");
+            run(
             &mut rt,
-            desc.expect("sem --socket o show é obrigatório (verificado no parse)"),
+            &path,
+            d,
             &args.cfg,
             &mut pacer,
             &mut journal,
             &flag,
-        ),
+        )
+        }
     };
 
     std::process::exit(match outcome.reason {
@@ -205,6 +220,7 @@ mod tests {
         assert_eq!(a.show.as_deref(), Some("show.lumyx"));
         assert_eq!(a.cfg.tick_ms, 20);
         assert_eq!(a.cfg.integrity, Integrity::NotVerified, "integridade NÃO é o padrão");
+        assert_eq!(a.cfg.output, None, "sem --output o daemon continua sem saída");
     }
 
     #[test]
@@ -217,6 +233,8 @@ mod tests {
             "10",
             "--log",
             "/tmp/j.jsonl",
+            "--output",
+            "ddp://192.168.2.156",
             "--assume-integrity",
             "--no-autoplay",
             "--keep-running",
@@ -225,6 +243,7 @@ mod tests {
         assert_eq!(a.cfg.tick_ms, 40);
         assert_eq!(a.cfg.max_ticks, Some(10));
         assert_eq!(a.log.as_deref(), Some("/tmp/j.jsonl"));
+        assert_eq!(a.cfg.output.as_deref(), Some("ddp://192.168.2.156"));
         assert_eq!(a.cfg.integrity, Integrity::AssumedByOperator);
         assert!(!a.cfg.autoplay);
         assert!(!a.cfg.exit_on_finish);

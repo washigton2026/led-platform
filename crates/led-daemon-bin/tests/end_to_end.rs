@@ -60,6 +60,7 @@ fn do_ficheiro_ao_fim_do_show() {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
+        output: None,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0, sleeps: 0 };
@@ -67,7 +68,7 @@ fn do_ficheiro_ao_fim_do_show() {
     let flag = AtomicBool::new(false);
     let out = {
         let mut j = Journal::new(&mut buf);
-        run(&mut rt, desc, &cfg, &mut p, &mut j, &flag)
+        run(&mut rt, path.to_str().unwrap(), desc, &cfg, &mut p, &mut j, &flag)
     };
 
     assert_eq!(out.reason, ExitReason::ReachedEnd);

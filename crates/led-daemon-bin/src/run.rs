@@ -6,12 +6,18 @@
 use crate::journal::{event_to_json, notice_to_json, state_to_json, Journal};
 use crate::loader::Integrity;
 use crate::pacer::Pacer;
-use led_daemon::{Command, PreflightReport, ShowDescriptor, ShowRuntime, State};
+use crate::preflight::{preflight, ArtPollPresence, DevicePresence};
+use crate::stage::{Stage, StageTick};
+use led_daemon::{Command, ShowDescriptor, ShowRuntime, State};
+use led_hal::{NetworkGuard, PermissiveGuard, WifiBlockGuard};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Como o daemon corre.
-#[derive(Clone, Copy, Debug)]
+///
+/// Deixou de ser `Copy` quando ganhou `output`: a especificação da saída é uma `String` vinda
+/// da CLI. É passada por referência em todo o lado, por isso não custa nada.
+#[derive(Clone, Debug)]
 pub struct Config {
     /// Período do tick, em ms.
     pub tick_ms: u64,
@@ -23,6 +29,8 @@ pub struct Config {
     pub exit_on_finish: bool,
     /// O que se sabe sobre a integridade do artefato.
     pub integrity: Integrity,
+    /// `proto://host[:porta]`. `None` = **nenhum frame deixa o processo**.
+    pub output: Option<String>,
 }
 
 impl Default for Config {
@@ -33,6 +41,7 @@ impl Default for Config {
             autoplay: true,
             exit_on_finish: true,
             integrity: Integrity::NotVerified,
+            output: None,
         }
     }
 }
@@ -58,35 +67,88 @@ pub struct Outcome {
     pub reason: ExitReason,
 }
 
-/// O pré-voo possível **nesta fatia**, e a razão de cada campo.
-///
-/// # A vacuidade é real, não um atalho
-///
-/// O GS2 **não tem saída**: nenhum frame deixa o processo — não há HAL, nem dispositivos, nem
-/// socket. Logo:
-///
-/// - `network_ok` — um show que não envia nada **não pode enviar por WiFi**. O gate do
-///   ADR-0005 protege o fio; não havendo fio, ele está satisfeito por vacuidade, não por
-///   dispensa.
-/// - `devices_present` — idem: não se pode perder um controlador que não se procura.
-///
-/// Quando o GS4 ligar a saída, os dois passam a ser verificações reais e a vacuidade
-/// desaparece **sozinha** — nada aqui precisa de ser "lembrado" e desfeito.
-///
-/// - `integrity_verified` — este **não** é vacuoso. Ou o operador afirma
-///   ([`Integrity::AssumedByOperator`]), ou o pré-voo reprova. Verificar de verdade exigiria
-///   um hash em fluxo, que não existe (ver `loader`).
-pub fn preflight_for_no_output(integrity: Integrity) -> PreflightReport {
-    PreflightReport {
-        integrity_verified: integrity.satisfies_preflight(),
-        network_ok: true,
-        devices_present: true,
+/// A guarda de rede a usar. **Com saída é a real** — `WifiBlockGuard`, o gate do ADR-0005.
+/// Sem saída não há fio para o WiFi corromper, e a permissiva é a escolha correta (é a mesma
+/// regra que o repo já aplica ao `SimulatorDevice`).
+fn guarda_para(cfg: &Config) -> Box<dyn NetworkGuard> {
+    if cfg.output.is_some() {
+        Box::new(WifiBlockGuard)
+    } else {
+        Box::new(PermissiveGuard)
+    }
+}
+
+/// Corre o pré-voo, escreve as razões no journal e devolve o relatório para a máquina.
+fn preflight_e_registar<P: Pacer, W: Write>(
+    cfg: &Config,
+    stage: Option<&Stage>,
+    pacer: &P,
+    journal: &mut Journal<W>,
+    presence: &dyn DevicePresence,
+) -> led_daemon::PreflightReport {
+    let guard = guarda_para(cfg);
+    let pf = preflight(cfg.integrity, stage.map(|s| s.output().config()), &*guard, presence);
+    let t = pacer.now_ms();
+    for (chave, detalhe) in &pf.notices {
+        journal.line(&notice_to_json(t, chave, detalhe));
+    }
+    pf.report
+}
+
+/// Abre o palco, se houver saída configurada. Falhar aqui é **não arrancar**: um show que não
+/// consegue alcançar o rig não deve fingir que está a tocar.
+fn abrir_palco<P: Pacer, W: Write>(
+    cfg: &Config,
+    path: &str,
+    pacer: &P,
+    journal: &mut Journal<W>,
+) -> Result<Option<Stage>, ()> {
+    let Some(spec) = &cfg.output else { return Ok(None) };
+    match Stage::open(path, spec) {
+        Ok(s) => {
+            journal.line(&notice_to_json(pacer.now_ms(), "output_open", spec));
+            Ok(Some(s))
+        }
+        Err(e) => {
+            journal.line(&notice_to_json(pacer.now_ms(), "output_failed", &e));
+            Err(())
+        }
+    }
+}
+
+/// A frase do modo. **Tem de deixar de mentir** quando a saída existe.
+fn modo(cfg: &Config, com_ipc: bool) -> String {
+    let ipc = if com_ipc { " + ipc" } else { "" };
+    match &cfg.output {
+        Some(spec) => format!("output={spec}{ipc} — os frames saem deste processo"),
+        None => format!("no-output{ipc} — nenhum frame deixa este processo (sem --output)"),
+    }
+}
+
+/// Um tick do palco, com o erro registado **uma vez** e o laço a continuar.
+fn tick_do_palco<P: Pacer, W: Write>(
+    stage: &mut Option<Stage>,
+    rt: &ShowRuntime,
+    now: u64,
+    pacer: &P,
+    journal: &mut Journal<W>,
+    ja_avisou: &mut bool,
+) {
+    let Some(st) = stage.as_mut() else { return };
+    if let StageTick::Failed(e) = st.on_tick(rt.state(), rt.position_ms(), now) {
+        // Um erro de rede a 50 Hz encheria o journal e escondia tudo o resto. Regista-se a
+        // primeira ocorrência; a contagem completa vive em `OutputStats`.
+        if !*ja_avisou {
+            *ja_avisou = true;
+            journal.line(&notice_to_json(pacer.now_ms(), "output_error", &e));
+        }
     }
 }
 
 /// Corre o daemon até ao fim, seja qual for a razão.
 pub fn run<P: Pacer, W: Write>(
     rt: &mut ShowRuntime,
+    path: &str,
     desc: ShowDescriptor,
     cfg: &Config,
     pacer: &mut P,
@@ -102,11 +164,7 @@ pub fn run<P: Pacer, W: Write>(
         }};
     }
 
-    journal.line(&notice_to_json(
-        pacer.now_ms(),
-        "mode",
-        "no-output — nenhum frame deixa este processo (GS2); a saída chega no GS4",
-    ));
+    journal.line(&notice_to_json(pacer.now_ms(), "mode", &modo(cfg, false)));
 
     // ── Carregar ─────────────────────────────────────────────────────────────
     match rt.apply(Command::Load(desc), pacer.now_ms()) {
@@ -117,6 +175,11 @@ pub fn run<P: Pacer, W: Write>(
         }
     }
 
+    let mut stage = match abrir_palco(cfg, path, pacer, journal) {
+        Ok(s) => s,
+        Err(()) => return finish(rt, pacer, journal, 0, 0, ExitReason::NeverStarted),
+    };
+
     // ── Armar e tocar ────────────────────────────────────────────────────────
     if cfg.autoplay {
         if cfg.integrity == Integrity::AssumedByOperator {
@@ -126,16 +189,10 @@ pub fn run<P: Pacer, W: Write>(
                 "AFIRMADA pelo operador, NAO verificada — nenhum hash foi recomputado",
             ));
         }
-        let report = preflight_for_no_output(cfg.integrity);
+        let report =
+            preflight_e_registar(cfg, stage.as_ref(), pacer, journal, &ArtPollPresence);
         match rt.apply(Command::Arm(report), pacer.now_ms()) {
-            Ok(evs) => {
-                emit!(evs);
-                journal.line(&notice_to_json(
-                    pacer.now_ms(),
-                    "preflight_vacuous",
-                    "network_ok e devices_present sao VACUOSOS: nao ha saida a proteger",
-                ));
-            }
+            Ok(evs) => emit!(evs),
             Err(e) => {
                 journal.line(&notice_to_json(pacer.now_ms(), "arm_refused", e.code()));
                 return finish(rt, pacer, journal, 0, 0, ExitReason::NeverStarted);
@@ -153,6 +210,7 @@ pub fn run<P: Pacer, W: Write>(
     // ── Laço ─────────────────────────────────────────────────────────────────
     let mut ticks: u64 = 0;
     let mut skipped: u64 = 0;
+    let mut ja_avisou = false;
     let period = cfg.tick_ms.max(1); // período zero seria busy-loop por construção
     let mut deadline = pacer.now_ms() + period;
 
@@ -172,6 +230,7 @@ pub fn run<P: Pacer, W: Write>(
 
         let now = pacer.now_ms();
         emit!(rt.apply(Command::Tick, now).unwrap_or_default());
+        tick_do_palco(&mut stage, rt, now, pacer, journal, &mut ja_avisou);
         ticks += 1;
 
         // Prazo absoluto, não `now + period`: o período não deriva com o custo do trabalho.
@@ -234,7 +293,14 @@ pub type IpcOutcome = (IpcReply, Vec<led_daemon::Event>);
 
 /// Aplica um comando vindo do IPC. **Só o laço chama isto** — é o aplicador único.
 #[cfg(unix)]
-fn apply_ipc(rt: &mut ShowRuntime, cmd: &crate::proto::Cmd, now: u64) -> IpcOutcome {
+fn apply_ipc(
+    rt: &mut ShowRuntime,
+    cmd: &crate::proto::Cmd,
+    now: u64,
+    cfg: &Config,
+    stage: &mut Option<Stage>,
+    presence: &dyn DevicePresence,
+) -> IpcOutcome {
     use crate::proto::Cmd;
     use crate::server::{load_error, runtime_result_to_reply};
     use led_daemon::{Command, ShowId};
@@ -254,8 +320,23 @@ fn apply_ipc(rt: &mut ShowRuntime, cmd: &crate::proto::Cmd, now: u64) -> IpcOutc
                 return (runtime_result_to_reply(Err(rej), rt.state(), rt.position_ms()), Vec::new())
             }
         };
+        // O palco é **do show**: um `load` novo dimensiona a saída pelo artefato que chegou.
+        // Reabrir aqui é o que impede um show de 720 px de sair por uma saída de 300.
+        if let Some(spec) = &cfg.output {
+            match Stage::open(path, spec) {
+                Ok(s) => *stage = Some(s),
+                Err(e) => return (Err(load_error(format!("saida: {e}"))), eventos),
+            }
+        }
         if *assume_integrity {
-            let report = preflight_for_no_output(Integrity::AssumedByOperator);
+            let guard = guarda_para(cfg);
+            let report = preflight(
+                Integrity::AssumedByOperator,
+                stage.as_ref().map(|s| s.output().config()),
+                &*guard,
+                presence,
+            )
+            .report;
             match rt.apply(Command::Arm(report), now) {
                 Ok(evs) => eventos.extend(evs),
                 Err(rej) => {
@@ -299,7 +380,7 @@ fn apply_ipc(rt: &mut ShowRuntime, cmd: &crate::proto::Cmd, now: u64) -> IpcOutc
 #[cfg(unix)]
 pub fn run_with_control<P: Pacer, W: Write>(
     rt: &mut ShowRuntime,
-    inicial: Option<ShowDescriptor>,
+    inicial: Option<(String, ShowDescriptor)>,
     cfg: &Config,
     pacer: &mut P,
     journal: &mut Journal<W>,
@@ -308,22 +389,25 @@ pub fn run_with_control<P: Pacer, W: Write>(
 ) -> Outcome {
     use led_daemon::Command;
 
-    journal.line(&notice_to_json(
-        pacer.now_ms(),
-        "mode",
-        "no-output + ipc — nenhum frame deixa este processo (GS3); a saída chega no GS4",
-    ));
+    journal.line(&notice_to_json(pacer.now_ms(), "mode", &modo(cfg, true)));
 
+    let presence = ArtPollPresence;
+    let mut stage: Option<Stage> = None;
     let mut duration_ms = 0;
-    if let Some(desc) = inicial {
+    if let Some((path, desc)) = inicial {
         duration_ms = desc.duration_ms;
         if let Ok(evs) = rt.apply(Command::Load(desc), pacer.now_ms()) {
             for e in &evs {
                 journal.line(&event_to_json(pacer.now_ms(), e));
             }
         }
+        stage = match abrir_palco(cfg, &path, pacer, journal) {
+            Ok(s) => s,
+            Err(()) => return finish(rt, pacer, journal, 0, 0, ExitReason::NeverStarted),
+        };
         if cfg.autoplay && cfg.integrity == Integrity::AssumedByOperator {
-            let report = preflight_for_no_output(cfg.integrity);
+            let report =
+                preflight_e_registar(cfg, stage.as_ref(), pacer, journal, &presence);
             let _ = rt.apply(Command::Arm(report), pacer.now_ms());
             let _ = rt.apply(Command::Play, pacer.now_ms());
         }
@@ -331,6 +415,7 @@ pub fn run_with_control<P: Pacer, W: Write>(
 
     let mut ticks: u64 = 0;
     let mut skipped: u64 = 0;
+    let mut ja_avisou = false;
     let period = cfg.tick_ms.max(1);
     let mut deadline = pacer.now_ms() + period;
 
@@ -347,7 +432,7 @@ pub fn run_with_control<P: Pacer, W: Write>(
         // ── Comandos do IPC, aplicados NO LIMITE DO TICK ─────────────────────
         for job in cp.drain_jobs() {
             let now = pacer.now_ms();
-            let (reply, eventos) = apply_ipc(rt, &job.cmd, now);
+            let (reply, eventos) = apply_ipc(rt, &job.cmd, now, cfg, &mut stage, &presence);
             for e in &eventos {
                 let linha = event_to_json(now, e);
                 journal.line(&linha);
@@ -366,6 +451,7 @@ pub fn run_with_control<P: Pacer, W: Write>(
             journal.line(&linha);
             cp.broadcast(&linha);
         }
+        tick_do_palco(&mut stage, rt, now, pacer, journal, &mut ja_avisou);
         ticks += 1;
 
         // Snapshot para o `status` — publicado, não bloqueado atrás do runtime.
@@ -409,6 +495,7 @@ mod tests {
             autoplay: true,
             exit_on_finish: true,
             integrity: Integrity::AssumedByOperator,
+            output: None,
         }
     }
 
@@ -423,7 +510,7 @@ mod tests {
             if let Some(_n) = stop_after {
                 flag.store(true, Ordering::Relaxed); // pede encerramento antes do 1.º tick
             }
-            run(&mut rt, desc(duration_ms), &cfg, &mut p, &mut j, &flag)
+            run(&mut rt, "", desc(duration_ms), &cfg, &mut p, &mut j, &flag)
         };
         (out, p.sleeps, String::from_utf8(buf).unwrap())
     }
@@ -468,7 +555,7 @@ mod tests {
         let flag = AtomicBool::new(false);
         let out = {
             let mut j = Journal::new(&mut buf);
-            run(&mut rt, desc(100_000), &cfg(Some(4)), &mut p, &mut j, &flag)
+            run(&mut rt, "", desc(100_000), &cfg(Some(4)), &mut p, &mut j, &flag)
         };
         assert_eq!(out.ticks, 4);
         assert!(out.skipped > 0, "atraso de 5 períodos tem de contar como saltos");

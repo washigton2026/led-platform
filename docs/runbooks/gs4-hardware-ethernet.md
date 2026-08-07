@@ -1,6 +1,10 @@
 # GS4.3–GS4.7 — runbook de validação física (Ethernet, ESP32-POE)
 
-> **Estado: BLOQUEADO POR HARDWARE.** Em 2026-08-05 os cinco nós do rig
+> **Estado: BLOQUEADO POR HARDWARE** (etapas 1–8). O *software* está pronto: desde
+> 2026-08-07 o `led-daemon` tem `--output` ligado ao laço, pré-voo real (WiFi + ArtPoll) e
+> heartbeat. O que falta é o rig.
+>
+> **Nota original:** Em 2026-08-05 os cinco nós do rig
 > (`192.168.2.156–160`) **não responderam a ping**. Nada abaixo foi executado, e **nada
 > abaixo pode ser afirmado** até ser executado por um operador com o rig ligado.
 >
@@ -62,19 +66,22 @@ exit code **sem pipe** (KB-013).
 ## ETAPA 4 — Primeiro frame do **daemon** (não do player)
 
 ```sh
-./target/release/led-daemon --socket /tmp/lumyx.sock --tick-ms 25 --keep-running &
+./target/release/led-daemon --socket /tmp/lumyx.sock --output ddp://<IP> \
+    --tick-ms 25 --keep-running &
 ./target/release/ledctl --socket /tmp/lumyx.sock load striptest.lumyx --assume-integrity
 ./target/release/ledctl --socket /tmp/lumyx.sock play
 ```
 
-> ⚠️ **O daemon ainda não tem a saída ligada ao laço.** GS4.1/4.2 entregaram o
-> `OutputManager` e o `FrameSource` com pipeline provado em loopback, mas **`--output` no
-> `led-daemon` é a próxima fatia de código**. Até lá, esta etapa valida-se com o
-> `led-player`, que já é o caminho validado em hardware:
+Adicione `--output ddp://<IP>` ao arranque do daemon (linha acima). O `led-player` continua
+disponível como caminho de referência já validado em hardware, para comparar:
 
 ```sh
 ./target/release/led-player striptest.lumyx --ddp <IP>
 ```
+
+⚠️ **O pré-voo vai bloquear se o WiFi estiver ativo** — é o ADR-0005 a funcionar, não uma
+avaria. Numa bancada com Ethernet ligada, desligue o WiFi da máquina antes desta etapa. O
+journal diz exatamente qual interface reprovou.
 
 **Evidência:** `played N/0`; WLED `/json/info` com `live:true` e `lm:"DDP"`; **e o visual
 R→G→B→cometa confirmado a olho**. O `lm` do WLED é evidência de aceitação mais forte que
