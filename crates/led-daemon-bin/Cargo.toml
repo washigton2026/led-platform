@@ -9,6 +9,12 @@ edition = "2021"
 [dependencies]
 led-daemon = { path = "../led-daemon" }
 led-show-recorder = { path = "../led-show-recorder" }
+# GS4.1 — a saida reusa os drivers ja validados em hardware; nenhuma segunda
+# serializacao de protocolo entra no projeto.
+led-core = { path = "../led-core" }
+led-hal = { path = "../led-hal" }
+led-protocols = { path = "../led-protocols" }
+led-player = { path = "../led-player" }
 
 [dev-dependencies]
 # Só nos testes do `loader`, para escrever um .lumyx de fixture.

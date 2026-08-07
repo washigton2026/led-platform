@@ -25,15 +25,19 @@
 pub mod json;
 pub mod journal;
 pub mod loader;
+pub mod output;
 pub mod pacer;
 pub mod proto;
 pub mod run;
+pub mod source;
 #[cfg(unix)]
 pub mod server;
 
 pub use journal::Journal;
 pub use loader::{descriptor_from_path, descriptor_from_reader, Integrity, LoadError};
+pub use output::{OutputConfig, OutputManager, OutputProtocol};
 pub use pacer::{Pacer, SystemPacer};
+pub use source::FrameSource;
 pub use run::{run, Config, ExitReason, Outcome};
 #[cfg(unix)]
 pub use server::{ControlPlane, Server, Snapshot};

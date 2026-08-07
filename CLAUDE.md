@@ -109,7 +109,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
 | `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
-| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)**: protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
+| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN) e `FrameSource`, com pipeline `.lumyx`→fio provado em UDP real — **ainda não ligados ao laço**. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -132,6 +132,26 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07 — GS4.1/GS4.2: a camada de saída e o primeiro frame no fio
+
+**Done.** O daemon ganhou uma **saída**. Dois módulos novos em `led-daemon-bin`: `output.rs` (`OutputManager`, `OutputConfig::parse("proto://host[:porta]")`, três protocolos) e `source.rs` (`FrameSource`: `.lumyx` → o quadro da posição do transporte). `led-daemon` **intocado** — o contrato congelado na GS1.6 não mudou uma linha.
+
+**Nenhuma segunda implementação de protocolo.** `output.rs` **não serializa pacotes**: DDP reusa `led_player::DdpOutput`, Art-Net e sACN reusam `led_protocols::{ArtNetDevice, SacnDevice}` por trás do `Hal` — o mesmo caminho validado em hardware (94/94 frames, 2026-07-20). Um segundo serializador seria uma segunda coisa para divergir do fio que já funciona. O daemon fala com `send()` e mais nada: trocar `ddp://` por `artnet://` não toca uma linha de `run.rs`.
+
+**Em fluxo, com um cursor.** `robot_sequence.lumyx` são 73 MB; `FrameSource` mantém **um** quadro em memória e o cursor só anda para a frente. Seek para trás **reabre o ficheiro** em vez de guardar tudo para conseguir recuar — custa I/O num evento raro (o operador salta) e mantém a memória constante no caso comum (o show a correr). É a lição da F2 do wearable aplicada ao transporte.
+
+**A prova é UDP real, não mock.** `tests/pipeline.rs` escreve um `.lumyx`, passa-o pelo mesmo loader do daemon, percorre três posições e **lê os datagramas de um socket** — nos três protocolos, 3 frames / 0 erros cada. Um segundo teste faz o mesmo com seek para trás. E `a_configuracao_escolhe_caminhos_realmente_diferentes` afirma que Art-Net começa por `Art-Net`, sACN contém `ASC` e o DDP difere de ambos: sem isso, três configurações a chamar o mesmo código passariam iguais — o falso-verde do KB-012.
+
+**Erro engolido é indistinguível de sucesso.** `OutputStats{frames_sent, errors}` existe para que a diferença seja observável, e `erro_de_envio_e_contado_e_devolvido` afirma que `frames + errors == 1` **sempre** — um envio nunca desaparece da contabilidade.
+
+**Invariants verified.** **70 testes** em `led-daemon-bin` (26 GS2 + 31 GS3 + 13 GS4), clippy `--workspace --all-targets -D warnings` exit 0.
+
+**Pending — e é o que impede fechar o GS4.** (a) O `--output` ainda **não está ligado ao laço** do binário `led-daemon`: `OutputManager` e `FrameSource` existem e o pipeline entre eles está provado, mas o `run_with_control` ainda não os invoca. O `--help` continua a dizer "este processo não tem saída" e **continua verdadeiro**. (b) Enquanto isso, o pré-voo continua **vacuosamente** verdadeiro — a promessa do GS2 (`network_ok` do `WifiBlockGuard`, `devices_present` do `discover_controllers`) só se cumpre quando a saída entrar no laço. Nenhuma das duas foi dada como feita.
+
+**GS4.3–GS4.7 — BLOQUEADO por hardware, e não afirmado.** Verifiquei antes de escrever código: os cinco nós (`192.168.2.156–160`) **não responderam a ping**. Não há ESP32-POE, switch nem cabos na rede. Em vez de carimbar critérios, escrevi [`docs/runbooks/gs4-hardware-ethernet.md`](./docs/runbooks/gs4-hardware-ethernet.md) no formato de 2026-07-20 — 8 etapas, cada uma com o campo de evidência por preencher (⏳, nunca ✅), o aviso do ABL a 850 mA, e a nota de que o sACN, se falhar, é o firmware do WLED 16.0.1 e não o LUMYX.
+
+**Decisions.** `OutputConfig` recebe a porta **opcional** e cai no padrão do protocolo — escrever `:4048` à mão em cada invocação é uma oportunidade a mais de errar um número já conhecido. CID fixo `LUMYX-DAEMON-001` no sACN: um receptor E1.31 distingue fontes por CID, e dois senders com o mesmo CID seriam indistinguíveis no diagnóstico. `FrameSource::black()` está documentado como **não** sendo blackout — é conteúdo de um quadro, não máscara de saída; o ADR-0017 continua bloqueado e nada aqui o contorna.
 
 ### 2026-08-05e — GS3: IPC sobre UDS owner-only + `ledctl`
 
