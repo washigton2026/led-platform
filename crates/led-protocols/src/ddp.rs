@@ -260,6 +260,12 @@ pub struct DdpDevice {
     buf:        Box<[u8; 10 + DDP_MAX_PAYLOAD]>,
     /// Byte offset in the destination's pixel buffer where this segment starts.
     pub pixel_offset: u32,
+    /// Teto de pixels por datagrama. `None` = o máximo que a MTU Ethernet padrão permite.
+    ///
+    /// Existe porque a MTU **não é uma constante do protocolo**: é uma propriedade do caminho,
+    /// e um `HardwareProfile` pode declarar outra (VPN, PPPoE, jumbo). Sem isto, um MTU
+    /// declarado seria um número que ninguém honra — pior que não o declarar.
+    max_px_override: Option<usize>,
 }
 
 impl std::fmt::Debug for DdpDevice {
@@ -285,6 +291,7 @@ impl DdpDevice {
             format: ColorFormat::Rgb(led_core::RgbOrder::Rgb),
             buf: Box::new([0u8; 10 + DDP_MAX_PAYLOAD]),
             pixel_offset,
+            max_px_override: None,
         })
     }
 
@@ -306,11 +313,24 @@ impl DdpDevice {
         self.format
     }
 
+    /// Limita os pixels por datagrama — tipicamente derivado do MTU declarado por um
+    /// `HardwareProfile`. **Nunca aumenta** acima do que o buffer e a MTU padrão comportam:
+    /// um profile com MTU maior que a rede real produziria datagramas que se perdem.
+    pub fn set_max_pixels(&mut self, n: usize) {
+        self.max_px_override = Some(n.max(1));
+    }
+
+    /// O teto efetivo de pixels por datagrama, já com o formato de cor em conta.
+    pub fn max_pixels(&self) -> usize {
+        let teto = max_pixels_per_packet(self.format);
+        self.max_px_override.map_or(teto, |n| n.min(teto))
+    }
+
     /// Send `pixels` to the device, automatically fragmenting if needed.
     /// Each fragment's byte offset is derived from `pixel_offset + fragment_start`.
     pub fn send_pixels(&mut self, pixels: &[PixelColor]) -> std::io::Result<()> {
         let channels = self.format.channels();
-        let max_px = max_pixels_per_packet(self.format);
+        let max_px = self.max_pixels();
         let mut sent = 0usize;
         while sent < pixels.len() {
             let chunk_end = (sent + max_px).min(pixels.len());

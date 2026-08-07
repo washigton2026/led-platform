@@ -63,9 +63,15 @@ impl Stage {
     ///
     /// O `pixel_count` vem do **show**, não da CLI: a saída é dimensionada pelo artefato que
     /// vai tocar, e um número escrito à mão seria mais uma oportunidade de discordar dele.
-    pub fn open(show_path: &str, output: &str) -> Result<Self, String> {
+    /// `profile` **não é opcional**: sem ele o daemon teria de adivinhar ordem de canais,
+    /// universos e MTU — e adivinhar errado acende a cor errada na fita.
+    pub fn open(
+        show_path: &str,
+        output: &str,
+        profile: &led_hardware_profile::HardwareProfile,
+    ) -> Result<Self, String> {
         let source = FrameSource::open(show_path).map_err(|e: LoadError| e.to_string())?;
-        let cfg = OutputConfig::parse(output, source.pixel_count as usize, 1)?;
+        let cfg = OutputConfig::resolve(profile, output, source.pixel_count as usize, 1)?;
         let output = OutputManager::open(cfg).map_err(|e| format!("saída: {e}"))?;
         Ok(Self { source, output, heartbeat: Heartbeat::new(), last_sent_ms: None })
     }
@@ -142,7 +148,9 @@ mod tests {
         let path = escrever(nome, frames, 4);
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
-        let st = Stage::open(&path, &format!("ddp://{}", sock.local_addr().unwrap())).unwrap();
+        let perfil = crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap();
+        let st =
+            Stage::open(&path, &sock.local_addr().unwrap().to_string(), &perfil).unwrap();
         (st, sock, path)
     }
 
@@ -251,7 +259,8 @@ mod tests {
     fn erro_de_envio_nao_derruba_o_palco() {
         let path = escrever("stage_f.lumyx", &[(0, 3)], 4);
         // Porta 1 em loopback: `sendto` falha de forma reprodutível em macOS/Linux.
-        let mut st = Stage::open(&path, "ddp://127.0.0.1:1").unwrap();
+        let perfil = crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap();
+        let mut st = Stage::open(&path, "127.0.0.1:1", &perfil).unwrap();
         let r = st.on_tick(State::Playing, 0, 0);
         assert!(matches!(r, StageTick::Failed(_)) || matches!(r, StageTick::Sent { .. }));
         // Seja qual for o veredito do SO, a contabilidade fecha: nada desaparece.

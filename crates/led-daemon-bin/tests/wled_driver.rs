@@ -67,7 +67,7 @@ fn o_numero_de_datagramas_bate_com_o_que_o_profile_preve() {
         let sock = socket();
         let cfg = OutputConfig::from_profile(&p, sock.local_addr().unwrap(), px, 1).unwrap();
 
-        let previsto = cfg.datagrams_per_frame(&p.transport);
+        let previsto = cfg.datagrams_per_frame();
         assert_eq!(previsto, esperado, "{preset}/{px}px: previsão do profile");
 
         let recebidos = um_frame(cfg, &sock, branco(px));
@@ -184,7 +184,7 @@ fn sacn_usa_o_mesmo_numero_de_universos_que_artnet() {
     p.capabilities.protocol = Protocol::Sacn;
     let sock = socket();
     let cfg = OutputConfig::from_profile(&p, sock.local_addr().unwrap(), 720, 1).unwrap();
-    assert_eq!(cfg.datagrams_per_frame(&p.transport), 5);
+    assert_eq!(cfg.datagrams_per_frame(), 5);
     assert_eq!(um_frame(cfg, &sock, branco(720)).len(), 5);
 }
 
@@ -212,11 +212,195 @@ fn um_heartbeat_inseguro_impede_a_saida() {
 /// **Os dois construtores produzem a mesma coisa** onde os dados coincidem — a prova de que
 /// `from_profile` não abriu um segundo caminho para o fio.
 #[test]
-fn from_profile_e_parse_produzem_a_mesma_saida_quando_os_dados_coincidem() {
-    let mut p = perfil("esp32-poe-wled-ddp");
-    p.capabilities.color = ColorFormat::Rgb(RgbOrder::Rgb); // igualar ao omisso do `parse`
+fn resolver_um_endereco_nao_e_um_segundo_caminho() {
+    let p = perfil("esp32-poe-wled-ddp");
     let addr = "127.0.0.1:4048".parse().unwrap();
-    let a = OutputConfig::from_profile(&p, addr, 720, 1).unwrap();
-    let b = OutputConfig::parse("ddp://127.0.0.1:4048", 720, 1).unwrap();
-    assert_eq!(a, b, "mesmos dados ⇒ mesma configuração, seja qual for a porta de entrada");
+    let direto = OutputConfig::from_profile(&p, addr, 720, 1).unwrap();
+
+    // As três formas de escrever o mesmo endereço têm de dar exatamente a mesma configuração.
+    for spec in ["127.0.0.1", "127.0.0.1:4048", "ddp://127.0.0.1:4048"] {
+        let resolvido = OutputConfig::resolve(&p, spec, 720, 1).unwrap();
+        assert_eq!(direto, resolvido, "`{spec}` divergiu — `resolve` deixou de delegar");
+    }
+}
+
+/// **O esquema não é uma segunda fonte de protocolo.** Escrevê-lo em desacordo com o preset é
+/// erro; sem este teste, `artnet://` sobre um preset DDP passaria em silêncio e o operador
+/// julgaria ter escolhido o protocolo.
+#[test]
+fn o_esquema_escrito_tem_de_concordar_com_o_profile() {
+    let ddp = perfil("esp32-poe-wled-ddp");
+    let erro = OutputConfig::resolve(&ddp, "artnet://127.0.0.1", 720, 1).unwrap_err();
+    assert!(erro.contains("contradiz o profile"), "{erro}");
+    assert!(OutputConfig::resolve(&ddp, "ddp://127.0.0.1", 720, 1).is_ok(), "concordar é aceite");
+
+    let artnet = perfil("esp32-devkit-wled-artnet");
+    assert!(
+        OutputConfig::resolve(&artnet, "ddp://127.0.0.1", 720, 1).is_err(),
+        "e a recusa vale nos dois sentidos"
+    );
+}
+
+// ── GS4.4: cor e MTU medidos no fio, não deduzidos ──────────────────────────
+
+/// **RGBW põe quatro bytes por pixel no fio, e o branco é o do ADR-0020.**
+///
+/// O preset RGBW declara `WhiteMode::MinSubtract`: o neutro sai pelo die branco e é
+/// **subtraído** do RGB. Um teste que só contasse canais passaria com o modo aditivo antigo —
+/// que consumia 4× mais corrente no branco pleno.
+#[test]
+fn rgbw_poe_quatro_canais_no_fio_com_o_branco_subtraido() {
+    let p = perfil("esp32-poe-wled-rgbw-ddp");
+    assert!(matches!(p.capabilities.color, ColorFormat::Rgbw(..)), "o preset tem de ser RGBW");
+    let canais = p.capabilities.color.channels();
+    assert_eq!(canais, 4);
+
+    let sock = socket();
+    let addr = sock.local_addr().unwrap();
+    let px = 6usize;
+    let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+    // Cor com neutro embutido: min = 50.
+    let dg = um_frame(cfg, &sock, vec![PixelColor { r: 200, g: 100, b: 50 }; px]);
+
+    assert_eq!(dg.len(), 1);
+    let payload = &dg[0][DDP_HEADER..];
+    assert_eq!(payload.len(), px * canais, "4 bytes por pixel, sem padding");
+
+    // O que o `led-core` produz para este formato é a única fonte da verdade do branco.
+    let mut esperado = [0u8; 4];
+    p.capabilities.color.write(PixelColor { r: 200, g: 100, b: 50 }, &mut esperado);
+    assert_eq!(&payload[..4], &esperado, "os bytes do fio têm de ser os do ColorFormat");
+    assert_eq!(esperado[3], 50, "W = min(r,g,b)");
+    assert!(
+        esperado[..3].iter().all(|&c| c < 200),
+        "MinSubtract: o neutro foi retirado do RGB, não somado ({esperado:?})"
+    );
+}
+
+/// **Um MTU menor fragmenta mais, e nenhum datagrama passa do MTU.**
+///
+/// A previsão vem do `Transport`; a verificação vem do socket. Um MTU declarado que o fio não
+/// respeitasse seria pior que não o declarar.
+#[test]
+fn mtus_diferentes_produzem_fragmentacoes_diferentes_e_nenhum_datagrama_excede_o_mtu() {
+    let px = 720usize;
+    // MTU maior ⇒ MENOS datagramas. Começa no infinito para o primeiro passo ser válido.
+    let mut anterior = u32::MAX;
+
+    for mtu in [576u16, 1_000, 1_500] {
+        let mut p = perfil("esp32-poe-wled-ddp");
+        p.transport = Transport { mtu_bytes: mtu, ..p.transport };
+
+        let previsto = p.transport.datagrams_for(
+            px as u32,
+            p.capabilities.protocol,
+            p.capabilities.color,
+            p.limits.pixels_per_universe,
+        );
+
+        let sock = socket();
+        let addr = sock.local_addr().unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+        let dg = um_frame(cfg, &sock, branco(px));
+
+        assert_eq!(dg.len() as u32, previsto, "MTU {mtu}: previsto {previsto}, no fio {}", dg.len());
+        for d in &dg {
+            assert!(
+                d.len() + Transport::IP_UDP_OVERHEAD <= mtu as usize,
+                "MTU {mtu}: um datagrama de {} bytes não cabe",
+                d.len()
+            );
+        }
+        assert!(previsto < anterior, "MTU {mtu} devia fragmentar MENOS que o MTU anterior");
+        anterior = previsto;
+    }
+}
+
+/// **O primeiro universo é da instância, não do tipo** (ADR-0018) — e o fio obedece.
+#[test]
+fn o_primeiro_universo_e_respeitado_seja_qual_for() {
+    let p = perfil("esp32-devkit-wled-artnet");
+    for primeiro in [0u16, 1, 7, 100] {
+        let sock = socket();
+        let addr = sock.local_addr().unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 400, primeiro).unwrap();
+        let dg = um_frame(cfg, &sock, branco(400));
+
+        let mut universos: Vec<u16> = dg
+            .iter()
+            .map(|d| u16::from_le_bytes([d[ARTDMX_UNIVERSE_OFF], d[ARTDMX_UNIVERSE_OFF + 1]]))
+            .collect();
+        universos.sort_unstable();
+        let esperado: Vec<u16> = (primeiro..primeiro + universos.len() as u16).collect();
+        assert_eq!(universos, esperado, "first_universe={primeiro}");
+    }
+}
+
+/// **As três ordens de canais produzem três resultados distintos.** Sem isto, um `RgbOrder`
+/// ignorado passaria despercebido em qualquer teste que só olhasse para um preset.
+#[test]
+fn cada_ordem_de_canais_produz_bytes_proprios() {
+    let cor = PixelColor { r: 200, g: 100, b: 50 };
+    let mut vistos: Vec<(RgbOrder, [u8; 3])> = Vec::new();
+
+    for ordem in [RgbOrder::Rgb, RgbOrder::Grb, RgbOrder::Bgr] {
+        let mut p = perfil("esp32-poe-wled-ddp");
+        p.capabilities.color = ColorFormat::Rgb(ordem);
+        let sock = socket();
+        let addr = sock.local_addr().unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 4, 1).unwrap();
+        let dg = um_frame(cfg, &sock, vec![cor; 4]);
+        let b: [u8; 3] = dg[0][DDP_HEADER..DDP_HEADER + 3].try_into().unwrap();
+        vistos.push((ordem, b));
+    }
+
+    assert_eq!(vistos[0].1, [200, 100, 50], "RGB");
+    assert_eq!(vistos[1].1, [100, 200, 50], "GRB — verde primeiro");
+    assert_eq!(vistos[2].1, [50, 100, 200], "BGR");
+    for i in 0..vistos.len() {
+        for j in (i + 1)..vistos.len() {
+            assert_ne!(
+                vistos[i].1, vistos[j].1,
+                "{:?} e {:?} produziram os mesmos bytes",
+                vistos[i].0, vistos[j].0
+            );
+        }
+    }
+}
+
+/// **PASSO 6, como gate e não como afirmação.** Um `grep` feito uma vez prova o estado de um
+/// instante; este teste prova-o em cada `cargo test`.
+///
+/// A regra: no caminho da saída do daemon não pode aparecer um valor **físico** literal —
+/// ordem de canais, pixels por universo, pixels por datagrama ou MTU. Todos vêm do
+/// `HardwareProfile`. As portas dos protocolos são a exceção declarada: são identidade do
+/// protocolo (IANA), não propriedade do nó, e o protocolo já vem do profile.
+#[test]
+fn nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida() {
+    const FONTES: &[(&str, &str)] = &[
+        ("output.rs", include_str!("../src/output.rs")),
+        ("stage.rs", include_str!("../src/stage.rs")),
+        ("run.rs", include_str!("../src/run.rs")),
+    ];
+    // Literais que só podem vir do profile. `170`/`487`/`1462`/`1500` são os que a fatia
+    // anterior deixou soltos; `RgbOrder::` construído é o defeito de cor original.
+    const PROIBIDOS: &[&str] =
+        &["RgbOrder::Rgb)", "RgbOrder::Grb)", "RgbOrder::Bgr)", "170", "487", "1462", "1500"];
+
+    for (nome, fonte) in FONTES {
+        for linha in fonte.lines() {
+            let t = linha.trim_start();
+            // Comentários e doc-comments podem (e devem) citar os números ao explicá-los.
+            if t.starts_with("//") {
+                continue;
+            }
+            for proibido in PROIBIDOS {
+                assert!(
+                    !linha.contains(proibido),
+                    "{nome}: valor físico `{proibido}` escrito à mão fora de comentário.\n\
+                     Tem de vir do HardwareProfile.\n  {linha}"
+                );
+            }
+        }
+    }
 }

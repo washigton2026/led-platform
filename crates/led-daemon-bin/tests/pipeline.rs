@@ -11,10 +11,24 @@
 //! descreve — um teste verde que não exercita a propriedade que se afirma.
 
 use led_core::PixelColor;
-use led_daemon_bin::{descriptor_from_path, FrameSource, OutputConfig, OutputManager};
+use led_daemon_bin::{
+    descriptor_from_path, profile_by_name, FrameSource, OutputConfig, OutputManager,
+};
 use led_daemon::ShowId;
 use led_show_recorder::{ShowRecord, ShowWriter};
 use std::net::UdpSocket;
+
+/// O preset do catálogo que fala cada protocolo. **Nenhum teste escolhe protocolo à mão** —
+/// escolhe hardware, e o protocolo vem com ele.
+fn perfil_de(proto: &str) -> led_hardware_profile::HardwareProfile {
+    profile_by_name(match proto {
+        "ddp" => "esp32-poe-wled-ddp",
+        "artnet" => "esp32-devkit-wled-artnet",
+        "sacn" => "falcon-f16v3-sacn",
+        outro => panic!("sem preset para {outro}"),
+    })
+    .unwrap()
+}
 
 fn escrever(nome: &str, frames: &[(u64, u8)], px: u32) -> String {
     let path = std::env::temp_dir().join(nome);
@@ -48,7 +62,7 @@ fn do_lumyx_ate_ao_fio_nos_tres_protocolos() {
         let addr = sock.local_addr().unwrap();
 
         let om = OutputManager::open(
-            OutputConfig::parse(&format!("{proto}://{addr}"), px as usize, 1).unwrap(),
+            OutputConfig::resolve(&perfil_de(proto), &addr.to_string(), px as usize, 1).unwrap(),
         )
         .unwrap();
         let mut src = FrameSource::open(&path).unwrap();
@@ -77,8 +91,13 @@ fn seek_para_tras_atravessa_o_pipeline() {
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     sock.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
     let om = OutputManager::open(
-        OutputConfig::parse(&format!("ddp://{}", sock.local_addr().unwrap()), px as usize, 1)
-            .unwrap(),
+        OutputConfig::resolve(
+            &perfil_de("ddp"),
+            &sock.local_addr().unwrap().to_string(),
+            px as usize,
+            1,
+        )
+        .unwrap(),
     )
     .unwrap();
     let mut src = FrameSource::open(&path).unwrap();

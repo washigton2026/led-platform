@@ -203,7 +203,13 @@ mod tests {
     }
 
     fn saida() -> OutputConfig {
-        OutputConfig::parse("ddp://192.168.2.156", 720, 1).unwrap()
+        OutputConfig::resolve(
+            &crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap(),
+            "192.168.2.156",
+            720,
+            1,
+        )
+        .unwrap()
     }
     fn corre(g: Result<(), NetworkPolicyError>, p: Presence) -> Preflight {
         preflight(
@@ -283,7 +289,13 @@ mod tests {
     /// continua a recusar-se a afirmar que descobriu controladores.
     #[test]
     fn alvo_de_loopback_nao_invoca_o_gate_do_wifi_mas_tambem_nao_carimba_nada() {
-        let cfg = OutputConfig::parse("ddp://127.0.0.1:9999", 4, 1).unwrap();
+        let cfg = OutputConfig::resolve(
+            &crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap(),
+            "127.0.0.1:9999",
+            4,
+            1,
+        )
+        .unwrap();
         let pf = preflight(
             Integrity::AssumedByOperator,
             Some(&cfg),

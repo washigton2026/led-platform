@@ -103,20 +103,56 @@ pub struct OutputConfig {
     /// vermelho onde devia acender verde. O profile já declarava a ordem certa desde o
     /// ADR-0018; faltava alguém consultá-la.
     pub color: ColorFormat,
-    /// Pixels por universo **declarados pelo nó**. Sem profile, o valor clássico de 170.
+    /// Pixels por universo **declarados pelo nó**.
     pub pixels_per_universe: u16,
+    /// MTU e heartbeat declarados. **A fragmentação deriva daqui** — não é um segundo número.
+    pub transport: Transport,
 }
 
 impl OutputConfig {
-    /// Analisa `proto://host[:porta]`, ex.: `ddp://192.168.2.156` ou
-    /// `artnet://192.168.2.156:6454`.
+    /// Resolve a configuração da saída: **tudo o que é físico vem do [`HardwareProfile`]**.
     ///
-    /// A porta é opcional e cai no padrão do protocolo — escrever `:4048` à mão em cada
-    /// invocação é uma oportunidade a mais de errar um número que já é conhecido.
-    pub fn parse(s: &str, pixel_count: usize, first_universe: u16) -> Result<Self, String> {
-        let (proto_s, resto) = s.split_once("://").ok_or("formato: proto://host[:porta]")?;
-        let protocol = OutputProtocol::parse(proto_s)
-            .ok_or_else(|| format!("protocolo desconhecido `{proto_s}` (ddp|artnet|sacn)"))?;
+    /// `spec` é o **endereço da instância** — `host[:porta]` ou `proto://host[:porta]`. É a
+    /// única coisa que a CLI ainda diz sobre a saída, porque é a única que **não** é do tipo
+    /// de hardware: o ADR-0018 já tinha decidido que `Identity` não tem endereço.
+    ///
+    /// # O esquema, quando escrito, é conferido — não é uma segunda fonte
+    ///
+    /// `ddp://…` continua a ser aceite, mas apenas se **concordar** com o protocolo que o
+    /// profile declara; discordar é erro, não é uma escolha. Assim o operador pode continuar a
+    /// escrever o que já escrevia sem que exista um segundo sítio de onde o protocolo possa
+    /// vir. O profile manda; o esquema, quando existe, é uma afirmação a verificar.
+    ///
+    /// # A porta não é configuração física
+    ///
+    /// 4048/6454/5568 são **identidade dos protocolos** (IANA/spec), não propriedades deste
+    /// nó — mudam quando o protocolo muda, e o protocolo vem do profile. Por isso vivem em
+    /// [`OutputProtocol::default_port`] e não no `HardwareProfile`.
+    pub fn resolve(
+        profile: &HardwareProfile,
+        spec: &str,
+        pixel_count: usize,
+        first_universe: u16,
+    ) -> Result<Self, String> {
+        let protocol = OutputProtocol::from_profile(profile.capabilities.protocol);
+
+        let (esquema, resto) = match spec.split_once("://") {
+            Some((e, r)) => (Some(e), r),
+            None => (None, spec),
+        };
+        if let Some(e) = esquema {
+            let escrito = OutputProtocol::parse(e)
+                .ok_or_else(|| format!("protocolo desconhecido `{e}` (ddp|artnet|sacn)"))?;
+            if escrito != protocol {
+                return Err(format!(
+                    "`{e}://` contradiz o profile `{}`, que declara {}. \
+                     O protocolo vem do HardwareProfile — corrija o esquema ou o preset",
+                    profile.identity.model,
+                    protocol.as_str()
+                ));
+            }
+        }
+
         let com_porta = if resto.contains(':') {
             resto.to_string()
         } else {
@@ -124,28 +160,20 @@ impl OutputConfig {
         };
         let addr: SocketAddr = com_porta
             .parse()
-            .map_err(|_| format!("endereço inválido `{com_porta}` (use IP:porta)"))?;
-        if pixel_count == 0 {
-            return Err("pixel_count tem de ser > 0".into());
-        }
-        Ok(Self {
-            protocol,
-            addr,
-            pixel_count,
-            first_universe,
-            color: ColorFormat::Rgb(RgbOrder::Rgb),
-            pixels_per_universe: 170,
-        })
+            .map_err(|_| format!("endereço inválido `{com_porta}` (use IP[:porta])"))?;
+
+        Self::from_profile(profile, addr, pixel_count, first_universe)
     }
 
-    /// Constrói a saída a partir de um [`HardwareProfile`]. **É este o caminho preferido.**
+    /// Constrói a saída a partir de um [`HardwareProfile`]. **É o único construtor** —
+    /// [`OutputConfig::resolve`] delega aqui depois de resolver o endereço.
     ///
-    /// # Porque não há aqui um segundo caminho para o fio
+    /// # Não existe caminho sem profile
     ///
-    /// `from_profile` e [`OutputConfig::parse`] produzem o **mesmo tipo**, e o
-    /// [`OutputManager`] continua a ter um único construtor. O que muda é a *procedência* dos
-    /// campos: com profile vêm declarados pelo nó, sem profile vêm de omissões documentadas.
-    /// Nada no caminho dos bytes se duplica.
+    /// Até ao GS4.3 havia um `parse` que preenchia cor e universos com omissões (`RgbOrder::Rgb`
+    /// e 170). Essas omissões **estavam erradas** para o rig real, cujos WLED são GRB, e um
+    /// valor errado por omissão é pior que a ausência de valor: parece configuração. Foram
+    /// removidas, e com elas a possibilidade de o daemon adivinhar o hardware.
     ///
     /// O endereço e o primeiro universo **não** saem do profile: são da *instância*, não do
     /// tipo de hardware — é a separação que o ADR-0018 fixou quando decidiu que `Identity`
@@ -179,6 +207,7 @@ impl OutputConfig {
             first_universe,
             color: profile.capabilities.color,
             pixels_per_universe: profile.limits.pixels_per_universe,
+            transport: profile.transport,
         })
     }
 
@@ -190,15 +219,37 @@ impl OutputConfig {
         }
     }
 
+    /// Quantos pixels cabem num datagrama, **derivado do MTU do profile**.
+    pub fn pixels_per_datagram(&self) -> usize {
+        self.transport.pixels_per_datagram(
+            self.protocol.to_profile(),
+            self.color,
+            self.pixels_per_universe,
+        )
+    }
+
     /// Em quantos datagramas um frame se parte, **derivado do MTU do profile**.
-    pub fn datagrams_per_frame(&self, transport: &Transport) -> u32 {
-        transport.datagrams_for(
+    pub fn datagrams_per_frame(&self) -> u32 {
+        self.transport.datagrams_for(
             self.pixel_count as u32,
             self.protocol.to_profile(),
             self.color,
             self.pixels_per_universe,
         )
     }
+}
+
+/// Encontra o preset pelo nome, ou explica quais existem.
+///
+/// O daemon **não define hardware**: lê o catálogo do `led-hardware-profile`, que é uma
+/// tabela `const` onde acrescentar um nó é uma linha (ADR-0018).
+pub fn profile_by_name(nome: &str) -> Result<HardwareProfile, String> {
+    let reg = led_hardware_profile::HardwareRegistry::with_builtin();
+    reg.profile(nome).ok_or_else(|| {
+        let mut nomes: Vec<&str> = reg.names().collect();
+        nomes.sort_unstable();
+        format!("preset `{nome}` nao existe. Disponiveis: {}", nomes.join(", "))
+    })
 }
 
 /// Contadores de saída. **Observáveis de propósito**: um erro engolido é indistinguível de
@@ -230,10 +281,14 @@ impl OutputManager {
     /// protocolo está em uso.**
     pub fn open(cfg: OutputConfig) -> std::io::Result<Self> {
         let out: Box<dyn ProtocolOutput> = match cfg.protocol {
-            OutputProtocol::Ddp => Box::new(led_player::DdpOutput::with_format(
+            // `with_limits`, não `with_format`: é aqui que o MTU declarado deixa de ser
+            // decorativo e passa a decidir onde o frame se parte.
+            OutputProtocol::Ddp => Box::new(led_player::DdpOutput::with_limits(
                 cfg.addr,
                 cfg.pixel_count,
                 cfg.color,
+                cfg.pixels_per_datagram(),
+                cfg.pixels_per_universe,
             )?),
             OutputProtocol::ArtNet => {
                 let assigns =
@@ -295,6 +350,22 @@ impl led_core::ProtocolOutput for OutputManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Atalho dos testes: preset → configuração resolvida. **Passa pelo mesmo caminho da
+    /// produção** — se `resolve` deixar de consultar o profile, estes testes vêem.
+    fn cfg_de(preset: &str, addr: &str, px: usize) -> OutputConfig {
+        let perfil = profile_by_name(preset).expect("preset do catálogo");
+        OutputConfig::resolve(&perfil, addr, px, 1).expect("resolver")
+    }
+
+    fn preset_de(proto: &str) -> &'static str {
+        match proto {
+            "ddp" => "esp32-poe-wled-ddp",
+            "artnet" => "esp32-devkit-wled-artnet",
+            "sacn" => "falcon-f16v3-sacn",
+            outro => panic!("sem preset para {outro}"),
+        }
+    }
     use led_core::PixelColor;
     use std::net::UdpSocket;
 
@@ -312,28 +383,35 @@ mod tests {
 
     #[test]
     fn parse_de_configuracao() {
-        let c = OutputConfig::parse("ddp://127.0.0.1", 720, 1).unwrap();
+        let c = cfg_de("esp32-poe-wled-ddp", "127.0.0.1", 720);
         assert_eq!(c.protocol, OutputProtocol::Ddp);
         assert_eq!(c.addr.port(), DDP_PORT, "porta omitida cai no padrão do protocolo");
 
         assert_eq!(
-            OutputConfig::parse("artnet://127.0.0.1", 10, 1).unwrap().addr.port(),
+            cfg_de("esp32-devkit-wled-artnet", "127.0.0.1", 10).addr.port(),
             ARTNET_PORT
         );
-        assert_eq!(OutputConfig::parse("sacn://127.0.0.1", 10, 1).unwrap().addr.port(), SACN_PORT);
+        assert_eq!(cfg_de("falcon-f16v3-sacn", "127.0.0.1", 10).addr.port(), SACN_PORT);
         assert_eq!(
-            OutputConfig::parse("ddp://127.0.0.1:9999", 10, 1).unwrap().addr.port(),
+            cfg_de("esp32-poe-wled-ddp", "127.0.0.1:9999", 10).addr.port(),
             9999,
             "porta explícita vence o padrão"
         );
     }
 
     #[test]
-    fn parse_recusa_o_que_esta_errado() {
-        for s in ["127.0.0.1", "xyz://127.0.0.1", "ddp://nao-e-ip", "ddp://"] {
-            assert!(OutputConfig::parse(s, 10, 1).is_err(), "devia recusar: {s}");
+    fn resolve_recusa_o_que_esta_errado() {
+        let perfil = profile_by_name("esp32-poe-wled-ddp").unwrap();
+        for s in ["xyz://127.0.0.1", "artnet://127.0.0.1", "nao-e-ip", "ddp://", ""] {
+            assert!(OutputConfig::resolve(&perfil, s, 10, 1).is_err(), "devia recusar: {s}");
         }
-        assert!(OutputConfig::parse("ddp://127.0.0.1", 0, 1).is_err(), "0 pixels não faz sentido");
+        // `127.0.0.1` **sem esquema** é agora a forma canónica: o protocolo vem do profile.
+        assert!(OutputConfig::resolve(&perfil, "127.0.0.1", 10, 1).is_ok());
+        assert!(
+            OutputConfig::resolve(&perfil, "127.0.0.1", 0, 1).is_err(),
+            "0 pixels não faz sentido"
+        );
+        assert!(profile_by_name("nao-existe").is_err(), "preset inexistente é erro, não omissão");
     }
 
     #[test]
@@ -352,7 +430,7 @@ mod tests {
     fn os_tres_protocolos_poem_bytes_no_fio() {
         for proto in ["ddp", "artnet", "sacn"] {
             let (sock, addr) = recetor();
-            let cfg = OutputConfig::parse(&format!("{proto}://{addr}"), 8, 1).unwrap();
+            let cfg = cfg_de(preset_de(proto), &addr.to_string(), 8);
             let om = OutputManager::open(cfg).unwrap_or_else(|e| panic!("{proto}: {e}"));
 
             om.send(&frame(8, 200)).unwrap_or_else(|e| panic!("{proto}: {e:?}"));
@@ -374,7 +452,7 @@ mod tests {
         let mut primeiros = Vec::new();
         for proto in ["ddp", "artnet", "sacn"] {
             let (sock, addr) = recetor();
-            let cfg = OutputConfig::parse(&format!("{proto}://{addr}"), 8, 1).unwrap();
+            let cfg = cfg_de(preset_de(proto), &addr.to_string(), 8);
             let om = OutputManager::open(cfg).unwrap();
             om.send(&frame(8, 128)).unwrap();
             let mut buf = [0u8; 2048];
@@ -396,7 +474,7 @@ mod tests {
         // Porta 9 (discard) num endereço não roteável dá erro de envio em muitos sistemas;
         // onde não der, o teste continua válido porque afirma a COERÊNCIA dos contadores,
         // não que a falha aconteça.
-        let cfg = OutputConfig::parse("ddp://127.0.0.1:9", 8, 1).unwrap();
+        let cfg = cfg_de("esp32-poe-wled-ddp", "127.0.0.1:9", 8);
         let om = OutputManager::open(cfg).unwrap();
         let r = om.send(&frame(8, 10));
         let (f, e) = (om.stats().frames(), om.stats().errors());
@@ -407,7 +485,7 @@ mod tests {
     #[test]
     fn contadores_acumulam_por_frame() {
         let (sock, addr) = recetor();
-        let cfg = OutputConfig::parse(&format!("ddp://{addr}"), 4, 1).unwrap();
+        let cfg = cfg_de("esp32-poe-wled-ddp", &addr.to_string(), 4);
         let om = OutputManager::open(cfg).unwrap();
         for i in 0..5u8 {
             om.send(&frame(4, i)).unwrap();

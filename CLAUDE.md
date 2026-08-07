@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (924 tests)
+cargo test --workspace                  # all suites (930 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (924 tests)
+cargo test --workspace                  # all suites (930 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **924 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **930 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +132,32 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07d — GS4.4: `--profile` obrigatório, e o MTU deixa de ser decorativo
+
+**Done.** O caminho da CLI deixou de adivinhar hardware. `--profile <preset>` é **obrigatório sempre que há `--output`**, e o `OutputConfig::parse` — que preenchia cor e universos com omissões — **foi removido**. `led-daemon` e `led-core` continuam intocados.
+
+**Por que remover em vez de manter com omissões melhores.** As omissões eram `RgbOrder::Rgb` e 170 px/universo. Estavam **erradas** para o rig real, cujos WLED são GRB. Um valor errado por omissão é pior que a ausência de valor: parece configuração, e ninguém o confere. Sem `--profile`, o daemon agora **recusa arrancar** com exit 2 e uma mensagem que aponta o `--list-profiles`.
+
+**O segundo defeito, que o teste de MTU encontrou.** A fatia anterior declarou `Transport::mtu_bytes` e derivou dele a fragmentação — mas **ninguém honrava a derivação no fio**. O `DdpDevice` fragmentava pelos seus próprios 487 fixos, e o teste apanhou-o de imediato: *"MTU 576: previsto 5, no fio 2"*. Um MTU declarado que o fio ignora é pior que não o declarar — dá a impressão de configuração onde há uma constante. Corrigido com `DdpDevice::set_max_pixels` + `DdpOutput::with_limits`, e o teto **nunca sobe** acima do que o buffer comporta: um profile com MTU maior que a rede real produziria datagramas que se perdem.
+
+**O `universes_equiv` também deixou de ser 170 escrito à mão** — o DDP não tem universos, e esse número existe só para o `universe_count()` do `ProtocolOutput`; passa a vir do profile em vez de ser assumido.
+
+**O esquema não é uma segunda fonte de protocolo.** `--output` passou a aceitar `IP[:porta]`, e `ddp://IP` continua a funcionar — mas apenas se **concordar** com o preset. Discordar é erro, não é uma escolha: `artnet://` sobre um preset DDP devolve *"contradiz o profile"*. O operador pode escrever o que já escrevia sem que exista um segundo sítio de onde o protocolo possa vir.
+
+**A porta continua a não ser configuração física, e isso é uma decisão.** 4048/6454/5568 são **identidade dos protocolos** (IANA/spec) — mudam quando o protocolo muda, e o protocolo vem do profile. Pô-las no `HardwareProfile` seria declarar como propriedade do nó algo que é do protocolo.
+
+**Bytes medidos, não deduzidos** (`tests/wled_driver.rs`, 16 testes). RGB/GRB/BGR produzem **três resultados distintos** (`[200,100,50]` · `[100,200,50]` · `[50,100,200]`) e o teste falha se dois coincidirem. RGBW põe 4 canais no fio com o branco do ADR-0020 — subtraído, não somado; um teste que só contasse canais passaria com o modo aditivo antigo, que consumia 4× mais corrente. MTU 576/1000/1500 → 5/3/2 datagramas, **e nenhum datagrama excede o MTU**. `first_universe` 0/1/7/100 sai consecutivo no fio.
+
+**Gate falsificado 3×** (KB-012). (1) `RgbOrder::Rgb` fixo → **6 testes** reprovaram. (2) 170 px/universo fixo → o teste de MTU reprovou. (3) fragmentação fixa em 487, ignorando o MTU → *"MTU 576: previsto 5, no fio 2"*. Produção restaurada e verde nos três.
+
+**Erro meu nesta rodada.** A asserção de monotonia do teste de MTU estava **invertida** — escrevi `previsto > anterior` quando MTU maior fragmenta **menos**. O gate real já tinha passado; foi a minha própria verificação que estava errada, e só a distingui da falha verdadeira depois de comparar o ficheiro com o backup byte-a-byte.
+
+**A auditoria do PASSO 6 é um teste, não um `grep` de uma vez.** `nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida` lê `output.rs`, `stage.rs` e `run.rs` com `include_str!` e reprova se `RgbOrder::…)`, `170`, `487`, `1462` ou `1500` aparecerem **fora de comentário**. Um `grep` prova o estado de um instante; isto prova-o em cada `cargo test`.
+
+**Invariants verified.** **930 testes** no workspace, clippy `-D warnings` exit 0, `led-daemon` e `led-core` intocados, **nenhum teste removido**. Executado a sério: `--list-profiles` lista os 8 presets com protocolo, cor, universos, MTU e heartbeat; `--output` sem `--profile` → **exit 2** com a mensagem certa.
+
+**Pending.** `--output` aceita **um** alvo — multi-controlador continua a ser outra fatia, e é o que separa 720 px de 6.200. A `Calibration` (gamma/brightness) do profile continua **sem ser ligada** ao HAL pelo daemon: está declarada desde o ADR-0019 e o caminho existe (`Hal::with_calibration`), mas o `OutputManager` não a passa. É a mesma classe de defeito que o `RgbOrder` era — campo declarado que ninguém honra — e nomeio-a agora em vez de a deixar para outro teste a encontrar. GS4.5–GS4.7 seguem bloqueados pelo rig.
 
 ### 2026-08-07c — GS4.3: o `HardwareProfile` passa a mandar na saída (e apanha um defeito de cor)
 

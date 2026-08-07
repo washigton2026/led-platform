@@ -187,6 +187,27 @@ impl DdpOutput {
             universes_equiv: pixel_count.div_ceil(170) as u16,
         })
     }
+
+    /// Saída DDP com **os limites declarados pelo hardware**: quantos pixels cabem num
+    /// datagrama (derivado do MTU) e quantos num universo equivalente.
+    ///
+    /// O DDP não tem universos; `universes_equiv` existe só para o `universe_count()` do
+    /// `ProtocolOutput`. Recebê-lo em vez de o assumir 170 é o que impede este número de ser
+    /// mais um valor físico escrito à mão.
+    pub fn with_limits(
+        addr: std::net::SocketAddr,
+        pixel_count: usize,
+        format: led_core::ColorFormat,
+        max_pixels_per_datagram: usize,
+        pixels_per_universe: u16,
+    ) -> std::io::Result<Self> {
+        let mut dev = led_protocols::DdpDevice::with_format(addr, 0, format)?;
+        dev.set_max_pixels(max_pixels_per_datagram);
+        Ok(Self {
+            dev: std::sync::Mutex::new(dev),
+            universes_equiv: pixel_count.div_ceil(pixels_per_universe.max(1) as usize) as u16,
+        })
+    }
 }
 
 impl ProtocolOutput for DdpOutput {

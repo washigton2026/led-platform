@@ -22,10 +22,18 @@ OPÇÕES:
                           NÃO é verificação — nenhum hash é recomputado, e o
                           journal regista que foi afirmado. Sem isto o pré-voo
                           reprova e o daemon não toca.
-    --output SPEC         Saída Ethernet: ddp://IP[:4048], artnet://IP[:6454]
-                          ou sacn://IP[:5568]. SEM esta opção nenhum frame
-                          deixa o processo, e o pré-voo de rede/dispositivos
-                          é VACUOSO (fica dito no journal).
+    --output IP[:PORTA]   Endereço do controlador. EXIGE --profile. Aceita
+                          também `proto://IP`, mas o esquema tem de CONCORDAR
+                          com o protocolo do preset — o profile é que manda.
+                          Sem esta opção nenhum frame deixa o processo, e o
+                          pré-voo de rede/dispositivos é VACUOSO.
+    --profile PRESET      Preset do HardwareProfile. É a ÚNICA fonte de
+                          configuração física: protocolo, ordem de canais,
+                          pixels/universo, MTU e heartbeat. Sem ele o daemon
+                          teria de adivinhar o hardware — e adivinhar a ordem
+                          de canais acende a cor errada na fita.
+                          Use --list-profiles para ver os disponíveis.
+    --list-profiles       Lista os presets e sai.
     --socket CAMINHO      Abre o socket de controlo (UDS, owner-only 0600).
                           Com --socket, o <SHOW.lumyx> é OPCIONAL: o show pode
                           chegar por `load` do ledctl.
@@ -73,6 +81,25 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         };
         match a {
             "-h" | "--help" => return Err(String::new()),
+            "--list-profiles" => {
+                let reg = led_hardware_profile::HardwareRegistry::with_builtin();
+                let mut nomes: Vec<&str> = reg.names().collect();
+                nomes.sort_unstable();
+                for n in nomes {
+                    let p = reg.profile(n).expect("acabou de ser listado");
+                    println!(
+                        "{n}\n    {} {} · {:?} · {:?} · {} px/universo · MTU {} · hb {} ms",
+                        p.identity.vendor,
+                        p.identity.model,
+                        p.capabilities.protocol,
+                        p.capabilities.color,
+                        p.limits.pixels_per_universe,
+                        p.transport.mtu_bytes,
+                        p.transport.heartbeat_ms
+                    );
+                }
+                std::process::exit(0);
+            }
             "--tick-ms" => {
                 cfg.tick_ms = valor("--tick-ms")?.parse().map_err(|_| "--tick-ms inválido")?
             }
@@ -82,6 +109,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             }
             "--log" => log = Some(valor("--log")?),
             "--output" => cfg.output = Some(valor("--output")?),
+            "--profile" => cfg.profile = Some(valor("--profile")?),
             "--socket" => socket = Some(valor("--socket")?),
             "--assume-integrity" => cfg.integrity = Integrity::AssumedByOperator,
             "--no-autoplay" => cfg.autoplay = false,
@@ -97,6 +125,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         i += 1;
     }
 
+    if cfg.output.is_some() && cfg.profile.is_none() {
+        return Err("--output exige --profile (o protocolo e a ordem de canais vêm do \
+                    HardwareProfile). Use --list-profiles"
+            .into());
+    }
+    if cfg.profile.is_some() && cfg.output.is_none() {
+        return Err("--profile sem --output não configura nada".into());
+    }
     if show.is_none() && socket.is_none() {
         return Err("falta o ficheiro <SHOW.lumyx> (ou use --socket para carregar por IPC)".into());
     }
@@ -234,7 +270,9 @@ mod tests {
             "--log",
             "/tmp/j.jsonl",
             "--output",
-            "ddp://192.168.2.156",
+            "192.168.2.156",
+            "--profile",
+            "esp32-poe-wled-ddp",
             "--assume-integrity",
             "--no-autoplay",
             "--keep-running",
@@ -243,7 +281,8 @@ mod tests {
         assert_eq!(a.cfg.tick_ms, 40);
         assert_eq!(a.cfg.max_ticks, Some(10));
         assert_eq!(a.log.as_deref(), Some("/tmp/j.jsonl"));
-        assert_eq!(a.cfg.output.as_deref(), Some("ddp://192.168.2.156"));
+        assert_eq!(a.cfg.output.as_deref(), Some("192.168.2.156"));
+        assert_eq!(a.cfg.profile.as_deref(), Some("esp32-poe-wled-ddp"));
         assert_eq!(a.cfg.integrity, Integrity::AssumedByOperator);
         assert!(!a.cfg.autoplay);
         assert!(!a.cfg.exit_on_finish);
@@ -257,6 +296,13 @@ mod tests {
         assert!(args(&["a.lumyx", "--tick-ms"]).is_err(), "opção sem valor");
         assert!(args(&["a.lumyx", "--tick-ms", "abc"]).is_err(), "valor não numérico");
         assert!(args(&["a.lumyx", "--nao-existe"]).is_err(), "opção desconhecida");
+        assert!(
+            args(&["a.lumyx", "--output", "10.0.0.1"]).is_err(),
+            "--output sem --profile tem de falhar: o daemon nao pode adivinhar o hardware"
+        );
+        assert!(
+            args(&["a.lumyx", "--output", "10.0.0.1", "--profile", "esp32-poe-wled-ddp"]).is_ok()
+        );
     }
 
     #[test]

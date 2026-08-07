@@ -29,8 +29,11 @@ pub struct Config {
     pub exit_on_finish: bool,
     /// O que se sabe sobre a integridade do artefato.
     pub integrity: Integrity,
-    /// `proto://host[:porta]`. `None` = **nenhum frame deixa o processo**.
+    /// `host[:porta]` (ou `proto://host[:porta]`). `None` = **nenhum frame deixa o processo**.
     pub output: Option<String>,
+    /// Nome do preset do `HardwareProfile`. **Obrigatório sempre que há `output`**: é dele que
+    /// vêm protocolo, ordem de canais, universos, MTU e heartbeat.
+    pub profile: Option<String>,
 }
 
 impl Default for Config {
@@ -42,6 +45,7 @@ impl Default for Config {
             exit_on_finish: true,
             integrity: Integrity::NotVerified,
             output: None,
+            profile: None,
         }
     }
 }
@@ -104,7 +108,34 @@ fn abrir_palco<P: Pacer, W: Write>(
     journal: &mut Journal<W>,
 ) -> Result<Option<Stage>, ()> {
     let Some(spec) = &cfg.output else { return Ok(None) };
-    match Stage::open(path, spec) {
+    let Some(nome) = &cfg.profile else {
+        journal.line(&notice_to_json(
+            pacer.now_ms(),
+            "output_failed",
+            "--output exige --profile: o protocolo e a ordem de canais vem do HardwareProfile",
+        ));
+        return Err(());
+    };
+    let perfil = match crate::output::profile_by_name(nome) {
+        Ok(p) => p,
+        Err(e) => {
+            journal.line(&notice_to_json(pacer.now_ms(), "output_failed", &e));
+            return Err(());
+        }
+    };
+    journal.line(&notice_to_json(
+        pacer.now_ms(),
+        "profile",
+        &format!(
+            "{nome} · {} · {:?} · {} px/universo · MTU {} · heartbeat {} ms",
+            perfil.identity.model,
+            perfil.capabilities.color,
+            perfil.limits.pixels_per_universe,
+            perfil.transport.mtu_bytes,
+            perfil.transport.heartbeat_ms
+        ),
+    ));
+    match Stage::open(path, spec, &perfil) {
         Ok(s) => {
             journal.line(&notice_to_json(pacer.now_ms(), "output_open", spec));
             Ok(Some(s))
@@ -114,6 +145,16 @@ fn abrir_palco<P: Pacer, W: Write>(
             Err(())
         }
     }
+}
+
+/// Abre o palco no caminho do IPC. **Mesma resolução, sem journal** — o cliente recebe o erro
+/// na resposta, que é o canal certo quando quem pediu foi ele.
+#[cfg(unix)]
+fn abrir_palco_ipc(cfg: &Config, path: &str) -> Result<Option<Stage>, String> {
+    let Some(spec) = &cfg.output else { return Ok(None) };
+    let nome = cfg.profile.as_ref().ok_or("--output exige --profile")?;
+    let perfil = crate::output::profile_by_name(nome)?;
+    Stage::open(path, spec, &perfil).map(Some)
 }
 
 /// A frase do modo. **Tem de deixar de mentir** quando a saída existe.
@@ -322,10 +363,10 @@ fn apply_ipc(
         };
         // O palco é **do show**: um `load` novo dimensiona a saída pelo artefato que chegou.
         // Reabrir aqui é o que impede um show de 720 px de sair por uma saída de 300.
-        if let Some(spec) = &cfg.output {
-            match Stage::open(path, spec) {
-                Ok(s) => *stage = Some(s),
-                Err(e) => return (Err(load_error(format!("saida: {e}"))), eventos),
+        if cfg.output.is_some() {
+            match abrir_palco_ipc(cfg, path) {
+                Ok(s) => *stage = s,
+                Err(e) => return (Err(load_error(e)), eventos),
             }
         }
         if *assume_integrity {
@@ -496,6 +537,7 @@ mod tests {
             exit_on_finish: true,
             integrity: Integrity::AssumedByOperator,
             output: None,
+            profile: None,
         }
     }
 

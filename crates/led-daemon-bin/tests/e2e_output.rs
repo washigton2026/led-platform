@@ -44,7 +44,16 @@ fn escrever(nome: &str, frames: u32, passo: u64, px: u32) -> String {
     path.to_str().unwrap().to_string()
 }
 
-fn cfg(output: Option<&str>) -> Config {
+fn preset_de(proto: &str) -> &'static str {
+    match proto {
+        "ddp" => "esp32-poe-wled-ddp",
+        "artnet" => "esp32-devkit-wled-artnet",
+        "sacn" => "falcon-f16v3-sacn",
+        outro => panic!("sem preset para {outro}"),
+    }
+}
+
+fn cfg(output: Option<&str>, profile: Option<&str>) -> Config {
     Config {
         tick_ms: 20,
         max_ticks: None,
@@ -52,6 +61,7 @@ fn cfg(output: Option<&str>) -> Config {
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
         output: output.map(String::from),
+        profile: profile.map(String::from),
     }
 }
 
@@ -86,14 +96,15 @@ fn o_daemon_envia_frames_reais_em_ddp_artnet_e_sacn() {
     for proto in ["ddp", "artnet", "sacn"] {
         let path = escrever(&format!("e2e_{proto}.lumyx"), 8, 25, 6);
         let sock = socket();
-        let spec = format!("{proto}://{}", sock.local_addr().unwrap());
-        let (n, log, reason, estado) = correr(&path, cfg(Some(&spec)), &sock);
+        let spec = sock.local_addr().unwrap().to_string();
+        let (n, log, reason, estado) =
+            correr(&path, cfg(Some(&spec), Some(preset_de(proto))), &sock);
 
         assert_eq!(reason, ExitReason::ReachedEnd, "{proto}: {log}");
         assert_eq!(estado, State::Finished, "{proto}");
         assert!(n > 0, "{proto}: NENHUM datagrama saiu do daemon — a saída não está ligada");
         assert!(log.contains(r#""notice":"output_open""#), "{proto}: {log}");
-        assert!(log.contains(&format!("{proto}://")), "{proto}: o modo tem de nomear a saída");
+        assert!(log.contains(r#""notice":"profile""#), "{proto}: o preset tem de ficar no journal");
         assert!(
             !log.contains("nenhum frame deixa este processo"),
             "{proto}: a frase do GS2 deixou de ser verdadeira e não pode continuar no journal"
@@ -109,7 +120,7 @@ fn o_daemon_envia_frames_reais_em_ddp_artnet_e_sacn() {
 fn sem_output_o_daemon_continua_a_nao_enviar_nada() {
     let path = escrever("e2e_mudo.lumyx", 8, 25, 6);
     let sock = socket();
-    let (n, log, reason, _) = correr(&path, cfg(None), &sock);
+    let (n, log, reason, _) = correr(&path, cfg(None, None), &sock);
     assert_eq!(reason, ExitReason::ReachedEnd);
     assert_eq!(n, 0, "sem saída configurada, o fio tem de ficar em silêncio");
     assert!(log.contains(r#""notice":"preflight_vacuous""#), "e a vacuidade continua dita");
@@ -122,8 +133,8 @@ fn sem_output_o_daemon_continua_a_nao_enviar_nada() {
 fn com_output_o_preflight_deixa_de_ser_vacuoso() {
     let path = escrever("e2e_preflight.lumyx", 4, 25, 4);
     let sock = socket();
-    let spec = format!("ddp://{}", sock.local_addr().unwrap());
-    let (_, log, _, _) = correr(&path, cfg(Some(&spec)), &sock);
+    let spec = sock.local_addr().unwrap().to_string();
+    let (_, log, _, _) = correr(&path, cfg(Some(&spec), Some("esp32-poe-wled-ddp")), &sock);
 
     assert!(
         !log.contains(r#""notice":"preflight_vacuous""#),
@@ -156,7 +167,15 @@ fn saida_impossivel_impede_o_arranque() {
     let flag = AtomicBool::new(false);
     let out = {
         let mut j = Journal::new(&mut buf);
-        run(&mut rt, &path, desc, &cfg(Some("ddp://nao-e-um-ip")), &mut p, &mut j, &flag)
+        run(
+            &mut rt,
+            &path,
+            desc,
+            &cfg(Some("nao-e-um-ip"), Some("esp32-poe-wled-ddp")),
+            &mut p,
+            &mut j,
+            &flag,
+        )
     };
     let log = String::from_utf8(buf).unwrap();
     assert_eq!(out.reason, ExitReason::NeverStarted);

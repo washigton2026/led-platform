@@ -38,7 +38,7 @@ pub mod server;
 
 pub use journal::Journal;
 pub use loader::{descriptor_from_path, descriptor_from_reader, Integrity, LoadError};
-pub use output::{OutputConfig, OutputManager, OutputProtocol};
+pub use output::{profile_by_name, OutputConfig, OutputManager, OutputProtocol};
 pub use pacer::{Pacer, SystemPacer};
 pub use source::FrameSource;
 pub use inventory::{Inventory, Node};

@@ -61,6 +61,7 @@ fn do_ficheiro_ao_fim_do_show() {
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
         output: None,
+        profile: None,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0, sleeps: 0 };
