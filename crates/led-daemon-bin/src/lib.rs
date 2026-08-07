@@ -23,6 +23,7 @@
 //! sem a linha final de estado nem o *flush* do journal.
 
 pub mod json;
+pub mod hwcheck;
 pub mod journal;
 pub mod loader;
 pub mod output;

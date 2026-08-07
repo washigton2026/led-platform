@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (930 tests)
+cargo test --workspace                  # all suites (937 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (930 tests)
+cargo test --workspace                  # all suites (937 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **930 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **937 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +132,42 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07e — GS4.5: o instrumento existe; a medição continua bloqueada pelo rig
+
+**STATUS.** GS4.5 **não está feito, e não pode ser dado como feito.** Verifiquei antes de escrever qualquer coisa: os cinco nós (`192.168.2.156–160`) continuam sem responder, e esta máquina **nem sequer está na rede deles** — está em `10.192.68.143`, por WiFi (`en0`). Não há ESP32-POE, switch nem cabo. A própria skill do sprint diz: *"nunca marcar como concluído ping, DDP, ArtNet, sACN, heartbeat, recovery, jitter sem medição real."*
+
+**GARGALO DOMINANTE: aquisição de hardware.** Não é software, e não o posso remover. O que **posso** remover é o gargalo seguinte — *quando o hardware chegar, quem mede?* Latência, jitter, gap de heartbeat e tempo de recuperação **não são observáveis a olho**, e um número escrito à mão num runbook é uma afirmação, não uma medição.
+
+**DECISÃO. Entreguei o instrumento, não o veredito.** `lumyx-hwcheck` executa as etapas do GS4.5 que exigem número e emite o artefacto de evidência. **Não há segunda implementação**: usa o `OutputManager` do daemon, o ArtPoll do `led-protocols` e o `HardwareProfile` do catálogo. Se ele passar e o daemon falhar, um dos dois está a falar com hardware diferente — e isso seria o defeito.
+
+**A regra que governa o módulo: `NaoMedido` nunca é `Passa`.** [`Veredito`](./crates/led-daemon-bin/src/hwcheck.rs) tem **três** estados, e os códigos de saída são distintos: `0` tudo medido e aprovado, `1` alguma etapa **medida** reprovou, `2` alguma etapa **não foi medida**. Colapsar "o cabo está bom" com "não havia cabo" seria o KB-012 na sua forma mais cara — só se descobriria no palco.
+
+**ArtPoll como instrumento de latência, e porquê.** DDP e sACN são *fire-and-forget*: não podem medir latência **por definição**. ArtPoll é o único round-trip que o LUMYX já fala, e não precisa de root (ao contrário do ICMP). O jitter é calculado como **desvio-padrão**, deliberadamente a mesma definição que o `stddev` do `ping` imprime — para que o número seja **comparável** aos 31 ms da bancada WiFi de 2026-07-20 que confirmaram o ADR-0005. Uma definição diferente daria um número que não se pode pôr ao lado do histórico.
+
+**O falso-verde que o próprio harness me apanhou.** Na primeira execução contra o rig ausente, a etapa `heartbeat` disse **PASS** — *"810 ms · 8 envios · 0 erros"* — contra um IP que não existe. UDP `sendto` para um destino inalcançável **tem sucesso local**: eu estava a medir a cadência do **remetente**, não a do palco. Corrigido com uma guarda: a etapa só é medida se o controlador estiver confirmado por HTTP; sem isso devolve `NaoMedido` e **diz porquê**. Foi o meu próprio instrumento a apanhar-me, e é a razão de a guarda existir.
+
+**Falsificação.** `um_relatorio_sem_medicoes_diz_que_nao_mediu` constrói um relatório só com `NaoMedido` e afirma que **nenhuma célula** diz PASS e que o veredito é `Incompleto`. `ausencia_de_amostras_e_none_nunca_zero` fecha a forma mais fácil de o harness mentir: reportar `0.00 ms` de latência num rig que nunca respondeu — `Amostras` vazias devolvem `None`, nunca zero. `reprovar_vence_nao_medir_que_vence_aprovar` fixa a hierarquia, incluindo que **zero etapas não é sucesso**.
+
+**Execução real, contra o rig offline:**
+
+```
+[NAO MEDIDO] alcance+latencia   sem resposta: os error 35
+[NAO MEDIDO] controlador        HTTP 192.168.2.156:80 inacessivel: connection timed out
+[NAO MEDIDO] protocolo:ddp      enviei 40 frames, mas nao consigo confirmar aceitacao
+[NAO MEDIDO] heartbeat          cadencia local 810 ms — mas o controlador nao responde;
+                                isto mede o remetente, NAO o palco
+[NAO MEDIDO] queda+recovery     etapa interativa: correr com --cabo
+veredito: Incompleto                                                    (exit 2)
+```
+
+**TESTES.** **937 no workspace** (+7), clippy `-D warnings` exit 0, `led-daemon` e `led-core` intocados, nenhum teste removido.
+
+**RISCO.** O harness mede o que **sai** e o que o WLED **reporta** (`live`/`lm`, a evidência de aceitação adotada em 2026-07-23). Continua sem provar que o pixel certo acendeu com a cor certa — isso é observação humana, e continua no runbook.
+
+**PENDENTES.** GS4.5 real (todas as etapas com número). O `--cabo` nunca foi executado. sACN e Art-Net exigem correr com o preset correspondente — o harness **recusa-se** a medir um protocolo que o preset não declara, em vez de fingir. A `Calibration` do profile continua sem ser ligada ao HAL (nomeada na fatia anterior, ainda aberta).
+
+**PRÓXIMO PASSO.** Adquirir 1× Olimex ESP32-POE + switch PoE + 2 cabos. Depois: `lumyx-hwcheck <IP> --profile esp32-poe-wled-ddp --out docs/certification/gs45-<data>.md --cabo`, e o runbook para o que o olho tem de confirmar. **Enquanto isso, GS4.6 e GS4.7 não devem começar** — a ordem do sprint é explícita, e telemetria sem hardware mediria um cano vazio.
 
 ### 2026-08-07d — GS4.4: `--profile` obrigatório, e o MTU deixa de ser decorativo
 
