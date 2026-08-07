@@ -840,6 +840,7 @@ dependencies = [
  "led-core",
  "led-daemon",
  "led-hal",
+ "led-hardware-profile",
  "led-player",
  "led-protocols",
  "led-show-recorder",

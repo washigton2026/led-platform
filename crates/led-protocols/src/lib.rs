@@ -38,6 +38,9 @@ pub mod sender;
 pub use artnet::{
     discover_controllers, presence, DiscoveryResult,
     build_art_dmx, find_conflicts, parse_art_dmx, ArtNetDevice, ArtPollReply, ConflictReport,
+    // GS4.3: as primitivas de ArtPoll passam a ser públicas para que a descoberta seja
+    // testável sobre sockets reais, em vez de por um mock do formato do fio.
+    build_art_poll, build_art_poll_reply, parse_art_poll_reply, ART_POLL_LEN, ART_POLL_REPLY_LEN,
 };
 pub use ddp::{build_ddp_packet, build_ddp_packet_bytes, build_ddp_packet_format, max_pixels_per_packet, DDP_MAX_PAYLOAD_BYTES, parse_ddp_packet, DdpDevice, DdpPacket, DDP_MAX_PAYLOAD, DDP_MAX_PIXELS, DDP_PORT};
 pub use device::{multicast_addr, SacnDevice};

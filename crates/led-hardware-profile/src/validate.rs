@@ -222,6 +222,7 @@ mod tests {
                 supports_metrics: false,
             },
             limits: Limits { pixels_per_universe: 170, max_pixels: 1_560, refresh_hz: 44 },
+            transport: crate::Transport { mtu_bytes: 1_500, heartbeat_ms: 800 },
             power: Power { voltage_v: 5.0, max_current_a: 10.0 },
             calibration: Calibration { gamma: 2.2, brightness: 1.0 },
         }

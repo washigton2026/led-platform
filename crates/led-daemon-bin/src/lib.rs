@@ -29,6 +29,7 @@ pub mod output;
 pub mod pacer;
 pub mod proto;
 pub mod run;
+pub mod inventory;
 pub mod preflight;
 pub mod source;
 pub mod stage;
@@ -40,6 +41,7 @@ pub use loader::{descriptor_from_path, descriptor_from_reader, Integrity, LoadEr
 pub use output::{OutputConfig, OutputManager, OutputProtocol};
 pub use pacer::{Pacer, SystemPacer};
 pub use source::FrameSource;
+pub use inventory::{Inventory, Node};
 pub use stage::{Stage, StageTick};
 pub use run::{run, Config, ExitReason, Outcome};
 #[cfg(unix)]

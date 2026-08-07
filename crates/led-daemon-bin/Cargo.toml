@@ -15,6 +15,7 @@ led-core = { path = "../led-core" }
 led-hal = { path = "../led-hal" }
 led-protocols = { path = "../led-protocols" }
 led-player = { path = "../led-player" }
+led-hardware-profile = { path = "../led-hardware-profile" }
 
 [dev-dependencies]
 # Só nos testes do `loader`, para escrever um .lumyx de fixture.

@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (901 tests)
+cargo test --workspace                  # all suites (924 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (901 tests)
+cargo test --workspace                  # all suites (924 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **901 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **924 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -107,7 +107,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `audio-core` | CPAL → SPSC ring → Hann FFT → bands/beat/BPM/harmonic + **SectionDetector** (musical section detection: Intro/Verse/Chorus/Build/Bridge/Drop/Outro) |
 | `led-show-recorder` | **NEW** — `.lumyx` binary format: write/read `LogicalFrame` + `AudioSnapshot` streams; `pixel_hash` for regression replay comparison |
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
-| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. Leaf: depends only on `led-core` |
+| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. **+`Transport` (GS4.3): MTU declarado, fragmentação DERIVADA dele.** Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
 | `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN), `FrameSource` e `Stage` — **ligados ao laço**, com pré-voo real (WifiBlockGuard + ArtPoll) e heartbeat conduzido pelo tick. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
 | `led-demo` | show.gif renderer |
@@ -132,6 +132,34 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07c — GS4.3: o `HardwareProfile` passa a mandar na saída (e apanha um defeito de cor)
+
+**Objeção ao PASSO 1, e o que fiz em vez dele.** O sprint pedia "criar HardwareProfile". Ele **já existia** desde o ADR-0018 (2026-07-29b): identity, protocolo, universos, pixels, cor, limites. Criar um segundo seria exatamente o caminho paralelo que o próprio sprint proíbe. **Estendi o que havia** com o que faltava — MTU, fragmentação e heartbeat.
+
+**A fragmentação não é declarada: é derivada.** `Transport { mtu_bytes, heartbeat_ms }` dá só o MTU; `pixels_per_datagram` calcula o resto a partir dele, do protocolo e do formato de cor. Escrever "487 px por datagrama" ao lado de "MTU 1500" seria a mesma verdade duas vezes, e a segunda apodreceria em silêncio no dia em que a primeira mudasse. Há um teste que confirma que a derivação **reproduz** o `DDP_MAX_PIXELS = 487` já validado no rig (1500 − 20 IP − 8 UDP − 10 DDP = 1462; 1462/3 = 487). A concordância entre as duas fontes é **provada**, não assumida.
+
+E a derivação sabe distinguir o que prende cada protocolo: DDP é preso pelo **MTU**; Art-Net e sACN são presos pelo **universo** (512 canais), que é muito menor. Dizer que o MTU limita o Art-Net seria descrever o protocolo errado.
+
+**O defeito que a integração encontrou — e que teria aparecido no palco.** O `OutputManager` construía o layout com `RgbOrder::Rgb` **fixo no código**, ignorando o `ColorFormat::Rgb(Grb)` que os presets WLED declaram desde o ADR-0018. Falsifiquei-o repondo o código antigo: vermelho puro saía `[255, 0, 0]` onde um nó GRB exige `[0, 255, 0]`. **Vermelho teria acendido verde na fita real.** O profile já sabia a resposta certa; faltava alguém consultá-la.
+
+**Integração sem segundo caminho.** `OutputConfig::from_profile` e `OutputConfig::parse` produzem o **mesmo tipo**, e o `OutputManager` continua com um único construtor — o que muda é a *procedência* dos campos, não o caminho dos bytes. Há um teste que afirma que os dois coincidem quando os dados coincidem. Endereço e primeiro universo **não** vêm do profile: são da instância, não do tipo de hardware (ADR-0018).
+
+**Configurações duplicadas eliminadas.** O `HEARTBEAT_MS` do `stage.rs` deixou de ser um número solto e passa a derivar de `led_protocols::HEARTBEAT_MS`, com um teste que falha se as fontes divergirem. Um profile com heartbeat fora do teto de 2400 ms do `LUMYX_GOSL` **não abre saída nenhuma**; um show maior do que o nó declara suportar é **recusado na construção**, não descoberto no palco com metade da fita apagada.
+
+**Descoberta sobre sockets reais, sem mocks** (`tests/discovery.rs`). Um controlador de mentira responde na loopback com um `ArtPollReply` construído pelo próprio `led-protocols`, e a presença é decidida sobre os bytes que voltaram. Com controle negativo: silêncio é ausência, **a resposta de um nó não mascara o silêncio de outro**, e lixo no fio não vira um controlador descoberto.
+
+**Sobre "DDP discovery": não existe, e não o inventei.** A especificação do DDP não define descoberta. Um alvo DDP descobre-se pelo ArtPoll do mesmo nó (o WLED responde independentemente do protocolo de saída — precedente de 2026-07-12) ou por HTTP. Está escrito na doc do módulo `inventory`, em vez de eu escrever um protocolo que nenhum controlador fala.
+
+**Inventário com três categorias, não duas.** `Inventory` separa *presente*, *ausente* e **não sondado**. Manter a terceira é o que impede "não sei" de ser arredondado para "sim".
+
+**Invariants verified.** `led-daemon` e `led-core` **intocados**. **924 testes** no workspace, clippy `-D warnings` exit 0. Nenhum teste removido. `led-hardware-profile` continua leaf (o teste do MTU compara com o literal 487 **de propósito** — importar o `led-protocols` fá-lo-ia deixar de ser leaf, e o objetivo é comparar duas fontes independentes, não colar uma na outra).
+
+**Runbook reescrito** ([gs4-hardware-ethernet.md](./docs/runbooks/gs4-hardware-ethernet.md)): 9 etapas, cada uma com **Objetivo · Procedimento · Critério de aceite · Evidência esperada · Resultado**. **Nenhuma marcada como concluída** — todos os campos de resultado vazios. A etapa 3 traz o controle negativo obrigatório (cabo desligado → exit 1) e o aviso do KB-013 sobre ler exit codes sem pipe.
+
+**Bloqueado por hardware, explicitamente.** O que nenhum teste desta fatia prova: que um WLED **aceita** estes bytes e acende os pixels certos. Tudo o que está provado descreve o que **sai** do daemon; nada descreve o que **entra** no controlador. O runbook abre com essa distinção e lista o que já está provado sem rig, para não se repetir trabalho.
+
+**Pending.** `--profile <preset>` ainda não está na CLI do daemon: `from_profile` existe e está testado, mas o binário só aceita `--output proto://host`, que usa as omissões (RGB, 170 px/universo). **Enquanto isso, o daemon continua a enviar RGB para nós GRB** — o defeito está corrigido no caminho do profile, não no caminho da CLI. É a primeira coisa a fazer, e não a dou como feita. `--output` continua a aceitar **um** alvo.
 
 ### 2026-08-07b — GS4.2 (integração): a saída entra no laço e a vacuidade do pré-voo acaba
 

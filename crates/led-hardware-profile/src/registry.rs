@@ -36,6 +36,7 @@ fn row_to_profile(row: &PresetRow) -> HardwareProfile {
             max_pixels: row.max_pixels,
             refresh_hz: row.refresh_hz,
         },
+        transport: crate::Transport { mtu_bytes: row.mtu_bytes, heartbeat_ms: row.heartbeat_ms },
         power: Power { voltage_v: row.voltage_v, max_current_a: row.max_current_a },
         calibration: Calibration { gamma: row.gamma, brightness: row.brightness },
     }

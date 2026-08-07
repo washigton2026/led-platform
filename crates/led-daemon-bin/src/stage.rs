@@ -27,9 +27,13 @@ use crate::source::FrameSource;
 use led_daemon::State;
 use led_hal::Heartbeat;
 
-/// Período do keep-alive, em ms. Igual ao do `LUMYX_GOSL` (`HEARTBEAT_MS = 800`), com folga
-/// confortável para o `WARN_GAP_MS` de 2000 e o limite duro de 2400 ms.
-pub const HEARTBEAT_MS: u64 = 800;
+/// Período do keep-alive, em ms.
+///
+/// **Não é um número novo.** É o mesmo do `LUMYX_GOSL` e o mesmo que o `led-protocols` já
+/// usava; há um teste que falha se as duas fontes divergirem, em vez de as deixar apodrecer
+/// em paralelo. Um `HardwareProfile` pode declarar o seu (`Transport::heartbeat_ms`) — este
+/// é o valor quando não há profile.
+pub const HEARTBEAT_MS: u64 = led_protocols::HEARTBEAT_MS;
 
 /// O que o tick pôs (ou não pôs) no fio. **Observável de propósito**: sem isto, "não enviou
 /// nada" e "enviou e falhou" seriam indistinguíveis no journal.
@@ -150,6 +154,18 @@ mod tests {
             n += 1;
         }
         n
+    }
+
+    /// **Uma só verdade sobre o período do keep-alive.** Se alguém mudar um dos números sem
+    /// mudar o outro, é aqui que se sabe — não no palco.
+    #[test]
+    fn o_periodo_do_keepalive_concorda_com_as_outras_fontes_do_repo() {
+        assert_eq!(HEARTBEAT_MS, led_protocols::HEARTBEAT_MS, "led-protocols");
+        assert_eq!(HEARTBEAT_MS, 800, "LUMYX_GOSL");
+        assert!(
+            HEARTBEAT_MS < led_hardware_profile::Transport::MAX_GAP_MS as u64,
+            "o período tem de caber com folga no teto de 2400 ms"
+        );
     }
 
     #[test]
