@@ -133,6 +133,39 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-07f — ACHADO: a calibração não tem assento no caminho DDP (repo inteiro)
+
+**Nenhum código de produção mudou nesta sessão.** O que segue é um achado reproduzido, com a decisão que ele exige — não uma correção aplicada.
+
+**A tarefa era ligar `Calibration` ao `OutputManager`.** Ao mapear o caminho antes de escrever, o problema revelou-se maior e de outra natureza.
+
+**Os factos, verificados no código:**
+
+| Caminho | Calibração | Onde |
+|---|---|---|
+| `led-player` → Art-Net | **aplicada** | `main.rs:399` `Hal::new(...).with_calibration(...)` |
+| `led-player` → simulador | **aplicada** | `main.rs:403` |
+| `led-player` → **DDP** | **ausente** | `DdpOutput` não toca no `Hal` |
+| `led-daemon` → Art-Net/sACN | **ausente** | `output.rs` chama `Hal::new`, nunca `with_calibration` |
+| `led-daemon` → **DDP** | **ausente** | idem |
+
+**A causa não é um esquecimento — é estrutural.** O ADR-0019 decidiu que a calibração vive *"no HAL, por device, entre o `apply` do mapa e o fan-out"*. E o `DdpOutput` **contorna o HAL por decisão anterior e deliberada** (2026-07-09d: *"DDP bypassa o Hal — pixel-nativo, sem mapa de universos"*): `send_frame` entrega `frame.pixels` diretamente ao `DdpDevice`. **Não existe o sítio onde o ADR-0019 mandaria pôr a calibração.**
+
+**Porque isto importa agora, e não daqui a duas fatias.** DDP é o protocolo **validado em hardware** (94/94 frames, 2026-07-20) e é o que o preset `esp32-poe-wled-ddp` declara — ou seja, é o caminho do GS4.5. Um nó calibrado a gamma 2.2 receberia bytes lineares.
+
+**A armadilha que evitei.** A correção "óbvia" era acrescentar `.with_calibration(...)` às duas ramificações do `OutputManager` que usam `Hal`. Isso produziria **calibração no Art-Net e no sACN e silenciosamente nenhuma no DDP** — pior que a ausência uniforme de hoje, porque *pareceria feito*. É a mesma classe do defeito de `RgbOrder` do GS4.3: campo declarado que ninguém honra, só que com um caminho a honrá-lo e outro não.
+
+**A decisão que falta, e que não tomei.** Há duas saídas, e escolher entre elas **muda a colocação fixada pelo ADR-0019** — o que exige um ADR, não uma edição:
+
+1. **Calibrar no `OutputManager`**, antes de o frame chegar a qualquer protocolo. Um só sítio, os três protocolos, reusando o `CalibrationLut` que já existe (nenhum tipo novo). Custo: move o ponto de aplicação para fora do HAL, e o argumento do ADR-0019 (*"a ramificação é por device, nunca por pixel"*) deixa de valer da mesma forma — com um alvo por saída, hoje, a diferença é nula, mas é uma mudança de desenho.
+2. **Dar ao `DdpOutput` uma calibração própria**, espelhando o HAL. Custo: **segunda implementação** da mesma transformação — exatamente o que a regra "nunca criar um segundo caminho" proíbe.
+
+A opção 1 é a que recomendo, e é a que **não** duplica nada. Mas é uma emenda ao ADR-0019, e por isso fica como decisão, não como commit.
+
+**O que NÃO fiz, de propósito.** Não escrevi um teste que afirme "a calibração está ausente" — isso fixaria o defeito como comportamento esperado. O teste discriminante nasce **com** a correção, quando a colocação estiver decidida.
+
+**Estado verificado nesta sessão.** HEAD `9722196`; árvore limpa exceto `show.gif` (modificado desde antes, deliberadamente não tocado). Nenhum teste executado além dos já registados — nada mudou que os pudesse afetar.
+
 ### 2026-08-07e — GS4.5: o instrumento existe; a medição continua bloqueada pelo rig
 
 **STATUS.** GS4.5 **não está feito, e não pode ser dado como feito.** Verifiquei antes de escrever qualquer coisa: os cinco nós (`192.168.2.156–160`) continuam sem responder, e esta máquina **nem sequer está na rede deles** — está em `10.192.68.143`, por WiFi (`en0`). Não há ESP32-POE, switch nem cabo. A própria skill do sprint diz: *"nunca marcar como concluído ping, DDP, ArtNet, sACN, heartbeat, recovery, jitter sem medição real."*
