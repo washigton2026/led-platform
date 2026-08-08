@@ -50,6 +50,15 @@ pub enum OutputProtocol {
 }
 
 impl OutputProtocol {
+    /// **Todos os protocolos que o `OutputManager` sabe construir** (ADR-0024).
+    ///
+    /// Existe para que o `Available{}` passado ao validador não possa divergir do `match` de
+    /// [`OutputManager::open`] — que é exaustivo por construção. Um protocolo novo sem entrada
+    /// aqui faria o daemon **recusar profiles que sabe construir**; há um teste que obriga
+    /// esta lista a cobrir todas as variantes.
+    pub const ALL: [OutputProtocol; 3] =
+        [OutputProtocol::Ddp, OutputProtocol::ArtNet, OutputProtocol::Sacn];
+
     pub fn as_str(self) -> &'static str {
         match self {
             OutputProtocol::Ddp => "ddp",
@@ -195,6 +204,33 @@ impl OutputConfig {
         pixel_count: usize,
         first_universe: u16,
     ) -> Result<Self, String> {
+        // ── ADR-0024: validação ESTÁTICA, antes de existir saída ──────────────
+        //
+        // Corre aqui porque o laço já chama esta construção **antes** do pré-voo e do `Arm`:
+        // um profile com erro devolve `Err`, o palco não abre, e o daemon termina em
+        // `NeverStarted`. Assim um profile inválido **nunca chega a `Ready`** sem que o
+        // `PreflightReport` (congelado na GS1.6) precise de um quarto campo.
+        //
+        // `Warning` **não** recusa: o preset RGBW-sobre-DDP avisa por desenho, e bloqueá-lo
+        // mudaria o significado de `Warning` fixado no ADR-0018. O aviso vai para o journal
+        // pelo chamador (`abrir_palco`), que é quem tem o journal.
+        let disponiveis = Self::drivers_disponiveis();
+        let v = led_hardware_profile::validate(
+            profile,
+            &led_hardware_profile::Available {
+                interfaces: &disponiveis.0,
+                protocols: &disponiveis.1,
+            },
+        );
+        if v.has_errors() {
+            let quais: Vec<String> = v.errors().map(|f| format!("{f:?}")).collect();
+            return Err(format!(
+                "profile `{}` invalido (ADR-0024): {}",
+                profile.identity.model,
+                quais.join("; ")
+            ));
+        }
+
         if pixel_count == 0 {
             return Err("pixel_count tem de ser > 0".into());
         }
@@ -222,6 +258,34 @@ impl OutputConfig {
             calibration: profile.calibration,
             supports_discovery: profile.capabilities.supports_discovery,
         })
+    }
+
+    /// O que o `OutputManager` **sabe construir hoje** — a lista que o validador recebe como
+    /// dado (ADR-0018 mantém o crate leaf; ADR-0024 fixa que é o `OutputManager` quem a dá).
+    ///
+    /// `Ethernet` e `WiFi` têm driver: as duas são UDP sobre IP e o daemon fala com ambas. O
+    /// bloqueio do ADR-0005 é do `WifiBlockGuard`, contra a interface **do host**, no pré-voo
+    /// — pô-lo aqui seria duplicar o enforcement no sítio errado. `Spi`/`Pwm` não têm driver.
+    fn drivers_disponiveis() -> ([led_hardware_profile::OutputInterface; 2], [Protocol; 3]) {
+        use led_hardware_profile::OutputInterface;
+        let protocolos = [
+            OutputProtocol::ALL[0].to_profile(),
+            OutputProtocol::ALL[1].to_profile(),
+            OutputProtocol::ALL[2].to_profile(),
+        ];
+        ([OutputInterface::Ethernet, OutputInterface::WiFi], protocolos)
+    }
+
+    /// Os avisos do validador, para o chamador os registar. Vazio quando não há.
+    pub fn avisos_do_profile(profile: &HardwareProfile) -> Vec<String> {
+        let d = Self::drivers_disponiveis();
+        led_hardware_profile::validate(
+            profile,
+            &led_hardware_profile::Available { interfaces: &d.0, protocols: &d.1 },
+        )
+        .warnings()
+        .map(|f| format!("{f:?}"))
+        .collect()
     }
 
     /// A ordem de canais, seja qual for o formato.

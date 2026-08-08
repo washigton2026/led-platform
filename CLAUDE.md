@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (946 tests)
+cargo test --workspace                  # all suites (955 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (946 tests)
+cargo test --workspace                  # all suites (955 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **946 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **955 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +132,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07i — A2: o validador do `HardwareProfile` passa a ter consumidor (ADR-0024)
+
+**Done.** O achado A2 da auditoria está fechado. [ADR-0024](./docs/adr/0024-fronteira-de-validacao-do-hardwareprofile.md) foi escrito **antes** do código, e responde às duas perguntas que o achado deixou em aberto.
+
+**Onde a validação acontece, sem tocar no contrato congelado.** O `PreflightReport` do ADR-0023 tem três campos e está congelado desde a GS1.6; nenhum significa *"o profile é inválido"*, e acrescentar um quarto seria alterar o contrato que atravessou GS2, GS3 e GS4 sem mudar. A validação corre na **construção da saída** (`OutputConfig::from_profile`), que o laço já executa **antes** do pré-voo e do `Arm`: um profile com erro não abre palco, e o daemon termina em `NeverStarted`. **Zero alterações ao `led-daemon` e ao `led-core`.**
+
+**Quem fornece o `Available{}`.** O `OutputManager` — é o único sítio que sabe quais protocolos consegue construir, porque é lá que vive o `match`. Para não poder divergir dele, a lista deriva de `OutputProtocol::ALL`, e há um teste que a obriga a cobrir todas as variantes. `Ethernet` e `WiFi` têm driver (ambas são UDP sobre IP); `Spi`/`Pwm` não. **WiFi continua a avisar, não a recusar** — o bloqueio do ADR-0005 é do `WifiBlockGuard`, contra a interface do *host*, e duplicá-lo aqui seria pô-lo no sítio errado.
+
+**`Error` recusa, `Warning` regista e prossegue.** É a mesma hierarquia que o pré-voo já usa. Bloquear avisos impediria o preset `esp32-poe-wled-rgbw-ddp` de existir — ele avisa **por desenho**, porque o data type RGBW do DDP não foi validado em hardware.
+
+**Nove testes discriminantes**, escritos antes da implementação. Seis classes de erro percorridas uma a uma (schema desconhecida, interface sem driver, pixels que não cabem no universo, limite zerado, `Power` com `NaN`, `Calibration` inválida) e cada uma tem de recusar. Mais: **todos os presets do catálogo** têm de passar — é este que apanha um preset novo inválido, sem depender de alguém se lembrar de o testar à mão.
+
+**O teste que mais ensina:** `o_formato_de_cor_entra_na_conta_do_universo`. O mesmo preset Art-Net passa em RGB (170 × 3 = 510 ≤ 512) e **reprova em RGBW** (170 × 4 = 680), sem mudar mais nada. É o que prova que o `channels()` do `ColorFormat` é consultado, e não assumido em 3.
+
+**Dois erros meus, ambos de isolamento de teste.** (1) Usei um preset **DDP** para testar a regra do universo — que só se aplica a protocolos baseados em universo; o DDP endereça por byte e o validador ignora-a, corretamente. O teste reprovou e a falha era minha. (2) Mais grave: o teste que eu tinha chamado `um_profile_invalido_nunca_chega_a_ready` **afirmava mais do que exercitava** — usava um preset *inexistente*, que falha num ramo *anterior* ao `Stage::open`. Descobri-o ao plantar o BUG C: **o teste passou com o bug**. Renomeei-o para o que prova (`um_preset_que_nao_resolve_nunca_chega_a_ready`) e documentei quem guarda o outro ramo, em vez de escrever um terceiro teste quase igual.
+
+**Gate falsificado 3×** (KB-012), como o sprint exigiu. **BUG A** — `if v.has_errors()` → `if false`: 2 testes reprovaram. **BUG B** — `validate` a devolver `Validation::default()` (sucesso sempre): os mesmos 2 reprovaram. **BUG C** — `abrir_palco` a devolver `Ok(None)` em vez de `Err(())` (profile inválido prossegue): **`saida_impossivel_impede_o_arranque` reprovou**, no `e2e_output.rs`. A cobertura existia; o que faltava era o nome do meu teste dizer a verdade.
+
+**Invariants verified.** **955 testes** (+9), clippy `-D warnings` exit 0, `led-daemon` e `led-core` intocados (`git diff` vazio), nenhum teste removido. Nenhuma segunda fonte: o `Available{}` deriva do enum que o `match` já usa, e nenhum valor físico novo foi escrito.
+
+**Pending.** A3 (`refresh_hz`) continua aberto — **não comecei**, porque a ordem executiva manda fechar A2 primeiro. Um preset que exista no catálogo e seja inválido **não é alcançável pela CLI** hoje (o teste do catálogo garante-o): a recusa por profile é provada ao nível de `resolve`, não pelo laço, e isso está escrito no ficheiro de teste.
 
 ### 2026-08-07h — Auditoria "declarado mas não honrado": 20 campos, 1 defeito ativo, 2 decisões pendentes
 
