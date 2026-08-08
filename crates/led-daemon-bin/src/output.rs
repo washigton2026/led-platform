@@ -21,8 +21,10 @@
 //! (correto) — [`OutputStats`] existe para que a diferença seja observável.
 
 use led_core::{ColorFormat, CompiledLayout, LogicalFrame, OutputError, ProtocolOutput, RgbOrder};
-use led_hal::Hal;
-use led_hardware_profile::{HardwareProfile, Protocol, Transport};
+use led_hal::{CalibrationLut, Hal};
+use led_hardware_profile::{
+    Calibration as ProfileCalibration, HardwareProfile, Protocol, Transport,
+};
 use led_player::linear_assignments;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,7 +91,10 @@ impl OutputProtocol {
 }
 
 /// Como a saída é construída. **É isto que o daemon recebe**; ele nunca vê um driver.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Sem `Eq`: a calibração é `f32`, e igualdade total sobre vírgula flutuante não existe.
+/// `PartialEq` chega para os testes compararem duas configurações.
+#[derive(Clone, Debug, PartialEq)]
 pub struct OutputConfig {
     pub protocol: OutputProtocol,
     pub addr: SocketAddr,
@@ -107,6 +112,9 @@ pub struct OutputConfig {
     pub pixels_per_universe: u16,
     /// MTU e heartbeat declarados. **A fragmentação deriva daqui** — não é um segundo número.
     pub transport: Transport,
+    /// Correção óptica declarada pelo nó (ADR-0019 Emenda 1). **Vem do profile**, como tudo
+    /// o resto que é físico — não há aqui um segundo `Calibration`.
+    pub calibration: ProfileCalibration,
 }
 
 impl OutputConfig {
@@ -208,6 +216,7 @@ impl OutputConfig {
             color: profile.capabilities.color,
             pixels_per_universe: profile.limits.pixels_per_universe,
             transport: profile.transport,
+            calibration: profile.calibration,
         })
     }
 
@@ -274,6 +283,16 @@ pub struct OutputManager {
     out: Box<dyn ProtocolOutput>,
     cfg: OutputConfig,
     stats: OutputStats,
+    /// A LUT do nó, dobrada **uma vez no arranque** (ADR-0019 §Isolamento do hot-path).
+    ///
+    /// `None` quando a calibração é a identidade — nesse caso o frame segue **sem cópia e
+    /// sem laço**, e o custo de existir esta funcionalidade é exatamente zero.
+    lut: Option<CalibrationLut>,
+    /// Destino dos pixels corrigidos, dimensionado no arranque. Existe para que o hot path
+    /// não aloque, e para que o frame do chamador **nunca** seja mutado: o `Heartbeat`
+    /// guarda o último frame válido, e corrigi-lo em cada reenvio escureceria o palco a cada
+    /// batida — o mesmo bug cumulativo que o ADR-0019 já tinha apanhado no HAL.
+    corrigidos: std::sync::Mutex<Vec<led_core::PixelColor>>,
 }
 
 impl OutputManager {
@@ -308,7 +327,19 @@ impl OutputManager {
                 Box::new(Hal::new(layout, vec![dev]))
             }
         };
-        Ok(Self { out, cfg, stats: OutputStats::default() })
+        // Identidade não é calibração: gamma 1.0 com brilho 1.0 não muda byte algum, e
+        // construir a LUT nesse caso só acrescentaria trabalho por frame.
+        let c = cfg.calibration;
+        let lut = if c.gamma == 1.0 && c.brightness == 1.0 {
+            None
+        } else {
+            Some(CalibrationLut::new(c.gamma, c.brightness))
+        };
+        let corrigidos = std::sync::Mutex::new(vec![
+            led_core::PixelColor { r: 0, g: 0, b: 0 };
+            cfg.pixel_count
+        ]);
+        Ok(Self { out, cfg, stats: OutputStats::default(), lut, corrigidos })
     }
 
     pub fn config(&self) -> &OutputConfig {
@@ -319,7 +350,36 @@ impl OutputManager {
     }
 
     /// Envia um frame. Conta sucesso e erro; **devolve o erro**, nunca o engole.
+    ///
+    /// # A calibração acontece aqui, e é por isso que vale para os três protocolos
+    ///
+    /// Este é o **único** ponto entre o show e o fio (ADR-0019 Emenda 1). Aplicá-la aqui é o
+    /// que impede a assimetria de a ter no Art-Net e não no DDP — que contorna o HAL e por
+    /// isso nunca teve onde a receber.
     pub fn send(&self, frame: &LogicalFrame) -> Result<(), OutputError> {
+        let Some(lut) = &self.lut else {
+            return self.enviar(frame);
+        };
+        let corrigido = {
+            let mut buf = self.corrigidos.lock().expect("buffer de calibração");
+            if buf.len() != frame.pixels.len() {
+                buf.resize(frame.pixels.len(), led_core::PixelColor { r: 0, g: 0, b: 0 });
+            }
+            for (dst, src) in buf.iter_mut().zip(frame.pixels.iter()) {
+                // Por **canal**, antes de o mapper conhecer a ordem do nó: a correção é
+                // óptica e não sabe (nem precisa de saber) em que ordem os bytes vão sair.
+                dst.r = lut.map(src.r);
+                dst.g = lut.map(src.g);
+                dst.b = lut.map(src.b);
+            }
+            LogicalFrame::new(buf.clone(), frame.timestamp_ms)
+        };
+        self.enviar(&corrigido)
+    }
+
+    /// O envio propriamente dito, com a contabilidade. Separado para que **um só sítio**
+    /// conte frames e erros, calibrado ou não.
+    fn enviar(&self, frame: &LogicalFrame) -> Result<(), OutputError> {
         match self.out.send_frame(frame) {
             Ok(()) => {
                 self.stats.frames_sent.fetch_add(1, Ordering::Relaxed);

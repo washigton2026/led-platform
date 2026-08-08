@@ -24,8 +24,18 @@ const ARTDMX_HEADER: usize = 18;
 /// Offset do campo `SubUni`/`Net` (port-address, little-endian) num ArtDmx.
 const ARTDMX_UNIVERSE_OFF: usize = 14;
 
+/// O preset do catálogo, com a **calibração neutralizada**.
+///
+/// Estes testes isolam fragmentação, universos e ordem de canais — e afirmam valores de byte
+/// exatos. Os presets declaram gamma 2.2, que desde a Emenda 1 do ADR-0019 chega ao fio: sem
+/// esta neutralização, `[200,100,50]` sairia `[149,33,7]` e o teste mediria **duas** coisas ao
+/// mesmo tempo, sem provar bem nenhuma. A calibração tem o seu próprio ficheiro
+/// (`calibration_path.rs`), onde é a variável e não o ruído.
 fn perfil(nome: &str) -> HardwareProfile {
-    HardwareRegistry::with_builtin().profile(nome).unwrap_or_else(|| panic!("preset {nome}"))
+    let mut p =
+        HardwareRegistry::with_builtin().profile(nome).unwrap_or_else(|| panic!("preset {nome}"));
+    p.calibration = led_hardware_profile::Calibration { gamma: 1.0, brightness: 1.0 };
+    p
 }
 
 fn socket() -> UdpSocket {

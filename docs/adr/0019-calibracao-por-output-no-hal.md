@@ -115,3 +115,80 @@ Se a medição mostrar que o segundo passe consome fatia relevante do orçamento
 grande, dobrar a calibração para dentro do `apply` (pagando o custo de contrato) passa a se
 justificar. Enquanto o custo for marginal, a colocação no HAL é preferível por não tocar
 contrato algum.
+
+---
+
+## Emenda 1 (2026-08-07) — a calibração passa para a **fronteira lógica de saída**
+
+**Estado:** aceite. Substitui a colocação da §Decisão para o caminho do daemon; o HAL
+mantém a sua implementação e os seus testes.
+
+### O que forçou a emenda
+
+A decisão original diz que a calibração é aplicada *"no HAL, por device, entre o `apply` do
+mapa e o fan-out"*. Essa frase pressupõe que **todo o caminho de saída atravessa o HAL**.
+
+Não atravessa. O `DdpOutput` **contorna o HAL por decisão anterior e deliberada**
+(changelog de 2026-07-09d: *"DDP bypassa o Hal — pixel-nativo, sem mapa de universos"*):
+`send_frame` entrega `frame.pixels` diretamente ao `DdpDevice`, sem `CompiledLayout` e sem
+`scratch` por device. **Não existe, no caminho DDP, o sítio que esta ADR nomeia.**
+
+A consequência foi medida por leitura de código, não suposta:
+
+| Caminho | Calibração antes desta emenda |
+|---|---|
+| `led-player` → Art-Net / simulador | aplicada (`main.rs:399`, `:403`) |
+| `led-player` → DDP | **ausente** |
+| `led-daemon` → Art-Net / sACN | **ausente** |
+| `led-daemon` → DDP | **ausente** |
+
+DDP é o protocolo **validado em hardware** (94/94 frames, 2026-07-20) e o que o preset
+`esp32-poe-wled-ddp` declara — ou seja, o caminho do GS4.5. Um nó declarado a gamma 2.2
+receberia bytes lineares.
+
+### Decisão
+
+A calibração passa a ser aplicada **no `OutputManager`, sobre o `LogicalFrame`, antes do
+fan-out protocolar**. Um só ponto, os três protocolos, sem exceção:
+
+```
+HardwareProfile.calibration
+        │
+        ▼
+OutputManager::send  ──►  LUT aplicado ao frame  ──►  DDP | Art-Net | sACN  ──►  fio
+```
+
+### Porque não a alternativa óbvia
+
+**Acrescentar `.with_calibration()` só às ramificações que usam `Hal`** daria calibração no
+Art-Net e no sACN e **nenhuma no DDP** — pior que a ausência uniforme, porque *pareceria
+feito*. É a classe do defeito de `RgbOrder` do GS4.3: um campo declarado que um caminho
+honra e outro não.
+
+**Dar ao `DdpOutput` calibração própria** seria uma **segunda implementação** da mesma
+transformação. Duas curvas de gamma no projeto é uma a mais.
+
+### O que se perde, e porque é aceitável
+
+O argumento original — *"a ramificação é por device (tipicamente ≤ 5 por frame), nunca por
+pixel"* — deixa de valer da mesma forma: na fronteira lógica o LUT percorre os canais do
+frame. **Continua a ser uma leitura indexada por canal**, sem `powf` e sem ponto flutuante;
+o que muda é *onde* o laço corre, não o seu custo assintótico. E com **um alvo por saída**
+(o `--output` do daemon aceita um), a ramificação por device que a ADR protegia não existe
+hoje. Se o multi-controlador chegar com calibrações divergentes por nó, esta emenda tem de
+ser revisitada — é o critério de reversão desta emenda.
+
+### O que NÃO muda
+
+- `CalibrationLut` e `Calibration` do `led-hal` são **reusados tal como estão**. Nenhum tipo
+  novo, nenhuma segunda LUT.
+- `Hal::with_calibration` **permanece**, com os seus testes: o `led-player` continua a
+  usá-lo, e o `led-hal` não perde uma capacidade que já está provada.
+- O contrato do `led-daemon` (GS1.6) não é tocado — a calibração vive no `led-daemon-bin`.
+- Calibração continua a ser **correção óptica, nunca proteção elétrica** (§Limites de
+  segurança permanece integralmente em vigor).
+
+### Gate desta emenda
+
+Um teste discriminante por protocolo que compare os **bytes no fio** com e sem calibração, e
+que reprove se algum protocolo voltar a ignorá-la. Sem esse teste a emenda não está feita.

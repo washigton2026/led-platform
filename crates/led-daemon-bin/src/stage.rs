@@ -192,6 +192,8 @@ mod tests {
     fn pausado_o_palco_continua_vivo_e_nunca_recebe_zeros() {
         let (mut st, sock, p) = palco("stage_b.lumyx", &[(0, 200)]);
         st.on_tick(State::Playing, 0, 0);
+        let mut tocado = [0u8; 2048];
+        let n_tocado = sock.recv(&mut tocado).expect("o tick a tocar envia");
         drenar(&sock);
 
         // Antes de vencer o período do keep-alive, silêncio é o correto.
@@ -202,9 +204,21 @@ mod tests {
         assert_eq!(st.on_tick(State::Paused, 0, HEARTBEAT_MS), StageTick::Held);
         let mut buf = [0u8; 2048];
         let n = sock.recv(&mut buf).expect("o keep-alive tem de enviar");
+
+        // **Comparar com o que foi tocado, não com um literal.** A versão anterior procurava
+        // o byte `200` — o valor lógico do quadro — e passou a falhar quando a calibração do
+        // preset (gamma 2.2, ADR-0019 Emenda 1) o converteu em 152 no fio. O invariante nunca
+        // foi "o byte 200 aparece": é "sai o mesmo quadro que estava a tocar, e não zeros".
+        // Comparar o payload com o do tick anterior afirma exatamente isso, e continua a
+        // valer seja qual for a calibração do nó.
+        assert_eq!(
+            &buf[10..n],
+            &tocado[10..n_tocado],
+            "o keep-alive tem de reenviar o MESMO quadro que estava no fio"
+        );
         assert!(
-            buf[10..n].contains(&200),
-            "o keep-alive reenvia o quadro real, NUNCA zeros"
+            buf[10..n].iter().any(|&b| b != 0),
+            "o keep-alive NUNCA envia zeros — apagaria o palco"
         );
         let _ = std::fs::remove_file(p);
     }

@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (937 tests)
+cargo test --workspace                  # all suites (944 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (937 tests)
+cargo test --workspace                  # all suites (944 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **937 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **944 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +132,35 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07g — Calibração na fronteira lógica de saída (ADR-0019, Emenda 1)
+
+**Done.** O achado da sessão anterior está fechado. A calibração é aplicada **uma vez, no `OutputManager`, antes do fan-out** — e chega aos três protocolos. [Emenda 1 do ADR-0019](./docs/adr/0019-calibracao-por-output-no-hal.md#emenda-1-2026-08-07--a-calibração-passa-para-a-fronteira-lógica-de-saída) foi escrita **antes** do código, como pedido.
+
+**A emenda existe porque a decisão original pressupunha algo falso.** O ADR-0019 dizia *"no HAL, por device, entre o `apply` e o fan-out"* — o que pressupõe que todo o caminho de saída atravessa o HAL. O `DdpOutput` **não atravessa** (decisão de 2026-07-09d): não existia, no caminho DDP, o sítio que a ADR nomeava. A emenda move a aplicação para o único ponto que os três protocolos partilham.
+
+**Os testes vieram primeiro, e falharam primeiro.** [`tests/calibration_path.rs`](./crates/led-daemon-bin/tests/calibration_path.rs) foi escrito antes da implementação e reprovou com a mensagem que descreve o defeito: *"DDP: gamma 2.2 NÃO chegou ao fio"*, com os bytes a atravessarem intactos (`128 → 128`). Só depois disso houve implementação.
+
+**Sete testes discriminantes, todos sobre bytes lidos de um socket**, nos três protocolos: identidade (a presença da calibração não pode mudar um byte), gamma (valor **verificado**, não só diferença: `(128/255)^2.2 · 255 = 55`), brightness, composição das duas numa só LUT, preservação da ordem de canais (GRB calibrado sai `[lut(g), lut(r), lut(b)]` — a correção é por canal e a ordem do nó sobrevive), e preservação da fragmentação/MTU em todos os protocolos com e sem calibração.
+
+**Mais um teste que não estava na lista, e que a lista precisava.** `as_extremidades_sao_imunes_e_por_isso_os_testes_usam_meios_tons`: 0 e 255 são pontos fixos de qualquer gamma. Se as outras asserções usassem preto ou branco saturado, passariam **sem provar nada**. Este teste afirma a imunidade das extremidades, o que é a razão de todas as outras usarem meios-tons.
+
+**Gate falsificado 2×** (KB-012). (1) `send()` a ignorar a LUT: **4 testes** reprovaram. (2) Calibrar **só o DDP** e deixar Art-Net/sACN de fora — exatamente a assimetria que a emenda existe para impedir: 3 testes reprovaram com *"Art-Net: brightness 0.5 NÃO chegou ao fio"*. Produção restaurada e verde nas duas.
+
+**Nenhuma segunda implementação.** `CalibrationLut` e `Calibration` do `led-hal` são reusados tal como estão; `Hal::with_calibration` **permanece** com os seus testes (o `led-player` continua a usá-lo). O `led-daemon` (GS1.6) e o `led-core` continuam intocados.
+
+**Duas decisões de implementação que não são cosméticas.** (a) Identidade (γ 1.0 / brilho 1.0) **não constrói LUT nenhuma** — o frame segue sem cópia e sem laço, e o custo de a funcionalidade existir é zero. (b) O frame do chamador **nunca é mutado**: os pixels corrigidos vão para um buffer próprio, dimensionado no arranque. Corrigir in-place escureceria o palco a cada batida do heartbeat, porque o `Heartbeat` guarda o último frame e reenvia-o — é o **mesmo bug cumulativo** que o ADR-0019 já tinha apanhado no HAL, e que voltaria a existir aqui se o buffer não existisse.
+
+**Duas regressões que a mudança causou, e o que fiz com cada uma.** Ambas eram **expectativas de teste desatualizadas**, não defeitos de produção — mas nenhuma foi enfraquecida para ficar verde:
+
+1. `pausado_o_palco_continua_vivo_e_nunca_recebe_zeros` procurava o byte literal `200`; com gamma 2.2 ele sai `152`. O invariante nunca foi "o byte 200 aparece" — é *"sai o mesmo quadro que estava a tocar, e não zeros"*. Passou a **comparar o payload do keep-alive com o do tick anterior**, o que é mais forte e vale para qualquer calibração. Falsifiquei o teste corrigido trocando o keep-alive por um quadro preto: reprova.
+2. Os testes de ordem de canais do GS4.3 afirmam bytes exatos (`[200,100,50]`). O `perfil()` daquele ficheiro passa a **neutralizar a calibração**, porque aqueles testes isolam ordem e fragmentação — com gamma ativa mediriam duas coisas ao mesmo tempo e não provariam bem nenhuma. A calibração tem o seu próprio ficheiro, onde é a variável e não o ruído.
+
+**Invariants verified.** **944 testes** no workspace (+7), clippy `-D warnings` exit 0, `led-daemon` e `led-core` intocados (`git diff` vazio), **nenhum teste removido**.
+
+**Auditoria do caminho (PASSO 6), verificada no código:** `HardwareProfile.calibration` → `OutputConfig::from_profile` (linha 219) → `OutputManager::open` dobra a LUT no arranque (linha 332) → `send` aplica → DDP / Art-Net / sACN → bytes no fio, confirmados por socket.
+
+**Pending.** A calibração é **por saída**, não por device: com um alvo por `--output` isso é exato hoje, mas se o multi-controlador chegar com calibrações divergentes por nó, a emenda tem de ser revisitada — está escrito no seu critério de reversão. O `led-player` continua a calibrar no HAL (Art-Net/simulador) e **continua sem calibrar no DDP**: não toquei nele porque é outro binário e outra fatia; fica nomeado. Nada disto foi validado em hardware.
 
 ### 2026-08-07f — ACHADO: a calibração não tem assento no caminho DDP (repo inteiro)
 
