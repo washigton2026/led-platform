@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (944 tests)
+cargo test --workspace                  # all suites (946 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (944 tests)
+cargo test --workspace                  # all suites (946 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **944 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **946 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +132,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07h — Auditoria "declarado mas não honrado": 20 campos, 1 defeito ativo, 2 decisões pendentes
+
+**Done.** Auditoria sistemática dos **20 campos** do `HardwareProfile` até aos bytes no fio. Um defeito ativo encontrado e corrigido; dois campos ficaram como decisão, não como código.
+
+**A tabela completa** está em [`docs/architecture/hardware-profile-audit.md`](./docs/architecture/hardware-profile-audit.md). Resumo por classe: **8 HONORED** (todos com teste discriminante), **6 METADATA por decisão de ADR**, **2 HARDWARE-DEPENDENT**, **2 IGNORED-UNINTENTIONALLY**, **1 corrigido nesta sessão**, **1 TEST GAP**.
+
+**O defeito ativo: `supports_discovery` era ignorado.** Dois presets do catálogo declaram `supports_discovery: false` (`generic-sk6812-rgbw-sacn` e `custom`), e o pré-voo sondava **sempre** por ArtPoll. Um nó que se comporta **exatamente como o seu preset declara** seria reportado `devices_missing`, o pré-voo reprovaria, e o daemon recusaria tocar. É o **inverso** do que a descoberta existe para evitar: o RT-003 protege contra palco escuro, não contra shows que não arrancam. Corrigido — o profile declara, o pré-voo honra, e a saída é `devices_unverified` (o caminho que já existia para "não foi possível concluir"), nunca `devices_missing`.
+
+**Falsificado, e com controle negativo.** Trocar `if !cfg.supports_discovery` por `if false` reprova `um_no_que_nao_faz_discovery_nao_e_reprovado_por_nao_responder`. E `com_discovery_declarado_a_ausencia_continua_a_reprovar` garante que a guarda **não apagou o gate do RT-003**: com `supports_discovery: true`, a mesma sonda a devolver `Missing` continua a reprovar. Sem esse segundo teste, a correção poderia ter desligado a proteção inteira.
+
+**O achado maior é estrutural, e não o corrigi: o daemon nunca chama `validate()`.** O validador do ADR-0018 existe, tem 9 achados (incluindo `WifiNotPermittedLive` e `RgbwOverDdpDataType`) e **nenhum consumidor no daemon** — `grep validate crates/led-daemon-bin/src/` devolve zero. Um preset com RGBW sobre DDP (data type não validado em hardware) ou com WiFi declarado passa sem aviso. Não corrigi porque exige uma decisão: o `validate` recebe `Available{interfaces, protocols}` por **injeção de dado** (é o que mantém o crate leaf), e decidir **quem** monta essa lista no daemon é arquitetura, não edição. Está registado como decisão pendente com opções e impacto.
+
+**`Power` NÃO é defeito, e a auditoria confirmou-o em vez de o presumir.** O ADR-0018 §109 é explícito: *"`Power` é declarativo (aviso de orçamento de corrente), **não** é proteção elétrica"*. O validador já o consome (rejeita `NaN`, zero e negativos). Nada no caminho de saída deve consumi-lo — a proteção real é a fonte e o ABL do controlador, como o ADR-0019 também repete. **METADATA por decisão de ADR**, não lacuna.
+
+**`refresh_hz` é a segunda decisão pendente.** Declarado nos `Limits`, **zero consumidores em todo o workspace**. O `--tick-ms` do daemon é do operador e não conversa com ele: um preset a declarar 40 Hz e um daemon a ticar a 200 Hz sobrecarregariam o nó sem nenhum aviso. Mas cruzá-los é comportamento novo (recusar? avisar? clampar?), e nenhum ADR o define. Registado, não implementado.
+
+**`firmware_version` e `serial` são HARDWARE-DEPENDENT, e a evidência que falta está escrita.** O `/json/info` do WLED devolve `ver` — o `lumyx-hwcheck` já o lê e o imprime, mas **ninguém o compara** com o que o profile declara. Escrever esse comparador agora seria um checker que nunca correu contra um controlador real; fica como evidência que o GS4.5 deve recolher, nomeada no runbook.
+
+**Invariants verified.** **946 testes** (+2), clippy `-D warnings` exit 0, `led-daemon` e `led-core` intocados (`git diff` vazio), nenhum teste removido. Nenhuma constante física nova, nenhum segundo `HardwareProfile`, nenhum default silencioso: `supports_discovery` viaja pelo `OutputConfig` como todos os outros campos físicos.
+
+**TEST GAP registado, não fabricado.** `output_interface` não tem teste discriminante no daemon. A proteção do ADR-0005 existe, mas vem do `WifiBlockGuard` a sondar o **host** — não da declaração do profile. As duas coisas podem divergir (profile diz WiFi, host está em Ethernet) e hoje ninguém repara. Escrever um teste sobre o comportamento atual fixaria uma semântica que nunca foi decidida.
 
 ### 2026-08-07g — Calibração na fronteira lógica de saída (ADR-0019, Emenda 1)
 

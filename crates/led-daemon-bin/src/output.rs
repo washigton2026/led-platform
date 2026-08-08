@@ -115,6 +115,9 @@ pub struct OutputConfig {
     /// Correção óptica declarada pelo nó (ADR-0019 Emenda 1). **Vem do profile**, como tudo
     /// o resto que é físico — não há aqui um segundo `Calibration`.
     pub calibration: ProfileCalibration,
+    /// O nó **declara** responder a descoberta (ArtPoll). Quando é `false`, sondá-lo e
+    /// concluir "ausente" seria punir o nó por se comportar como declarou.
+    pub supports_discovery: bool,
 }
 
 impl OutputConfig {
@@ -217,6 +220,7 @@ impl OutputConfig {
             pixels_per_universe: profile.limits.pixels_per_universe,
             transport: profile.transport,
             calibration: profile.calibration,
+            supports_discovery: profile.capabilities.supports_discovery,
         })
     }
 

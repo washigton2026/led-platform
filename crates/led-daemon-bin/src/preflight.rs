@@ -151,6 +151,23 @@ pub fn preflight(
     };
 
     // ── Controladores (RT-003: palco escuro sem erro) ────────────────────────
+    //
+    // **Um nó que declara não responder a descoberta não pode ser reprovado por não
+    // responder.** Dois presets do catálogo declaram `supports_discovery: false`; sondá-los
+    // produziria `devices_missing` e o daemon recusaria tocar — o oposto exato do que a
+    // descoberta existe para evitar (RT-003 protege contra palco escuro, não contra shows
+    // que não arrancam). O profile declara a capacidade; aqui ela é honrada.
+    if !cfg.supports_discovery {
+        notices.push((
+            "devices_unverified",
+            "o no declara supports_discovery:false — NAO foi sondado, e a sua ausencia              nao seria detetavel por ArtPoll"
+                .to_string(),
+        ));
+        return Preflight {
+            report: PreflightReport { integrity_verified, network_ok, devices_present: true },
+            notices,
+        };
+    }
     let devices_present = match presence.probe(cfg.addr.ip()) {
         Presence::AllPresent => {
             notices.push(("devices_checked", format!("{} respondeu", cfg.addr.ip())));
@@ -320,6 +337,36 @@ mod tests {
         );
         assert!(!pf.report.network_ok, "192.168.2.156 não é loopback: o ADR-0005 aplica-se");
         assert!(tem(&pf, "network_refused"));
+    }
+
+    /// **Um nó que declara não responder a descoberta não é reprovado por não responder.**
+    ///
+    /// A sonda usada aqui devolve `Missing` — o veredito mais severo. Se a guarda deixasse de
+    /// existir, o relatório reprovaria e o daemon recusaria tocar um nó que se comporta
+    /// exatamente como o seu preset declara.
+    #[test]
+    fn um_no_que_nao_faz_discovery_nao_e_reprovado_por_nao_responder() {
+        let mut cfg = saida();
+        cfg.supports_discovery = false;
+        let pf = preflight(
+            Integrity::AssumedByOperator,
+            Some(&cfg),
+            &GuardaFalsa(Ok(())),
+            &SondaFalsa(Presence::Missing(vec!["192.168.2.156".into()])),
+        );
+        assert!(pf.report.devices_present, "declarar que nao responde nao e estar ausente");
+        assert!(tem(&pf, "devices_unverified"), "e o journal tem de dizer que NAO sondou");
+        assert!(!tem(&pf, "devices_missing"), "nunca pode reportar ausencia de quem nao sonda");
+        assert!(!tem(&pf, "devices_checked"), "e muito menos afirmar que verificou");
+    }
+
+    /// **Controle negativo do teste acima.** Com `supports_discovery: true`, a mesma sonda a
+    /// devolver `Missing` **tem** de reprovar — senão a guarda teria apagado o gate do RT-003.
+    #[test]
+    fn com_discovery_declarado_a_ausencia_continua_a_reprovar() {
+        let pf = corre(Ok(()), Presence::Missing(vec!["192.168.2.156".into()]));
+        assert!(!pf.report.devices_present, "o gate do RT-003 continua a valer");
+        assert!(tem(&pf, "devices_missing"));
     }
 
     /// A sonda real **recusa-se a inventar um rig** num alvo de loopback.
