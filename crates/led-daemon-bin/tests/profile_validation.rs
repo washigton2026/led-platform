@@ -180,7 +180,7 @@ fn um_preset_que_nao_resolve_nunca_chega_a_ready() {
     let path = escrever("pv_ready.lumyx", 8);
     let sock = socket();
     let cfg = Config {
-        tick_ms: 20,
+        tick_ms: 25, // 40 Hz — dentro do teto de qualquer preset (ADR-0025)
         max_ticks: Some(5),
         autoplay: true,
         exit_on_finish: true,

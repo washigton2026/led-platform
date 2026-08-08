@@ -55,7 +55,10 @@ fn preset_de(proto: &str) -> &'static str {
 
 fn cfg(output: Option<&str>, profile: Option<&str>) -> Config {
     Config {
-        tick_ms: 20,
+        // 25 ms = 40 Hz. **Não é cosmético**: os presets declaram 40–44 Hz, e os 20 ms
+        // (50 Hz) que aqui estavam eram uma cadência acima da capacidade declarada — o
+        // ADR-0025 passou a recusá-la, e foi assim que este ficheiro a revelou.
+        tick_ms: 25,
         max_ticks: None,
         autoplay: true,
         exit_on_finish: true,

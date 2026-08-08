@@ -316,6 +316,47 @@ impl OutputConfig {
     }
 }
 
+/// **ADR-0025 — a cadência pedida cabe no teto que o nó declara?**
+///
+/// `refresh_hz` é um **limite**, não uma recomendação: vive na struct que o ADR-0018 chama
+/// *"ÚNICO lar dos limites"*, ao lado do `max_pixels` — que já recusa desde o GS4.3. Tratar os
+/// dois tetos irmãos de maneira diferente é o que a auditoria A3 veio corrigir.
+///
+/// # Recusa, nunca clampa
+///
+/// Baixar o `--tick-ms` sozinho faria o journal registar uma cadência e o fio produzir outra.
+/// É o precedente do `Strobe` (ADR-0021): *"estroboscópio que muda de frequência sozinho no
+/// palco é pior que parâmetro documentado"*.
+///
+/// # O limite é alcançável
+///
+/// A comparação é `>`, não `>=`: pedir exatamente o teto declarado é usar o nó como ele diz
+/// que pode ser usado. Há um teste dedicado a esta fronteira, porque é a que se escreve errado.
+///
+/// # Onde isto **não** corre
+///
+/// No laço. Esta função é chamada **uma vez**, na abertura do palco. Nenhum relógio novo,
+/// nenhum segundo scheduler, `Pacer` intocado.
+pub fn cadencia_cabe_no_profile(
+    profile: &HardwareProfile,
+    tick_ms: u64,
+) -> Result<(), String> {
+    // `tick_ms == 0` já é tratado pelo laço (`period = tick_ms.max(1)`, que impede busy-loop);
+    // aqui usa-se a mesma leitura, para que os dois sítios não possam discordar sobre o que
+    // "zero" significa.
+    let periodo = tick_ms.max(1);
+    let pedida = 1_000.0 / periodo as f64;
+    let teto = profile.limits.refresh_hz as f64;
+    if pedida > teto {
+        return Err(format!(
+            "cadencia pedida {pedida:.1} Hz (--tick-ms {tick_ms}) excede o teto de {teto:.0} Hz              declarado por `{}` (ADR-0025). Use --tick-ms >= {} ou corrija o preset",
+            profile.identity.model,
+            (1_000.0 / teto).ceil() as u64
+        ));
+    }
+    Ok(())
+}
+
 /// Encontra o preset pelo nome, ou explica quais existem.
 ///
 /// O daemon **não define hardware**: lê o catálogo do `led-hardware-profile`, que é uma

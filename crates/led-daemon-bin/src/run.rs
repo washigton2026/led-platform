@@ -123,6 +123,12 @@ fn abrir_palco<P: Pacer, W: Write>(
             return Err(());
         }
     };
+    // ADR-0025: a cadência pedida é confrontada com o teto do nó **aqui**, uma vez, no mesmo
+    // sítio e com o mesmo desfeito da validação do ADR-0024 — e nunca dentro do laço.
+    if let Err(e) = crate::output::cadencia_cabe_no_profile(&perfil, cfg.tick_ms) {
+        journal.line(&notice_to_json(pacer.now_ms(), "output_failed", &e));
+        return Err(());
+    }
     journal.line(&notice_to_json(
         pacer.now_ms(),
         "profile",
@@ -154,6 +160,7 @@ fn abrir_palco_ipc(cfg: &Config, path: &str) -> Result<Option<Stage>, String> {
     let Some(spec) = &cfg.output else { return Ok(None) };
     let nome = cfg.profile.as_ref().ok_or("--output exige --profile")?;
     let perfil = crate::output::profile_by_name(nome)?;
+    crate::output::cadencia_cabe_no_profile(&perfil, cfg.tick_ms)?;
     Stage::open(path, spec, &perfil).map(Some)
 }
 

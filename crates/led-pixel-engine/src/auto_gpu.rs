@@ -28,6 +28,11 @@ pub const GPU_THRESHOLD_PIXELS: usize = 50_000;
 
 // ── Executor selector ─────────────────────────────────────────────────────────
 
+// O ramo GPU é substancialmente maior que o CPU. Boxá-lo custaria uma indireção; **não vale
+// a pena** porque este enum é construído **uma vez, no arranque** (`with_threshold` é um
+// construtor) e nunca no caminho por frame — o `render` faz `match` sobre a referência.
+// Registado aqui em vez de silenciado no `Cargo.toml`, para que a razão viaje com o código.
+#[allow(clippy::large_enum_variant)]
 enum Executor {
     Cpu(ComputeEffect<Plasma>),
     #[cfg(feature = "gpu")]
@@ -57,7 +62,11 @@ impl AutoGpuPlasma {
     }
 
     /// Create with a custom threshold. `threshold = 0` forces GPU (if available).
-    pub fn with_threshold(_pixel_count: usize, scale: f32, speed: f32, threshold: usize) -> Self {
+    // `pixel_count` só é lido no ramo `gpu`; sem a feature seria um warning. Silenciar o
+    // warning **renomeando o parâmetro** foi o que partiu o build com GPU — o corpo continuava
+    // a usar o nome original, e a CI nunca compilou com `--features gpu` para o notar.
+    #[cfg_attr(not(feature = "gpu"), allow(unused_variables))]
+    pub fn with_threshold(pixel_count: usize, scale: f32, speed: f32, threshold: usize) -> Self {
         #[cfg(feature = "gpu")]
         if pixel_count > threshold {
             if let Some(gpu) =

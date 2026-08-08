@@ -26,12 +26,12 @@ abaixo foi verificada lendo o consumidor real, não a declaração.
 | `capabilities.protocol` | **HONORED** | `OutputProtocol::from_profile` → escolhe DDP/Art-Net/sACN; esquema contraditório é erro | `o_esquema_escrito_tem_de_concordar_com_o_profile` | não |
 | `capabilities.color` (formato) | **HONORED** | `ColorFormat::write` no mapper; 4 canais em RGBW | `rgbw_poe_quatro_canais_no_fio_com_o_branco_subtraido` | não |
 | `capabilities.color` (RgbOrder) | **HONORED** | `cfg.rgb_order()` → `linear_assignments` | `cada_ordem_de_canais_produz_bytes_proprios` | não |
-| `capabilities.supports_discovery` | **CORRIGIDO** (era IGNORED-UNINTENTIONALLY) | `preflight` deixa de sondar quando é `false` | `um_no_que_nao_faz_discovery_nao_e_reprovado_por_nao_responder` + controle negativo | não |
+| `capabilities.supports_discovery` | **HONORED** (corrigido 2026-08-07h) | `preflight` deixa de sondar quando é `false` | `um_no_que_nao_faz_discovery_nao_e_reprovado_por_nao_responder` + controle negativo | não |
 | `capabilities.supports_metrics` | **METADATA** | Só o validador. O `/metrics` do LUMYX é do **daemon**, não do nó | — | não |
 | `capabilities.output_interface` | **TEST GAP** | Validador avisa em WiFi; o daemon protege pelo `WifiBlockGuard` a sondar o **host** | ⚠️ nenhum no daemon | parcial |
 | `limits.pixels_per_universe` | **HONORED** | `linear_assignments` + `Transport::pixels_per_datagram` | `os_universos_do_artnet_sao_consecutivos_a_partir_do_primeiro` | não |
 | `limits.max_pixels` | **HONORED** | `from_profile` recusa show maior que o nó | `um_show_maior_que_o_no_e_recusado` | não |
-| `limits.refresh_hz` | **IGNORED-UNINTENTIONALLY** | **Zero consumidores no workspace.** `--tick-ms` é do operador | — | não |
+| `limits.refresh_hz` | **HONORED** (ADR-0025) | `cadencia_cabe_no_profile` recusa `--tick-ms` acima do teto, na abertura do palco | `acima_da_capacidade_e_recusado` + `exatamente_no_limite_e_permitido` | não |
 | `transport.mtu_bytes` | **HONORED** | `pixels_per_datagram` → `DdpOutput::with_limits` | `mtus_diferentes_produzem_fragmentacoes_diferentes…` | não |
 | `transport.heartbeat_ms` | **HONORED** | `from_profile` recusa heartbeat fora do teto do GOSL | `um_heartbeat_inseguro_impede_a_saida` | não |
 | `calibration.gamma` | **HONORED** | `CalibrationLut` no `OutputManager` (ADR-0019 Emenda 1) | `gamma_chega_ao_fio_nos_tres_protocolos` | não |
@@ -42,7 +42,7 @@ abaixo foi verificada lendo o consumidor real, não a declaração.
 | `identity.firmware` | **METADATA** | Diagnóstico | — | não |
 | `identity.firmware_version` | **HARDWARE-DEPENDENT** | Ninguém compara com o `ver` real do nó | — | **sim** |
 | `identity.serial` | **HARDWARE-DEPENDENT** | Sem consumidor; só um nó real o pode confirmar | — | **sim** |
-| `schema_version` | **HONORED** (no validador) | `validate` rejeita schema desconhecida — **mas o daemon não chama `validate`** | testes do validador | não |
+| `schema_version` | **HONORED** (ADR-0024) | `validate` rejeita schema desconhecida, e o daemon **chama-o** na abertura do palco | `cada_classe_de_erro_do_profile_impede_a_saida` | não |
 
 ## Achados
 
@@ -58,7 +58,13 @@ resultado é `devices_unverified` — o caminho que já existia para *"não foi 
 concluir"*. Falsificado (`if false` → reprova), com controle negativo que garante que o gate
 do RT-003 continua a valer para nós que **declaram** responder.
 
-### A2 — O daemon nunca chama `validate()` · **BLOCKED — ADR DECISION**
+### A2 — O daemon nunca chama `validate()` · **FECHADO** ([ADR-0024](../adr/0024-fronteira-de-validacao-do-hardwareprofile.md))
+
+> Resolvido em 2026-08-07i. A validação estática corre na construção da saída, antes do
+> pré-voo e do `Arm`; um profile inválido termina em `NeverStarted` e nunca chega a `Ready`.
+> O `Available{}` vem do `OutputManager`, derivado de `OutputProtocol::ALL`.
+
+<details><summary>Análise original, mantida como registo</summary>
 
 **Problema.** O validador do ADR-0018 tem 9 achados — incluindo `WifiNotPermittedLive` e
 `RgbwOverDdpDataType` (o data type RGBW do DDP **não é validado em hardware**, registado em
@@ -84,7 +90,16 @@ alguém acrescentar uma linha (que é, por desenho, como se acrescenta hardware)
 **aviso** fica registado e prossegue (a mesma hierarquia que o `preflight` já usa). Mas é
 decisão, não edição.
 
-### A3 — `refresh_hz` sem consumidor · **BLOCKED — ADR DECISION**
+</details>
+
+### A3 — `refresh_hz` sem consumidor · **FECHADO** ([ADR-0025](../adr/0025-refresh-hz-e-a-cadencia-pedida.md))
+
+> Resolvido em 2026-08-07j. `refresh_hz` é um **limite** — vive em `Limits`, ao lado do
+> `max_pixels`, que já recusa — e a cadência pedida é confrontada com ele **uma vez**, na
+> abertura do palco. Recusa, nunca clampa. **Não há modo de benchmark no daemon**: o sweep de
+> throughput é do `led-player --speed max`, outro binário; a separação já existia.
+
+<details><summary>Análise original, mantida como registo</summary>
 
 Declarado nos `Limits` como *"único lar dos limites"* (ADR-0018) e **sem nenhum leitor**. O
 `--tick-ms` é escolhido pelo operador: um preset a declarar 40 Hz com um daemon a 200 Hz
@@ -93,6 +108,8 @@ sobrecarrega o nó sem aviso.
 Cruzar os dois é **comportamento novo** e nenhum ADR o define: recusar? avisar? clampar? Um
 show a 200 Hz num nó de 40 Hz pode ser um erro de digitação ou um teste deliberado de
 throughput (precedente: o sweep de 1593 fps de 2026-07-23). Fica registado.
+
+</details>
 
 ### A4 — `output_interface` · **TEST GAP declarado**
 

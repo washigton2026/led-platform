@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (955 tests)
+cargo test --workspace                  # all suites (964 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -86,10 +86,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (955 tests)
+cargo test --workspace                  # all suites (964 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **955 tests green** · zero warnings.
+15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **964 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +132,34 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-07j — A3: `refresh_hz` é um limite (ADR-0025) — e a minha própria suíte estava a violá-lo
+
+**Done.** O achado A3 está fechado. [ADR-0025](./docs/adr/0025-refresh-hz-e-a-cadencia-pedida.md) escrito **antes** do código. Com ele, os **20 campos** do `HardwareProfile` estão auditados e nenhum continua `IGNORED`.
+
+**As três perguntas, respondidas com evidência e não com intuição.**
+
+**A — recusar, avisar ou clampar? Recusar.** Duas razões verificadas: (1) o campo **irmão** `max_pixels` vive na *mesma* struct `Limits` e já recusa desde o GS4.3 — tratar dois tetos irmãos de maneira diferente é exatamente o que a auditoria veio corrigir; (2) clampar está proibido por precedente: o `Strobe` do ADR-0021 recusa-se a mudar a frequência sozinho, porque *"estroboscópio que muda de frequência sozinho no palco é pior que parâmetro documentado"*. Um daemon que baixasse o `--tick-ms` faria o journal dizer uma coisa e o fio outra.
+
+**B — capacidade ou recomendação? Capacidade.** O ADR-0018 chama à struct *"`Limits` ← **ÚNICO lar dos limites**"*. `refresh_hz` está lá, entre dois tetos. Lê-lo como recomendação dar-lhe-ia semântica diferente dos vizinhos, sem nada que o justifique.
+
+**C — modo de benchmark? Não, e a separação já existia.** A pergunta nasce do sweep real de **1593 fps** de 2026-07-23 contra um nó de 44 Hz. Mas esse sweep **não foi do daemon**: `--speed max` é uma flag do `led-player` (`main.rs:112`); o daemon nem tem conceito de velocidade. Acrescentar `--benchmark` criaria superfície nova para um caso que outro binário já cobre — e abriria um caminho pelo qual o show arrancaria com o limite desligado. A regra *"nunca transformar benchmark em capacidade de show"* fica garantida **por construção**: o binário que faz show não sabe fazer benchmark.
+
+**O achado que a implementação produziu: a minha própria suíte E2E violava o limite.** Ao correr o workspace, `e2e_output.rs` reprovou — usava `tick_ms: 20`, ou seja **50 Hz contra presets que declaram 40–44 Hz**. Todos aqueles testes estavam, desde o GS4.2, a exercitar o daemon acima da capacidade declarada dos nós. Não é falha do ADR: é o ADR a funcionar, e é literalmente o caso de migração que ele previu por escrito. Corrigido para `tick_ms: 25` (40 Hz), o que **não enfraquece nada** — os testes continuam a afirmar exatamente o que afirmavam.
+
+**Gate falsificado 3×**, como o sprint exigiu. **BUG A** (`refresh_hz` ignorado) → 4 testes reprovaram. **BUG B** (`>` trocado por `>=`, o limite deixa de ser alcançável) → 3 reprovaram, incluindo o teste dedicado à fronteira exata. **BUG C** (verificação removida do laço) → `o_daemon_recusa_arrancar_acima_do_teto_e_nao_clampa` reprovou.
+
+**Nove testes**, com dois que não estavam na lista e que a lista precisava. `um_passo_de_cada_lado_do_teto_muda_o_veredito` — 25 ms passa, 24 ms recusa: a fronteira é uma linha, não uma zona. E `o_heartbeat_e_o_refresh_nao_se_confundem`: o keep-alive é o intervalo **máximo sem** frame (800 ms), o refresh é a taxa **máxima de** frames (40 Hz); confundi-los daria um daemon que recusa 40 Hz por causa de um heartbeat de 1,25 Hz.
+
+**`refresh_hz = 0` nunca é capacidade infinita — e isso já era verdade.** O validador emite `ZeroLimit` desde o ADR-0018 e, desde o ADR-0024, essa recusa impede a saída de abrir. O teste **prova a composição das duas regras** em vez de a assumir; era exatamente ali que um "zero significa sem limite" poderia entrar sem ninguém reparar.
+
+**Um segundo achado, fora do A3, que só apareceu por o sprint pedir `--all-features`.** O `led-pixel-engine` **não compilava com a feature `gpu`**: `with_threshold` tinha o parâmetro renomeado para `_pixel_count` (para calar um warning no build sem GPU) enquanto o corpo `#[cfg(feature = "gpu")]` continuava a usar `pixel_count`. A CI corre **sem** `gpu` por decisão documentada no próprio workflow, por isso **nunca compilou** e ninguém notou. Corrigido pelo lado certo — o parâmetro recupera o nome e o warning é silenciado com `cfg_attr`, em vez de renomear e partir o outro ramo. Ficou também documentado porque o `Executor` não é boxado: é construído **uma vez, no arranque**, nunca por frame.
+
+**Invariants verified.** **964 testes** (+9), clippy `--workspace --all-targets --all-features -D warnings` exit 0 — **a primeira vez que o gate corre com todas as features**, e agora corre. `led-daemon` e `led-core` intocados (`git diff` vazio), nenhum teste removido, nenhum relógio ou scheduler novo: a comparação corre **uma vez**, na abertura do palco, e o `Pacer` não mudou.
+
+**Auditoria final dos 20 campos** ([hardware-profile-audit.md](./docs/architecture/hardware-profile-audit.md)): **10 HONORED** com teste discriminante, **6 METADATA por decisão de ADR**, **2 HARDWARE-DEPENDENT**, **1 TEST GAP declarado**. **Zero `IGNORED`.**
+
+**Pending.** `output_interface` continua **TEST GAP declarado, não fabricado**: a proteção do ADR-0005 vem do `WifiBlockGuard` a sondar o *host*, não da declaração do profile, e as duas podem divergir. Escrever um teste sobre o comportamento atual fixaria uma semântica nunca decidida. `firmware_version`/`serial` continuam HARDWARE-DEPENDENT, com a evidência que falta nomeada no runbook. **GS4.5 continua BLOCKED por hardware** — nada nesta sessão mudou isso, e nenhuma etapa física foi marcada.
 
 ### 2026-08-07i — A2: o validador do `HardwareProfile` passa a ter consumidor (ADR-0024)
 
