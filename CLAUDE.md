@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (964 tests)
+cargo test --workspace                  # all suites (993 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -41,6 +41,7 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
 | `led-daemon-bin` | **NEW** — o **processo** (GS2): laço, pacer injetável, journal JSONL, loader `.lumyx`. Bin `led-daemon`. **Sem saída** — nenhum frame deixa o processo | — |
 | `led-daemon` | **NEW** — a superfície de transporte do engine (ADR-0023): `State` (8 estados), `Command`, `Event`, `ShowRuntime`. **Zero dependências** — nem `led-core`; o pré-voo chega como dado | — |
+| `led-console-bin` | **NEW** — a ponte console↔daemon (ADR-0026): **cliente** do IPC v1, processo separado. Traduz transporte e **não** reimplementa domínio — um gate estrutural reprova se máquina de estados, MTU, `refresh_hz`, `Calibration` ou `HardwareProfile` aparecerem aqui. Loopback-only enquanto o ADR-0014 não der auth. **Sem UI ainda** |
 | `led-bridge` | **integration seam** — the only crate that imports both `audio-core` (v1) and `led-pixel-engine` (v0). Owns: `adapt`/`adapt_into` (v1→v0 adapter), `BridgeHandle` (watch→AudioShare thread), `SimLoop` (hardware-free end-to-end live loop) | — |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
@@ -86,10 +87,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (964 tests)
+cargo test --workspace                  # all suites (993 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **964 tests green** · zero warnings.
+16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **993 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -132,6 +133,36 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-09 — F1-B: ADR-0026 + fundação do `led-console-bin` (fronteira, não UI)
+
+**Done.** A ponte console↔daemon deixou de ser uma decisão por tomar em silêncio na primeira linha de código da UI. [ADR-0026](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do crate, com 15 decisões numeradas. `led-daemon` e `led-core` **intocados** (`git diff` vazio). **Nenhuma UI construída, e nenhuma stack escolhida** — o ADR-0016 continua provisório e esta fatia não o desbloqueia.
+
+**A decisão que mais restringe o futuro: SSE para eventos, POST para comandos — não WebSocket.** Não é preferência de protocolo. Um canal bidirecional **convida** alguém a mandar comandos por ele, criando um segundo caminho de comando ao lado do POST; com SSE isso não é sequer **representável**. É o mesmo tipo de garantia que *"sem TCP, `0.0.0.0` não é representável"* deu ao GS3 — mais forte que proibir por convenção. E a reconexão passa a ser do `EventSource` do browser, em vez de código nosso a testar sob queda de rede.
+
+**Uma subscrição no daemon, fan-out para N browsers.** Sem isto, a carga no daemon passaria a depender de **quantos separadores o operador tem abertos** — arquitetura a variar com o comportamento do utilizador.
+
+**O timeout HTTP é derivado, não escrito.** `http_timeout() = REPLY_TIMEOUT + MARGEM_HTTP`, e o `REPLY_TIMEOUT` do daemon passou a `pub` para isso. Se os dois empatassem, o browser receberia "falhou" enquanto o daemon ainda aplicaria o comando — e o operador veria o show mudar **depois** de a UI dizer que não mudou. Falsificado: empatar os dois reprova `o_timeout_http_e_estritamente_maior_que_o_do_daemon`.
+
+**A regra que este crate existe sobretudo para proteger: OBSERVABILIDADE ≠ EVIDÊNCIA FÍSICA.** `frames_sent` a crescer diz que o `sendto` **local** teve sucesso — e um `sendto` para um destino inexistente também tem. Foi assim que o `lumyx-hwcheck` se apanhou a reportar `PASS` de heartbeat contra um IP que não existia. `Evidencia::confirma(elo)` não implica **nada** sobre os outros elos, e há testes que afirmam exatamente isso: `software_sent` não implica `controller_received`, e `controller_received` não implica `led_verified`.
+
+**Três defeitos que este trabalho encontrou — dois deles meus, um no desenho.**
+
+1. **`stale_ms()` devolvia `0` para um instantâneo que nunca existiu** — indistinguível de "acabou de chegar". É o zero artificial que o próprio ADR §7 proíbe, dentro do tipo criado para o impedir. Passou a `Option<u64>`: sem dado, não há idade.
+2. **`Erro::Protocolo` mapeava um pedido grande demais para HTTP 502** — culpando o *daemon* por um corpo que o **browser** mandou grande demais. Blame invertido manda o operador procurar o defeito no sítio errado. Separado em `PedidoDemasiadoGrande { bytes, limite }` → **413**.
+3. **A lista de palavras proibidas do ADR-0017 vivia em produção e apanhava-se a si própria.** A primeira versão do gate reprovava porque `surface.rs` continha a palavra `blackout` — na declaração da lista que vigia `blackout`. A lista mudou-se para dentro do teste: um gate não pode ser o sítio onde o proibido é escrito.
+
+**O achado que só apareceu por não haver mocks: sem o laço, o teste media o timeout.** A primeira versão do fixture subia só o `Server`, e `play` sem show devolvia **`engine_busy` ao fim de 5 segundos** em vez de `no_show_loaded`. A causa é a disciplina do GS3 a funcionar — as threads de ligação **enfileiram**, quem aplica é o laço — e sem laço não há aplicador. O fixture passou a levantar o `run_with_control` **real**; o ficheiro caiu de 5,01 s para 0,07 s, que é a prova de que o comando passou mesmo a ser aplicado em vez de expirar.
+
+**Gates falsificados 4×** (KB-012), cada um com um bug plantado. **A** — o console a reescrever o código do daemon (`no_show_loaded` → `console.refused`): reprova. **C** — `stale_ms` a fabricar `0`: reprova. **D** — uma rota `/api/blackout` na superfície: reprova com `/api/blackout: contem \`blackout\``. **E** — timeout HTTP empatado: reprova. Produção restaurada e verde nas quatro.
+
+**Erro meu na própria falsificação, que vale registar.** O BUG D pareceu **não** reprovar. Não era o gate a falhar: o meu script de injeção apanhou o `&[` da *anotação de tipo* (`&[Rota]`) em vez do valor, o crate não compilou, e o meu `grep` procurava `error\[` — que não casa com `error:`. Um gate que "passa" porque nada correu é a forma mais barata do KB-012, e desta vez estava no **harness de falsificação**, não no código.
+
+**29 testes** no crate (16 inline + 8 de integração contra o `Server` real + 5 estruturais). Os de integração **não têm mocks**: usam o `led_daemon_bin::server::Server` e o `run_with_control` de produção. **993 no workspace** (+29), clippy `--workspace --all-targets --all-features -D warnings` exit 0, build `--all-features` exit 0.
+
+**Achado registado, não corrigido: o limite de 64 KiB do daemon é verificado tarde demais.** `server.rs` lê a linha com `BufReader::lines()` — que cresce **sem limite** até ao `\n` — e só **depois** compara com `MAX_LINE`. O changelog do GS3 diz que o limite existe porque *"um cliente que nunca envie `\n` faz o daemon crescer sem limite"*, e contra esse cenário exato ele não protege. Não corrigi: é `led-daemon-bin`, fora do âmbito desta fatia, e a correção (ler com `take(MAX_LINE+1)`) muda o comportamento do transporte. Nomeado aqui em vez de deixado para outro teste o encontrar.
+
+**Pending.** **Não há UI, e não há servidor HTTP** — `ROTAS` é uma tabela `const` para que os gates a possam percorrer antes de existir HTTP, e `Fanout` não está ligado a nada. A escolha React vs Leptos (ADR-0016) continua bloqueada por medição humana de a11y/GPU/DX. Autenticação continua vazia (ADR-0014, `ClientRegistry` declarado e sem entradas) — é o que mantém o console loopback-only. Os testes de integração do daemon (`tests/ipc.rs`) **nunca exercitam o laço aplicador**, o que este trabalho revelou por acidente e não corrigi.
 
 ### 2026-08-07j — A3: `refresh_hz` é um limite (ADR-0025) — e a minha própria suíte estava a violá-lo
 

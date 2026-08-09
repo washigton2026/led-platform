@@ -1,0 +1,16 @@
+[package]
+name = "led-console-bin"
+version = "0.1.0"
+edition = "2021"
+
+# ADR-0026 — a ponte console↔daemon. **Cliente** do IPC v1, como o `ledctl`; nunca uma
+# autoridade de domínio. Depende do `led-daemon` (os tipos do contrato congelado) e do
+# `led-daemon-bin` (o protocolo v1 e os seus limites) — e de mais nada, porque tudo o que
+# fosse preciso além disso seria domínio a escorregar para dentro do tradutor.
+[dependencies]
+led-daemon = { path = "../led-daemon" }
+led-daemon-bin = { path = "../led-daemon-bin" }
+
+[lib]
+name = "led_console_bin"
+path = "src/lib.rs"

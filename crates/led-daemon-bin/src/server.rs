@@ -34,7 +34,11 @@ use std::time::Duration;
 pub const MAX_LINE: usize = 64 * 1024;
 
 /// Quanto tempo uma ligação espera pela resposta do laço antes de desistir.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+///
+/// **Público desde o ADR-0026** para que o `led-console-bin` possa *derivar* dele o seu
+/// timeout HTTP em vez de escrever um segundo número. Se os dois empatassem, o browser
+/// receberia "falhou" enquanto o daemon ainda aplicaria o comando.
+pub const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Snapshot que o laço publica e o `status` lê. Consultar não compete com comandar.
 #[derive(Clone, Debug, Default)]
