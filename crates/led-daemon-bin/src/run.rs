@@ -504,7 +504,7 @@ pub fn run_with_control<P: Pacer, W: Write>(
 
         // Snapshot para o `status` — publicado, não bloqueado atrás do runtime.
         *cp.snapshot.lock().expect("snapshot") = crate::server::Snapshot {
-            state: rt.state().as_str().to_string(),
+            state: rt.state(),
             position_ms: rt.position_ms(),
             show_id: rt.show().map(|s| s.id.0),
             duration_ms,

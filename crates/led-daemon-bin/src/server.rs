@@ -22,7 +22,7 @@
 
 use crate::proto::{code, err_line, event_line, jstr, ok_line, Cmd, ProtoError, Request};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -41,13 +41,41 @@ pub const MAX_LINE: usize = 64 * 1024;
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Snapshot que o laço publica e o `status` lê. Consultar não compete com comandar.
-#[derive(Clone, Debug, Default)]
+///
+/// ## Porque `state` é `State` e não `String`
+///
+/// Era `String`, e `Default` dava-lhe a **string vazia**. Como o laço só publica o primeiro
+/// instantâneo no fim do primeiro tick, havia uma janela em que o `status` respondia
+/// `"state":""` — que **não é** nenhum dos oito estados do ADR-0023, e cai fora da união
+/// fechada que o contrato gerado (ADR-0027) declara ao browser como `DaemonState`.
+///
+/// Com o tipo, esse valor **não é sequer representável**. É a mesma escolha que o GS3 fez ao
+/// não ter TCP (`0.0.0.0` não é representável) e que o ADR-0026 fez ao escolher SSE em vez de
+/// WebSocket: uma garantia por construção vale mais que uma verificação em runtime.
+#[derive(Clone, Debug)]
 pub struct Snapshot {
-    pub state: String,
+    pub state: led_daemon::State,
     pub position_ms: u64,
     pub show_id: Option<u64>,
     pub duration_ms: u64,
     pub ticks: u64,
+}
+
+/// O instantâneo inicial é **`Idle`** — o estado com que `ShowRuntime::new()` realmente
+/// começa (ADR-0023).
+///
+/// Não é fabricar uma medição: é o estado inicial **contratual** da máquina. O que a
+/// correção removeu foi a capacidade de o tipo representar um valor que o runtime nunca tem.
+impl Default for Snapshot {
+    fn default() -> Self {
+        Self {
+            state: led_daemon::State::Idle,
+            position_ms: 0,
+            show_id: None,
+            duration_ms: 0,
+            ticks: 0,
+        }
+    }
 }
 
 /// Um comando à espera de ser aplicado pelo laço principal.
@@ -168,26 +196,55 @@ impl Server {
 }
 
 /// Trata uma ligação até ao EOF.
+///
+/// ## Porque não `lines()`
+///
+/// `BufReader::lines()` só devolve a linha quando encontra `\n`, e faz crescer a `String` sem
+/// teto até lá. Verificar `MAX_LINE` **na linha devolvida** chega tarde: para a verificação
+/// correr, o daemon já alojou tudo o que o atacante escreveu. O limite de 64 KiB existe
+/// precisamente contra o cliente que nunca envia `\n`, e era exatamente esse o caso contra o
+/// qual não protegia. Aqui o teto é imposto **durante** a leitura, por `take(MAX_LINE + 1)`:
+/// o `+1` é o que permite distinguir uma linha de exatamente 64 KiB (legítima) de uma que
+/// passou do limite.
 fn handle_connection(stream: UnixStream, cp: Arc<ControlPlane>) -> std::io::Result<()> {
     let mut writer = stream.try_clone()?;
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream);
     let mut hello_done = false;
+    let mut buf: Vec<u8> = Vec::new();
 
-    for linha in reader.lines() {
-        let linha = match linha {
-            Ok(l) => l,
+    loop {
+        buf.clear();
+        // O `take` é recriado a cada volta: o teto é por linha, não por ligação.
+        let n = match reader.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf) {
+            Ok(0) => break, // EOF
+            Ok(n) => n,
             Err(_) => break,
         };
-        if linha.len() > MAX_LINE {
+
+        // Sem `\n` e com o teto esgotado: a linha excede o limite e o resto **continua por
+        // ler** no socket.
+        if n > MAX_LINE && !buf.ends_with(b"\n") {
             let e = ProtoError::new(code::BAD_REQUEST, "linha demasiado longa");
-            writeln!(writer, "{}", err_line(None, &e))?;
-            continue;
+            let _ = writeln!(writer, "{}", err_line(None, &e));
+            let _ = writer.flush();
+            // Fechamos, não drenamos. Drenar até ao próximo `\n` é ler uma quantidade que o
+            // atacante escolhe — a mesma negação de serviço, só que num sítio diferente. E
+            // continuar sem drenar era pior ainda: a leitura seguinte retomaria a meio da
+            // linha gigante e o resto seria analisado como um pedido novo, dando ao atacante
+            // um modo de injetar pedidos que o cliente nunca escreveu. Fechar é a única saída
+            // limitada, e o enquadramento por linha já não é recuperável nesta ligação.
+            break;
         }
+
+        let linha = match std::str::from_utf8(&buf) {
+            Ok(s) => s.trim_end_matches('\n').trim_end_matches('\r'),
+            Err(_) => break, // o mesmo desfecho que `lines()` dava a bytes inválidos
+        };
         if linha.trim().is_empty() {
             continue;
         }
 
-        let req = match Request::from_line(&linha) {
+        let req = match Request::from_line(linha) {
             Ok(r) => r,
             Err(e) => {
                 writeln!(writer, "{}", err_line(e.id, &e.err))?;
@@ -219,7 +276,7 @@ fn handle_connection(stream: UnixStream, cp: Arc<ControlPlane>) -> std::io::Resu
             Cmd::Status => {
                 let s = cp.snapshot.lock().expect("snapshot").clone();
                 Ok(vec![
-                    ("state", jstr(&s.state)),
+                    ("state", jstr(s.state.as_str())),
                     ("position_ms", s.position_ms.to_string()),
                     ("duration_ms", s.duration_ms.to_string()),
                     ("ticks", s.ticks.to_string()),

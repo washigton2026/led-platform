@@ -347,3 +347,34 @@ mod tests {
         assert!(!Cmd::Subscribe.touches_runtime());
     }
 }
+
+#[cfg(test)]
+mod contrato_id_nulo {
+    use super::*;
+    use crate::json::parse;
+
+    /// Uma recusa não-atribuível é uma **resposta**, não um evento — e o que a torna
+    /// distinguível é a *presença da chave* `id`, não o seu valor.
+    ///
+    /// O `ledctl` e o `led-console-bin` decidem com `parse(l).get("id").is_some()`. Num
+    /// `{"id":null,…}` isso devolve `Some(Json::Null)` — logo, resposta. Se `err_line`
+    /// alguma vez passasse a **omitir** a chave em vez de a pôr a `null`, os dois clientes
+    /// passariam a lê-la como evento assíncrono e ficariam à espera para sempre de uma
+    /// resposta que já tinha passado. Este teste é o que impede essa mudança silenciosa.
+    #[test]
+    fn id_nulo_continua_a_ser_uma_resposta_e_nao_um_evento() {
+        let l = err_line(None, &ProtoError::new(code::BAD_REQUEST, "linha demasiado longa"));
+        let j = parse(&l).expect("a recusa tem de ser JSON válido");
+
+        assert!(
+            j.get("id").is_some(),
+            "a chave `id` tem de EXISTIR (mesmo a null), senão o cliente lê isto como evento: {l}"
+        );
+        assert_eq!(j.get("id"), Some(&Json::Null), "e o seu valor é null: {l}");
+
+        // O contraste que dá sentido ao anterior: um evento **não tem** a chave.
+        let ev = event_line(r#"{"event":"position_changed"}"#);
+        let je = parse(&ev).expect("evento válido");
+        assert!(je.get("id").is_none(), "um evento não pode ter a chave `id`: {ev}");
+    }
+}
