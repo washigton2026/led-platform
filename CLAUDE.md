@@ -135,6 +135,33 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-10c — F7.2: baseline persistido e CI real — FECHADA COM DÍVIDA NOMEADA
+
+**Nenhum código, teste, CI ou contrato alterado nesta entrada.** Só documentação: é o registo de uma decisão.
+
+**Done.** As sete fatias (F1-B → F7.1) deixaram de viver só na árvore de trabalho. Dois commits em `baseline/f2-f71`, publicados: `f141491` (`led-daemon-bin` — `MAX_LINE` durante a leitura + `Snapshot.state` tipado) e `ffd8277` (`led-console-bin` — HTTP, SSE, reconexão, contrato TS, gate na CI). `show.gif` **não** foi commitado (modificado desde antes, deliberadamente fora). `led-daemon`, `led-core` e `spike/` intocados.
+
+**Separação por fatia não foi possível, e a razão está registada em vez de escondida.** Nove ficheiros misturam fatias — `server.rs` tem F1-B *e* F5; `lib.rs` declara os mods de F2+F3+F4; `0026.md` tem §9-bis(F2), §9-ter(F4) e §9-quater(F7). Separar exigiria staging por *hunk*, que é interactivo e não está disponível neste ambiente. Optei pela única fronteira real que existe — **por crate** — e digo-o em vez de fingir granularidade que não há.
+
+**O objectivo da F7.1 está cumprido em runner real:** `contrato TS (tsc --noEmit)` = **success**, com Node 22 + `npm ci` + `./scripts/tsc_gate.sh`, nas **duas** tentativas do run 31425015576.
+
+**F7.2 fecha COM DÍVIDA NOMEADA.** Dois testes vermelhos na CI, **ambos pré-existentes** aos commits desta linha e **ambos fora do âmbito** deles (`git diff 4455a90..ffd8277 --name-only | grep -cE "led-protocols|led-player"` → **0**). Nenhuma correcção autorizada nesta etapa.
+
+| Dívida | Teste | Amostras | Classificação |
+|---|---|---|---|
+| **Ubuntu** | `ddp_backend_send_path_is_alloc_free` (`led-protocols/tests/no_alloc.rs:68`) | 4 (2 ✅ / 2 ❌), incl. o **mesmo commit a passar e a falhar** | **não-determinístico** |
+| **macOS** | `absolute_pacing_on_schedule_reports_no_lateness` (`led-player/src/stream.rs:329–330`) | 4 (0 ✅ / 4 ❌) | **determinístico em CI**, passa sempre localmente |
+
+**Foi o re-run que separou as duas.** Na tentativa 1 pareciam a mesma coisa; na tentativa 2 o Ubuntu passou e o macOS falhou de novo. São naturezas diferentes, e uma correcção genérica teria sido errada para pelo menos uma delas.
+
+O macOS alterna entre as **duas** asserções do teste — linha 330 (`frames_late`) num run, 329 (`frames_played`) nos outros três. Que ambas já tenham falhado confirma o mecanismo: com `Pacing::Absolute { epoch_ms: 0 }` cada quadro vence em `now + i·25 ms`, e num runner partilhado uma pausa de escalonamento ou conta atraso ou faz o pacer descartar o quadro vencido. É a família do TD-003.
+
+**Duas hipóteses minhas retiradas por evidência**, ambas sobre o Ubuntu: atribuí-o à falta de um `ALLOC_GATE` (contaminação por testes paralelos). Errado — `grep -c '#[test]'` naquele ficheiro dá **1**: é o seu próprio binário, sem irmãos a alocar em paralelo.
+
+**Pending, e é o que bloqueia qualquer estabilização.** Faltam os **números**: o `N` de alocações do Ubuntu (*"allocated N time(s) over 10000 frames"*) e os `left:`/`right:` do macOS. O `ci.yml` encaminha essas linhas para um `::group::falhas` no **log**, e o log devolve **HTTP 403** sem autenticação — enquanto as anotações, que são públicas, levam só ficheiro e linha. Sem esses valores, mexer num orçamento seria inventar um número, e isso está proibido. `gh` não está instalado; desbloquear o log é pré-requisito da fatia de estabilização.
+
+**Achado colateral, não explicado:** `subscritor_morto_e_podado` (`led-daemon-bin/tests/ipc.rs:175`) falhou nos **dois** runs anteriores e **passa** nos dois commits desta linha. Ou o trabalho do `MAX_LINE` o corrigiu, ou também é não-determinístico. Nomeado, não investigado.
+
 ### 2026-08-10b — F7.1: o gate do TypeScript passa a correr sozinho (CI)
 
 **Done.** O gargalo que a F7 deixou nomeado está fechado: `./scripts/tsc_gate.sh` deixou de depender de alguém se lembrar dele. Job novo **bloqueante** `contract` no `ci.yml`. **Nenhuma UI** (verificado: zero `.tsx`/`.jsx`/`vite.config` em `crates/`); `led-daemon`, `led-core` e `spike/` intocados.
