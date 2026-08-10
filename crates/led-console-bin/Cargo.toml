@@ -11,6 +11,14 @@ edition = "2021"
 led-daemon = { path = "../led-daemon" }
 led-daemon-bin = { path = "../led-daemon-bin" }
 
+# **Só para testes.** O proxy de `/api/metrics` (ADR-0026 §9-bis) é medido contra o exporter
+# REAL (`led_hal::serve_metrics`), nunca contra um mock: se o console e o exporter divergirem
+# no formato, é precisamente isso que o teste tem de apanhar — e um mock concordaria sempre
+# comigo. Em produção o console fala com o exporter por TCP e **não** conhece o `led-hal`;
+# por isso é dev-only e o grafo de dependências de produção não muda.
+[dev-dependencies]
+led-hal = { path = "../led-hal" }
+
 [lib]
 name = "led_console_bin"
 path = "src/lib.rs"

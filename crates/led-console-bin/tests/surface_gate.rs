@@ -20,6 +20,9 @@ const FONTES: &[(&str, &str)] = &[
     ("truth.rs", include_str!("../src/truth.rs")),
     ("fanout.rs", include_str!("../src/fanout.rs")),
     ("ipc.rs", include_str!("../src/ipc.rs")),
+    ("metrics.rs", include_str!("../src/metrics.rs")),
+    ("contract.rs", include_str!("../src/contract.rs")),
+    ("http.rs", include_str!("../src/http.rs")),
 ];
 
 /// Linhas de código (comentários e doc-comments são legítimos e podem citar os nomes).
@@ -144,4 +147,72 @@ fn toda_rota_declara_a_sua_razao() {
     }
     let comandos = ROTAS.iter().filter(|r| r.verbo == Verbo::Post).count();
     assert_eq!(comandos, 6, "load/unload/play/pause/stop/seek — e mais nenhum");
+}
+
+// ── ADR-0026 §9-bis — o browser tem UMA origem ───────────────────────────────
+
+/// **O browser nunca vê o exporter diretamente.**
+///
+/// O `led_hal::serve_metrics` é um `TcpListener` **noutro processo**. Se a superfície do
+/// console alguma vez expuser `/metrics` (o caminho do exporter) em vez de `/api/metrics`,
+/// o browser passa a ter uma **segunda origem** — um caminho que não atravessa o tradutor, e
+/// ao qual nada do que este crate garante se aplica.
+///
+/// O teste é sobre a **forma do caminho**, não sobre o nome: qualquer rota que não comece por
+/// `/api/` já é recusada por `toda_rota_declara_a_sua_razao`; esta fecha o caso específico de
+/// alguém acrescentar o caminho do exporter tal e qual.
+#[test]
+fn o_exporter_nao_e_alcancavel_diretamente_pelo_browser() {
+    for r in ROTAS {
+        assert_ne!(
+            r.caminho, "/metrics",
+            "o caminho do exporter esta exposto ao browser: seria uma SEGUNDA ORIGEM \
+             (ADR-0026 §9-bis). O browser fala com /api/metrics, e o console e que fala \
+             com o exporter"
+        );
+        // E nenhuma rota pode apontar para fora do namespace do console.
+        assert!(
+            r.caminho.starts_with("/api/"),
+            "{}: fora de /api/ — o browser passaria a ter duas origens",
+            r.caminho
+        );
+    }
+    // A rota do proxy tem de existir: sem ela, a única forma de o browser ver métricas
+    // seria falar com o exporter — exatamente o que este gate proíbe.
+    assert!(
+        ROTAS.iter().any(|r| r.caminho == "/api/metrics" && r.verbo == Verbo::Get),
+        "sem /api/metrics, o browser nao tem por onde ver metricas sem abrir 2.a origem"
+    );
+}
+
+/// **O proxy não pode ganhar lógica de métricas.**
+///
+/// O §9-bis proíbe recalcular, agregar e reescrever o formato. Um proxy que somasse séries
+/// seria uma **segunda fonte de verdade** sobre observabilidade, e a divergência entre o que
+/// o Prometheus raspa e o que o browser vê não seria visível de nenhum dos lados.
+#[test]
+fn o_proxy_de_metricas_nao_calcula_nada() {
+    const CALCULO: &[&str] = &[
+        "prometheus_text", // reimplementar a formatação
+        "MetricsEmitter",  // ler o emitter em vez de o exporter
+        "percentile",
+        "p99",
+        "p50",
+        "histogram",
+        ".sum()",
+        "fold(",
+    ];
+    let fonte = FONTES
+        .iter()
+        .find(|(n, _)| *n == "metrics.rs")
+        .expect("metrics.rs tem de estar nas FONTES, senao escapa a todos os gates")
+        .1;
+    for linha in linhas_de_codigo(fonte) {
+        for c in CALCULO {
+            assert!(
+                !linha.contains(c),
+                "metrics.rs: `{c}` — o proxy repassa, nao calcula (ADR-0026 §9-bis)\n  {linha}"
+            );
+        }
+    }
 }

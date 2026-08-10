@@ -20,6 +20,21 @@ pub const MARGEM_HTTP: Duration = Duration::from_secs(2);
 /// Teto de ligações SSE simultâneas. Separadores esquecidos não podem esgotar threads.
 pub const MAX_SSE_CONNS: usize = 8;
 
+/// Primeira espera entre tentativas de religar ao daemon.
+///
+/// Pequena de propósito: o caso comum é o operador reiniciar o daemon, e o console deve
+/// voltar a falar com ele **sem se notar**. É o dobro em cada falha, portanto o custo de
+/// começar baixo é limitado.
+pub const BACKOFF_INICIAL: Duration = Duration::from_millis(50);
+
+/// Teto do backoff. **Derivado** do `REPLY_TIMEOUT`, não escrito à parte.
+///
+/// É o mesmo raciocínio do [`http_timeout`]: esperar mais do que o tempo que o daemon tem
+/// para responder não torna a religação mais provável — só atrasa o regresso do serviço
+/// depois de o daemon já estar de pé. E derivar em vez de escrever `5` impede os dois números
+/// de divergirem no dia em que um deles mudar.
+pub const BACKOFF_MAX: Duration = led_daemon_bin::server::REPLY_TIMEOUT;
+
 /// O timeout HTTP do console — **derivado** do `REPLY_TIMEOUT` do daemon (ADR-0026 §12).
 ///
 /// # Porque é derivado, e não escrito

@@ -1,0 +1,17 @@
+{
+  "//": "Estrito de propósito: um gate em modo permissivo prova muito menos do que parece.",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["lumyx-contract.generated.ts", "verifica.ts"]
+}

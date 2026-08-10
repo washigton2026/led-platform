@@ -26,3 +26,8 @@ show_drone.json
 
 # Ephemeral Claude Code agent worktrees (scratch — never part of the product).
 .claude/worktrees/
+
+# Gate de compilação do contrato TypeScript (ADR-0027). O `package.json`, o
+# `tsconfig.json` e o `verifica.ts` SÃO fonte e vão versionados; o `node_modules`
+# é artefacto de instalação e não entra no baseline.
+node_modules/

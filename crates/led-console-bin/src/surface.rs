@@ -58,6 +58,14 @@ pub const ROTAS: &[Rota] = &[
         razao: "catalogo de presets, estatico; nenhum valor fisico e recalculado aqui",
     },
     Rota {
+        verbo: Verbo::Get,
+        caminho: "/api/metrics",
+        cmd_ipc: None,
+        razao: "proxy read-only do exporter que ja existe (ADR-0026 §9-bis); serve para o \
+                browser ter UMA origem. Nao recalcula, nao agrega, nao muda o formato — e \
+                continua observabilidade, nunca prova fisica",
+    },
+    Rota {
         verbo: Verbo::Post,
         caminho: "/api/transport/load",
         cmd_ipc: Some("load"),

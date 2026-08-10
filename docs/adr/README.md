@@ -26,13 +26,14 @@ recuperada do changelog.
 | [0013](0013-engine-daemon-separado.md) | Engine headless em daemon separado; UI é cliente (output não compartilha processo de falha) | aceito (pré-impl.) | 2026-07-26 |
 | [0014](0014-ipc-seguranca-ui-engine.md) | IPC + segurança UI↔engine: UDS owner-only / token-mTLS por interface; nunca 0.0.0.0 | aceito (pré-impl.) | 2026-07-26 |
 | [0015](0015-preview-lossy-fora-hot-path.md) | Preview: cópia downsampled/rate-limited/lossy fora do hot-path; UI nunca lê o triple buffer | aceito (pré-impl.) | 2026-07-26 |
-| [0016](0016-stack-console-provisorio.md) | Stack do console (web DOM+WebGPU, Leptos preferido) — PROVISÓRIO, pendente spike | proposto (provisório) | 2026-07-26 |
+| [0016](0016-stack-console-provisorio.md) | Stack do console: web DOM+WebGPU + **React/TypeScript**, com gate obrigatório de tipos gerados | **aceito** | 2026-08-09 |
 | [0017](0017-blackout-intencional-vs-heartbeat.md) | Blackout intencional × invariante do heartbeat — decisão adiada | proposto (adiado) | 2026-07-26 |
 | [0018](0018-hardwareprofile-capacidades-design-time.md) | `HardwareProfile`: descritor de capacidades em design-time (presets são dado; compila para os seams) | aceito (pré-impl.) | 2026-07-29 |
 | [0019](0019-calibracao-por-output-no-hal.md) | Calibração por-output (gamma+brightness) aplicada no HAL, por device, sem tocar contrato Frozen | aceito | 2026-07-29 |
 | [0020](0020-whitemode-subtrativo.md) | `WhiteMode::MinSubtract`: derivação subtrativa do branco (RGBW deixa de somar ~4x de corrente) | aceito | 2026-08-02 |
 | [0021](0021-efeitos-funcoes-puras-estado-derivado.md) | Efeito é função pura de `(tempo, posição, índice)`; aleatoriedade é hash, nunca fluxo; estado é derivado, nunca armazenado | aceito | 2026-08-03 |
 | [0022](0022-wearable-playback-autonomo-sync-deterministico.md) | Traje de LED: playback autônomo + sincronização por relógio comum (o traje é *player*, não *device*); ADR-0005 intacto | aceito | 2026-08-03 |
+| [0027](0027-contrato-tipos-rust-typescript.md) | O contrato TypeScript é **gerado** do Rust; dois caminhos independentes provam que não divergiu | aceito | 2026-08-09 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma

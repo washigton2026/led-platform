@@ -109,6 +109,120 @@ Estas métricas **não constituem prova** de `network_delivered`, `controller_re
 **A UI nunca pode apresentar uma métrica local como prova física.** Um contador a crescer é o
 dado mais tentador de mostrar como "está a funcionar", e é o mais local de todos.
 
+### 9-bis · `/api/metrics` é **proxy read-only** — o browser tem **uma só origem**
+
+*(Acrescentado em 2026-08-09, na F2, por decisão do responsável.)*
+
+O exporter Prometheus **já existe** e é servido por `led_hal::serve_metrics` — um
+`TcpListener` **noutro processo**, que não é o console. Um browser a chamá-lo diretamente
+abriria uma **segunda origem**, ao lado do console, e essa é exatamente a forma de a
+arquitetura da decisão 5 ser contornada sem ninguém reparar: um caminho do browser que não
+passa pelo tradutor.
+
+**Decisão:** a superfície pública do console passa a incluir `GET /api/metrics`, e o browser
+**nunca** fala com `led_hal::serve_metrics`.
+
+```
+Browser ──HTTP──> led-console-bin ──HTTP──> led_hal::serve_metrics
+                  (única origem)            (exporter existente)
+```
+
+**O proxy é uma passagem, não um cálculo.** Repassa o corpo **verbatim** e o
+`Content-Type: text/plain; version=0.0.4` **inalterado**. Explicitamente proibido:
+
+- criar lógica de métricas nova;
+- **recalcular** qualquer valor;
+- **agregar** séries;
+- alterar o formato de exposição do Prometheus;
+- criar uma segunda origem para o browser.
+
+Um proxy que agregasse seria uma **segunda fonte de verdade** sobre observabilidade — a
+mesma classe que a decisão 15 proíbe. E como a decisão 9 já diz, estas métricas continuam a
+ser **observabilidade, nunca prova física**: passá-las pelo console **não** as promove a
+evidência, e a UI continua proibida de as pôr ao lado de um elo da cadeia.
+
+**O endereço do exporter é dado injetado**, não descoberto nem escrito à mão aqui — a mesma
+disciplina do `Available{}` do ADR-0024. O console não sabe fabricar métricas; só sabe onde
+perguntar.
+
+### 9-ter · O servidor HTTP **pertence ao console**, e é escrito à mão
+
+*(Acrescentado em 2026-08-09, na F4.)*
+
+```
+Browser ──HTTP/SSE──> led-console-bin ──IPC v1 (UDS 0600)──> led-daemon
+                             └────────HTTP────> led_hal::serve_metrics
+```
+
+**O que o browser nunca faz**, agora garantido por código e não só por intenção: falar UDS ·
+falar com o `led-daemon` diretamente · tocar no `ShowRuntime` ou no `OutputManager` ·
+alcançar o `led_hal::serve_metrics`. O console é a **única** origem.
+
+**Sem framework, e a razão é medida.** O workspace não tem nenhum — verificado: zero `axum`,
+`hyper`, `actix`, `warp`, `tiny_http`. E já tem **dois** servidores HTTP escritos à mão pela
+mesma razão (`led_hal::serve_metrics`, `led_readmodel::serve_readmodel`). A superfície são 11
+rotas, sem query-strings, sem upload, sem cookies. Um framework traria uma árvore de
+dependências para um problema que o `std` resolve, contra a convenção *"add a dependency only
+with a reason"*.
+
+**A `ROTAS` é o router.** O encaminhamento percorre a tabela que os gates já auditam; não há
+um segundo sítio onde acrescentar caminhos. Um caminho fora da tabela **não existe** — 404
+antes sequer de se olhar para o método.
+
+**Métodos.** Comando é **sempre** `POST`; leitura é **sempre** `GET`. O método errado é
+**405** com `Allow:`, nunca um 404 — e nunca uma execução. Se um comando fosse alcançável por
+`GET`, uma simples `<img src="/api/transport/play">` numa página qualquer dispararia o show.
+
+**Erros atravessam sem tradução semântica.** O `code` é o do daemon, verbatim; o estado HTTP é
+**transporte**, e o significado continua no `code`. `OFFLINE` é **503** e é um **estado**
+(§7) — nunca um `200` com um instantâneo inventado, que é o modo de falha mais caro desta
+camada: um ecrã verde sobre um palco morto.
+
+**SSE continua separado dos comandos** (§5). `/api/events` anuncia-se `text/event-stream`; o
+fan-out para N browsers fica para a fatia seguinte, e o `Content-Type` é fixado agora para o
+contrato não mudar depois.
+
+**Loopback-only, verificado antes do bind.** `bind_permitido` corre **antes** de o socket
+abrir: um endereço que não devia existir nunca chega a existir. Enquanto o `ClientRegistry`
+do ADR-0014 estiver **vazio**, não há console em LAN — e isto não é promessa de autenticação
+futura, é a condição atual.
+
+### 9-quater · `/api/profiles` responde **501**, e é uma decisão
+
+*(Acrescentado em 2026-08-10, na F7.)*
+
+**501 significa:** *"a rota é conhecida pelo contrato, mas a capacidade ainda não está
+disponível através da fronteira autorizada."*
+
+As três respostas possíveis dizem coisas **diferentes**, e só uma é verdadeira:
+
+| Resposta | Afirma | Verdade? |
+|---|---|---|
+| `404` | a rota não existe | **não** — existe, e está no contrato gerado |
+| `200 []` | o catálogo existe e está **vazio** | **não** — o catálogo tem 8 presets |
+| `501` | a rota existe; a capacidade não chega aqui | **sim** |
+
+**`200 []` é a pior das três.** Um operador que veja uma lista vazia conclui que **não há
+hardware configurado** — quando o que não há é *caminho até ao catálogo*. Manda-o procurar o
+defeito no sítio errado; é a mesma classe de *blame* invertido que o `413` do
+`PedidoDemasiadoGrande` já corrigiu, e que o §7 proíbe em geral.
+
+**Porque não se resolve simplesmente.** O catálogo vive no `led-hardware-profile`. Há duas
+saídas, e **ambas custam algo que está proibido**:
+
+1. **Importar o catálogo para o console** — traz *domínio* para dentro do tradutor. O gate
+   `nenhuma_segunda_fonte_de_verdade_no_console` recusa-o **pelo nome** (§15).
+2. **Acrescentar um comando ao IPC v1** — o protocolo está **fechado**, e um comando novo é
+   versão nova de protocolo com migração de cliente, não uma edição.
+
+Nenhuma das duas é uma edição; ambas são decisões de arquitetura. Enquanto nenhuma for tomada,
+o 501 é a resposta **honesta**, e é preferível a qualquer das alternativas que *pareceriam*
+funcionar.
+
+**O que fica proibido, com gate:** devolver `200 []`; devolver `404`; escrever perfis à mão no
+console; declarar `led-hardware-profile` como dependência de produção; inventar um `cmd_ipc`
+que o IPC v1 não define. Cada um destes tem um teste, e dois deles foram falsificados.
+
 ### 10 · Loopback-only enquanto o ADR-0014 não der auth
 
 O console **recusa bind não-loopback**, como o `led-readmodel` já faz. O `ClientRegistry` do

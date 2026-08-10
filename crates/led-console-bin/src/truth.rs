@@ -68,6 +68,26 @@ pub enum EstadoUi {
 }
 
 impl EstadoUi {
+    /// Todos os estados. **Existe para o contrato gerado** (ADR-0027) poder enumerá-los sem
+    /// macro nem `serde`.
+    ///
+    /// Esta lista é escrita à mão, e por isso pode ficar para trás do `enum`. Não fica: o
+    /// gate do contrato lê o **texto** de `enum EstadoUi` e reprova se `ALL` perder alguma
+    /// variante. Sem esse controlo negativo, um estado novo esquecido aqui produziria um
+    /// TypeScript sem ele — e o ficheiro versionado, gerado pelo mesmo caminho, concordaria.
+    /// Verde, e errado (KB-012).
+    pub const ALL: [EstadoUi; 9] = [
+        EstadoUi::Pass,
+        EstadoUi::Fail,
+        EstadoUi::NotMeasured,
+        EstadoUi::Blocked,
+        EstadoUi::Running,
+        EstadoUi::Offline,
+        EstadoUi::Degraded,
+        EstadoUi::Unknown,
+        EstadoUi::Simulation,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             EstadoUi::Pass => "PASS",

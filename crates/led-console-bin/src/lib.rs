@@ -18,15 +18,20 @@
 //! local teve sucesso — e um `sendto` para um destino inexistente **também** tem sucesso
 //! local. Ver [`truth`].
 
+pub mod contract;
 pub mod fanout;
 pub mod limits;
+pub mod metrics;
 pub mod surface;
 pub mod truth;
 
 #[cfg(unix)]
+pub mod http;
+#[cfg(unix)]
 pub mod ipc;
 
 pub use fanout::{Fanout, Subscriber};
+pub use metrics::{buscar, ErroMetricas, MetricsBrutas};
 pub use limits::{bind_permitido, http_timeout, MARGEM_HTTP, MAX_BODY, MAX_JSON_DEPTH};
 pub use surface::{Rota, Verbo, ROTAS};
 pub use truth::{Elo, EstadoUi, Evidencia, Instantaneo};

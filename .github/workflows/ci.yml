@@ -66,6 +66,45 @@ jobs:
       - name: Clippy (-D warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # ── Bloqueante: o contrato TypeScript tem de COMPILAR ────────────────────────
+  #
+  # Job próprio, e não um step do `test`, por duas razões:
+  #
+  # 1. **É independente do SO.** `tsc` produz o mesmo veredito em Linux e macOS; correr na
+  #    matriz duplicaria o custo sem acrescentar sinal.
+  # 2. **É uma propriedade diferente.** O `test` já corre o gate Rust↔TS
+  #    (`contract_gate.rs`), que prova que o `.ts` **corresponde** ao Rust. Este prova que
+  #    ele **compila**. São independentes: um ficheiro pode bater byte a byte com o gerador
+  #    e não compilar (ADR-0027, Emenda 1). Duas propriedades, dois jobs.
+  #
+  # Node **não** entra no job do Rust de propósito: `cargo test` não pode passar a depender
+  # de um segundo toolchain, senão a suíte falha em máquinas que só têm Rust.
+  contract:
+    name: contrato TS (tsc --noEmit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Node 22 (LTS) explícito
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/led-console-bin/contract/package-lock.json
+      # `npm ci` e não `npm install`: instala **exatamente** o lockfile e falha se ele
+      # divergir do `package.json`. `install` poderia resolver uma versão diferente da
+      # pinada, e o gate deixaria de correr contra o que está versionado.
+      - name: npm ci (lockfile exato)
+        working-directory: crates/led-console-bin/contract
+        run: npm ci
+      # O **mesmo** comando que corre localmente. Se a CI corresse um comando próprio, a
+      # reprodução local deixaria de provar o que a CI prova.
+      #
+      # O script invoca o binário de `node_modules/typescript` diretamente — nunca
+      # `npx tsc`, porque no registo npm o pacote `tsc` é um stub antigo (2.0.4) que não é
+      # o TypeScript. Verificado, não presumido.
+      - name: Gate de compilação do contrato
+        run: ./scripts/tsc_gate.sh
+
   # ── Não-bloqueante: Windows é suportado, mas não conduz o design ─────────────
   windows:
     name: windows (allow-failure)

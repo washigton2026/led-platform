@@ -19,11 +19,12 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (993 tests)
+cargo test --workspace                  # all suites (1051 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
 ~/lumyx-e2e.sh --miri                   # + Miri on all unsafe crates
+./scripts/tsc_gate.sh                   # gate de compilacao do contrato TS (ADR-0027)
 ```
 
 ## Crate map (dependency DAG: everything depends on `led-core`, never the reverse)
@@ -87,10 +88,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (993 tests)
+cargo test --workspace                  # all suites (1051 tests)
 ```
 
-16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **993 tests green** · zero warnings.
+16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1051 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -134,6 +135,194 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-10b — F7.1: o gate do TypeScript passa a correr sozinho (CI)
+
+**Done.** O gargalo que a F7 deixou nomeado está fechado: `./scripts/tsc_gate.sh` deixou de depender de alguém se lembrar dele. Job novo **bloqueante** `contract` no `ci.yml`. **Nenhuma UI** (verificado: zero `.tsx`/`.jsx`/`vite.config` em `crates/`); `led-daemon`, `led-core` e `spike/` intocados.
+
+**Job próprio, e não um step da matriz do Rust — por duas razões distintas.** (1) `tsc` é **independente do SO**: o veredito é o mesmo em Linux e macOS, e correr na matriz duplicaria o custo sem acrescentar sinal. (2) É uma **propriedade diferente**: o job `test` já corre o gate Rust↔TS (`contract_gate.rs`), que prova **correspondência**; este prova **compilabilidade**. São independentes — um ficheiro pode bater byte a byte com o gerador e não compilar (ADR-0027, Emenda 1). Duas propriedades, dois jobs.
+
+**Node fica fora do job do Rust de propósito.** Pôr um segundo toolchain no caminho do `cargo test` fá-lo-ia falhar em máquinas que só têm Rust — um preço maior que o problema.
+
+**`npm ci`, não `npm install`.** Instala **exatamente** o lockfile e falha se ele divergir do `package.json`; `install` poderia resolver uma versão diferente da pinada, e o gate deixaria de correr contra o que está versionado. É o equivalente npm do `--locked` que os jobs Rust já usam. Verifiquei que funciona **a partir de zero** (`rm -rf node_modules && npm ci`) e que o `tsc` vem da dep pinada — **5.9.3**, lido do `node_modules/typescript/package.json`, não presumido.
+
+**A CI corre o *mesmo* comando que corre localmente** (`./scripts/tsc_gate.sh`). Se corresse um comando próprio, a reprodução local deixaria de provar o que a CI prova.
+
+**Falsificação — e não confiei no YAML.** Três níveis, porque YAML válido não é gate a funcionar:
+
+1. **O gate, isolado:** GREEN → mutação no `verifica.ts` (`DaemonState = "HEALTHY"`) → **RED** (`TS2322`, exit 1) → restaurado GREEN.
+2. **O YAML, por asserção:** um script lê o `ci.yml` e afirma que o job existe, que **não** é `continue-on-error`, que usa `setup-node` com versão explícita, que usa `npm ci`, que corre `./scripts/tsc_gate.sh` e que **não** usa `npx`.
+3. **A sequência da CI, executada:** um simulador **gerado a partir do próprio YAML** (para não poder divergir do que a CI faz) corre os steps em ordem, num `node_modules` limpo. Com o código bom: exit 0. Com um **erro de sintaxe plantado no contrato gerado**: `TS1110`/`TS1005` → `STEP FALHOU` → **exit 1**.
+
+E a mesma mutação foi apanhada **também** pelo outro job (*"o contrato versionado DIVERGE do Rust"*) — os dois gates, por razões diferentes, como a Emenda 1 previu. Restaurado por **regeneração**, byte-idêntico ao pré-mutação.
+
+**Dois erros meus nesta rodada, ambos meus e não do código.** (1) Li um exit code **através de um pipe** (`... | tail; $?`) e obtive `0` de um script que **nem tinha corrido** — cwd errado. É exatamente o KB-013 deste repo, e apanhei-o por o número não fazer sentido. (2) O simulador de CI desapareceu entre sessões (está no scratchpad, não no repo) e a re-execução deu `127`; regenerei-o do YAML. Fica registado que ele é **efémero de propósito** — o artefacto durável é o job, não o simulador.
+
+**Invariants verified.** **1051 testes** (inalterado — esta fatia não acrescenta testes Rust), clippy `--all-targets --all-features -D warnings` exit 0, `build --all-features` exit 0, `./scripts/tsc_gate.sh` exit 0, simulação da CI exit 0. `scripts/tsc_gate.sh` com bit de execução (`-rwxr-xr-x`) — a CI invoca-o como `./scripts/...`. `package-lock.json` **não** está gitignorado, senão o `npm ci` falharia no runner.
+
+**Pending — e é honesto dizê-lo:** **não vi a CI correr.** Não há push nesta fatia, portanto a primeira execução real do job será a primeira vez que ele corre num runner GitHub, e a **primeira** em **Node 22** (local é v26.3.0). O que verifiquei foi a sequência de comandos, não o runner. Se falhar, o candidato mais provável é o ambiente do runner — não o gate, que está falsificado em três níveis.
+
+### 2026-08-10 — F7: as duas últimas dívidas antes da UI — `/api/profiles` decidido e o TypeScript a compilar de verdade
+
+**Done.** As duas dívidas que bloqueavam a primeira linha de UI estão fechadas. **Nenhuma UI** — sem React, Vite, Tailwind, `/console`, componentes, dashboard ou WebGPU (verificado: zero `.tsx`/`.jsx`/`vite.config` em `crates/`). `led-daemon`, `led-core`, `spike/` e o IPC v1 **intocados nesta fatia**.
+
+**A · `/api/profiles` = 501, e agora é uma decisão escrita** ([ADR-0026 §9-quater](./docs/adr/0026-console-daemon-boundary.md)). *"A rota é conhecida pelo contrato, mas a capacidade não está disponível através da fronteira autorizada."*
+
+As três respostas dizem coisas diferentes e só uma é verdadeira: `404` afirma que a rota não existe (**existe**, e está no contrato gerado); `200 []` afirma que o catálogo está vazio (**tem 8 presets**); `501` afirma o que se passa. **`200 []` é a pior das três** — um operador que veja lista vazia conclui que *não há hardware configurado*, quando o que não há é caminho até ao catálogo. É o mesmo *blame* invertido que o `413` do `PedidoDemasiadoGrande` já corrigiu.
+
+Continua 501 porque as duas saídas custam algo proibido: importar o catálogo traz **domínio** para o tradutor (o gate `nenhuma_segunda_fonte_de_verdade_no_console` recusa-o pelo nome) ou acrescentar um comando ao **IPC v1**, que está fechado. Ambas são decisões de arquitetura, não edições.
+
+**Cinco testes** pinam o 501 e proíbem: `200 []`, `404`, perfis escritos à mão, `led-hardware-profile` como dependência de produção, e um `cmd_ipc` que o IPC v1 não define. **Falsificado 2×**: `200 []` e `404` — ambos reprovam.
+
+**E um achado na própria falsificação: o gate textual apanhou o `200 []`, os testes HTTP não.** Nenhum teste verificava `/api/profiles` **no fio**. Acrescentei `get_api_profiles_e_501_no_fio`, e agora os dois gates apanham. Sem falsificar, essa lacuna teria passado.
+
+**B · `tsc --noEmit` existe, corre, e sabe reprovar** ([ADR-0027, Emenda 1](./docs/adr/0027-contrato-tipos-rust-typescript.md)).
+
+**A lacuna que a emenda nomeia:** o gate de dois caminhos prova que o `.ts` **corresponde** ao Rust — e nada mais. Um ficheiro pode bater byte a byte com o gerador **e não compilar**: o gerador emitiria o mesmo erro nas duas pontas e os dois caminhos concordariam com ele. *"Bate com o gerador"* **não** é *"é TypeScript válido"*. São duas propriedades independentes, e nenhuma substitui a outra.
+
+**O que torna o `tsc` significativo é o `verifica.ts`.** `tsc` sobre um ficheiro só de tipos prova que o texto é sintaxe válida e mais nada — nenhum tipo é *usado*, logo nada é *verificado*. O `verifica.ts` (escrito à mão, **não** gerado) usa-os, e cada `@ts-expect-error` é uma **asserção invertida**: se o erro não acontecer, `tsc` reprova. Assim ficam provadas, em compilação, coisas que uma comparação de bytes nunca poderia: `EstadoUi = "HEALTHY"` não compila (e `HEALTHY` é precisamente o nome que alguém inventaria para dizer "está tudo bem"); `Elo = "hardware_ok"` não compila; `DaemonState = ""` não compila — o defeito que a F5 corrigiu na origem não é representável no cliente; `| null` **não** é opcional; um `Evento` com `id` e uma `Resposta` sem `id` não compilam; e o **`switch` exaustivo sem `default`** obriga o frontend a *tratar* um valor novo em vez de o ignorar.
+
+**Uma armadilha verificada, não presumida:** `npx tsc` **não serve** — no registo npm o pacote `tsc` é um stub antigo (2.0.4) que não é o TypeScript, e o `npx` chegou a tentar instalá-lo. O script invoca o binário instalado diretamente. `typescript` **5.9.3** pinada é a única dependência, num `package.json` mínimo em `crates/led-console-bin/contract/` — não é o frontend, é o menor comando reprodutível. `node_modules` gitignorado; `package.json`, `tsconfig.json` e `verifica.ts` versionados. `tsconfig` **estrito** (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`): um gate permissivo prova muito menos do que parece.
+
+**O gate não salta.** Sem `node`, `scripts/tsc_gate.sh` **falha** em vez de declarar "nada a verificar" — a forma mais barata do KB-012, que já mordeu este repo (Miri N=0). Verifiquei que o script **sabe reprovar**: com um erro plantado sai 1; restaurado, sai 0.
+
+**Falsificado 3×, cada mutação a provar uma propriedade diferente.** **M1** tipo incompatível → `TS2322`. **M2** símbolo inexistente → `TS2305`. **M3** contrato gerado divergente (`SIMULATION` removido à mão) → **os dois gates** reprovam, e por razões distintas: o gate Rust↔TS diz *"`SIMULATION` existe no Rust e NÃO está no contrato"*, e o `tsc` diz que o `switch` deixou de ser exaustivo. É a demonstração de que as duas propriedades são independentes e complementares. O contrato foi restaurado por **regeneração** (o caminho autoritativo), e voltou byte-idêntico.
+
+**Invariants verified.** **1051 testes** (+6), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0, `./scripts/tsc_gate.sh` exit 0. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados.
+
+**Pending.** O `tsc` **não está na CI** — a CI é hoje 100 % Rust (verificado: nenhum `setup-node`), e o gate corre como comando reprodutível documentado. Deliberadamente **fora** do `cargo test`: pôr Node no caminho da suíte Rust fá-la-ia falhar em máquinas sem Node, um preço maior que o problema. Integrar na CI é a fatia seguinte, e fica **registado como pendente, não dado como feito**. `/api/profiles` continua 501 à espera de uma das duas decisões de arquitetura.
+
+### 2026-08-09g — F6: reconexão upstream do SSE (0 ou 1 subscrição, e "duas" deixa de ser representável)
+
+**Done.** O gargalo da F5 está fechado: se o daemon cair, o console **volta a falar com ele sozinho**, sem ser reiniciado. Nenhuma UI. `/api/profiles` continua 501 e o `tsc --noEmit` continua dívida — nenhuma tocada. `led-daemon`, `led-core`, `spike/` e o `ipc-protocol-v1.md` **intocados nesta fatia**; IPC v1 não mudou.
+
+**O supervisor é o único que subscreve, e não consegue abrir duas.** Uma thread por console. `Fanout::reivindicar_subscricao()` devolve `Option<GuardaSubscricao>` com `compare_exchange`: quem não obtiver a reivindicação **não tem por onde** abrir a segunda. **Duas subscrições simultâneas deixam de ser representáveis** — não são "proibidas por convenção". O `Drop` da guarda liberta, e é isso que faz o invariante sobreviver a `break`, a `?` e a `panic!`. Browsers não subscrevem, o `Fanout` não subscreve, os handlers HTTP não subscrevem.
+
+**A guarda é libertada antes do backoff**, portanto durante a espera o medidor diz `false` — que é a verdade. Fingir subscrição viva enquanto se espera seria a mesma mentira que um `200` sobre um daemon morto.
+
+**Backoff derivado, não inventado.** `BACKOFF_INICIAL = 50 ms`, a dobrar, com teto **derivado** do `REPLY_TIMEOUT` — o mesmo raciocínio do `http_timeout()`: esperar mais do que o tempo que o daemon tem para responder não torna a religação mais provável, só atrasa o regresso. E a espera é **interrompível**: um `stop()` que demorasse o teto do backoff acabaria por ser contornado.
+
+**Três defeitos meus, todos apanhados por falsificação e nenhum escondido.**
+
+1. **O acumulador contava reivindicações, não subscrições.** `reivindicar_subscricao()` incrementava `subscricoes_ipc`, portanto cada tentativa falhada contava como subscrição, e um console contra um daemon ausente reportava subscrições que nunca existiram. Um teste da F5 apanhou-o. Passou a contar só depois de o `subscribe` ser aceite.
+2. **O medidor dizia "viva" antes de haver fluxo** — e isto produziu um **teste intermitente**, que só apareceu sob a carga do workspace inteiro. Entre reivindicar e o daemon aceitar há uma janela; quem observasse `subscricao_viva()` e difundisse nessa janela **perdia o evento**. Separei as duas coisas: `reivindicada` (privada, exclusão) e `estabelecida` (o medidor público). O teste estrutural passou a afirmar exatamente essa distinção.
+3. **O BUG B não foi apanhado à primeira** — falso-verde. O teste media a linha de base **depois** de abrir os browsers, portanto as subscrições que eles criassem ficavam *dentro* da base. Corrigido para medir antes; agora dois testes o apanham (`1 -> 5` e 6 browsers → 6 subscrições). É KB-012 no meu próprio teste, encontrado ao falsificar.
+
+**Um flake pré-existente, encontrado e corrigido.** `subscritor_morto_e_podado` (`led-daemon-bin/tests/ipc.rs`) reprovava em **3 de 5** execuções **isoladas** — usava `yield_now()` como se fosse sincronização, quando a poda depende de a thread escritora do subscritor notar o socket fechado e sair. Verifiquei que **não** foi esta fatia a causá-lo (`broadcast`, `subs` e o próprio teste sem diff meu) e corrigi com barreira causal com prazo, a disciplina do TD-003. 6/6 estável depois.
+
+**O proxy UDS, e porque não é um mock.** Provar reconexão exige **matar** uma subscrição viva, e o `Server` do GS3 não tem `stop()` — o laço de `accept` vive na thread, e o crate é para ficar como está. O teste levanta um cano de bytes que controla: o **daemon real** continua no circuito, e o que se liga e desliga é o caminho até ele. É o equivalente, em UDS, ao `UdpChaosProxy` que o repo já usa para puxar o cabo em UDP.
+
+**Gate falsificado 4×.** **A** — exclusão mútua removida: reprova. **B** — subscrição por browser: dois testes reprovam. **C** — sem backoff: **25 761 tentativas em 1,5 s** contra ~5 com backoff, três ordens de grandeza. **D** — eventos engolidos após reconexão: reprova.
+
+**E um ajudante de teste que travava em vez de reprovar.** Com o BUG D, o teste **pendurava** >60 s em vez de falhar: o fluxo manda um comentário de vida a cada 200 ms, portanto `read_line` **nunca** expira e o ajudante girava para sempre a consumir comentários. Ganhou prazo; o BUG D passou a reprovar com mensagem em 5 s. É a segunda vez nesta linha de trabalho que encontro a mesma classe — um gate que trava perde o diagnóstico.
+
+**Invariants verified.** **1045 testes** (+9), **três execuções consecutivas** do workspace a 1045/0 — a exigência de "verde" não se cumpre com uma amostra quando acabei de perseguir dois flakes. Clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0.
+
+**Pending.** A entrega ao browser continua por **polling de 10 ms** da fila, não por condvar — suficiente, e sem medição que justifique mais. O supervisor **sai** se encontrar uma reivindicação já tomada (não é esperado: há um só) em vez de esperar; se algum dia houver dois supervisores, isso passa a ser silencioso e tem de mudar. Nada validado com hardware; GS4.5 continua BLOCKED.
+
+### 2026-08-09f — F5: o `state:""` corrigido na origem, e o SSE ligado (uma subscrição, N browsers)
+
+**Done.** Duas coisas, na ordem pedida: primeiro o defeito, depois a funcionalidade. **Nenhuma UI** — sem React, sem Vite, sem Tailwind, sem componentes, sem WebGPU. `/api/profiles` continua **501 por decisão**, e a dívida do `tsc --noEmit` continua registada; nenhuma das duas foi tocada.
+
+**PARTE A — `state:""` corrigido onde nasce, e agora é irrepresentável.** `Snapshot.state` era `String`, e `Default` dava-lhe a **string vazia**; como o laço só publica no fim do primeiro tick, havia uma janela em que o `status` respondia `"state":""` — que não é nenhum dos oito estados do ADR-0023 e cai fora da união fechada que o contrato da F3 declara ao browser. Passou a ser `led_daemon::State`. **A correção não é uma verificação, é a remoção da possibilidade** — a mesma escolha do GS3 (sem TCP, `0.0.0.0` não é representável) e do ADR-0026 (SSE em vez de WebSocket). Não mascarei no console (seria o tradutor a reinterpretar) e não pus `Idle` como remendo: `Idle` é o estado **contratual** com que `ShowRuntime::new()` começa, verificado no código, e o `Default` do tipo passa a dizer só isso.
+
+**Dois pontos de toque no repo inteiro** (`run.rs` a escrever, `server.rs` a ler) e **zero mudanças no fio**: os 15 testes de IPC e o contrato TypeScript regenerado ficam **byte-idênticos**. O `led-daemon` não foi tocado — a correção é do `led-daemon-bin`, que é quem constrói o instantâneo.
+
+**RED antes: determinístico, sem corrida.** O teste olha para o instantâneo que o `ControlPlane` publica **antes de qualquer tick** — exatamente o que a janela expunha — em vez de tentar ganhar uma corrida contra o laço. E o teste F4 que precisava de uma barreira causal para contornar o defeito **deixou de a precisar**: perguntar de imediato passou a ser a asserção mais forte, e é essa que ficou.
+
+**PARTE B — SSE: uma subscrição no daemon, N browsers.** Uma thread, uma `Ligacao`, um `subscribe`, no arranque do console. Ligar um browser **não abre nada** a montante: o `Fanout::ligar` cria só uma fila local — é por isso que N browsers e as suas reconexões não multiplicam subscrições. Difundir **nunca bloqueia**: fila cheia descarta o **mais antigo** e **conta** (`descartados`), porque uma vista incompleta que o operador não sabe que está incompleta é pior que perder eventos.
+
+**O defeito que os testes desta fatia encontraram: um browser que desaparece não era detetado.** Sem eventos a fluir, a thread de SSE nunca escrevia, portanto nunca via a ligação morta — o `Subscriber` não era podado e a lista **crescia sem limite**, o mesmo defeito que o servidor IPC do GS3 poda do seu lado. Corrigido com um **comentário SSE** periódico (`:`): mantém a ligação viva e faz a escrita falhar quando ela morre. Um comentário **não é um evento** — nada é inventado.
+
+**Gate falsificado 4×.** **A** — subscrição por browser (ligação UDS real + `subscribe` por cada um): 4 browsers → **5** subscrições, dois testes reprovam. **B** — fila cheia a **esperar** em vez de descartar: reprova. **C** — subscritor não podado ao desligar: dois testes reprovam por timeout. **D** — fanout a duplicar: reprova mostrando `[0,0,1,1,2,2,…]`.
+
+**Dois erros meus, e um deles estava no manual.** (1) Usei `timeout` para limitar uma execução — **não existe no macOS**, e o `grep` seguinte não viu nada, o que me levou a concluir que o teste *pendurava* quando na verdade o comando nunca correu. É **KB-013c**, que este repo já tem escrito, e caí nele mesmo assim. (2) O teste do browser lento passava sem exercitar o que dizia: com poucos eventos o buffer do socket absorve tudo, a fila esvazia-se sozinha e o "lento" não está lento. Só com **100×** a capacidade da fila é que a thread de SSE fica genuinamente presa a escrever. E a primeira versão media o tempo **depois** de um laço que, sob o BUG B, nunca terminava — um gate que **trava em vez de reprovar** perde o diagnóstico; a difusão passou a correr noutra thread para o teste falhar *com mensagem*.
+
+**Regressão que eu próprio causei, apanhada pelos gates.** O teste F4 `get_api_events_e_sse_e_nao_json` usava `read_to_end` — e assim que o SSE passou a manter a ligação **aberta** (que é o objetivo), ficou pendurado 60 s+. Passou a ler **só os cabeçalhos**. O teste estava a assumir que a resposta terminava.
+
+**Invariants verified.** **1036 testes** (+12), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados**; `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados. Os nove `EstadoUi` e o contrato gerado **inalterados** — a regeneração dá o mesmo ficheiro.
+
+**Pending.** O SSE **não reconecta a montante**: se o daemon cair, a thread de eventos termina e `subscricoes_ipc()` fica a 0 (que é a verdade, não uma mentira) — mas não volta sozinha quando o daemon regressa. É a próxima coisa a fazer neste caminho. A entrega ao browser é por **polling de 10 ms** da fila, não por condvar: simples e suficiente, sem medição que justifique mais. `/api/profiles` a 501 e o `tsc --noEmit` continuam abertos, ambos por decisão.
+
+### 2026-08-09e — F4: o servidor HTTP real do console (o browser ganha, pela primeira vez, um caminho até ao daemon)
+
+**Done.** `led-console-bin` deixou de ser uma tabela `const` e passou a **servir**. [ADR-0026 §9-ter](./docs/adr/0026-console-daemon-boundary.md). O caminho `Browser → HTTP → console → IPC v1 → daemon` existe e está provado **contra o daemon real e o exporter real**, sem mocks em nenhuma camada. **Nenhuma UI construída** — sem React, sem Vite, sem Tailwind, sem componentes, sem WebGPU; zero dependências de frontend entraram no repo.
+
+**Sem framework, e a razão foi medida antes de decidir.** O workspace não tem nenhum — verificado: zero `axum`/`hyper`/`actix`/`warp`/`tiny_http` — e já tem **dois** servidores HTTP escritos à mão pela mesma razão (`led_hal::serve_metrics`, `led_readmodel::serve_readmodel`). A superfície são 11 rotas sem query-strings, sem upload e sem cookies. `std` chega, e a convenção do repo é explícita quanto a dependências.
+
+**A `ROTAS` é o router.** O encaminhamento percorre a tabela que os gates estruturais já auditam; **não há um segundo sítio** onde acrescentar caminhos. Um caminho fora da tabela é 404 **antes** de se olhar para o método — porque um caminho que não existe não tem métodos.
+
+**RED antes de verde, a sério.** O servidor foi primeiro um **stub que devolvia 404 a tudo**: **10 dos 13 testes reprovaram**. Os 3 que passaram são os negativos que um stub satisfaz trivialmente (404, `/metrics` ausente, loopback) — e por isso foram re-provados depois por mutação, não aceites como cobertura.
+
+**Gate falsificado 4×.** **A** — `/metrics` servido diretamente pelo console: o teste mostra o corpo inteiro do exporter a vazar, e reprova. **B** — verificação de método desligada: dois testes de 405 reprovam. **C** — erro do IPC mascarado como `200 {"ok":true,"state":""}`: dois testes reprovam. **D** — daemon OFFLINE fabricado como `200 {"state":"idle"}`: reprova. A D existe porque reparei que a C só tocava no caminho do `pedir`; o `abrir` (que é por onde o OFFLINE passa) ficava por falsificar, e um gate por falsificar é um gate por provar.
+
+**O achado que os testes encontraram, e que não mascarei: `/api/state` pode devolver `"state":""`.** `Snapshot::default()` tem `state: String::default()`, e o laço só publica o primeiro instantâneo em `run.rs:506` — há uma janela, no arranque, em que a string vazia sai no fio. **Uma string vazia não é nenhum dos 8 estados** que o contrato da F3 gerou: o browser receberia um valor fora da união. Não o corrigi aqui e **não o escondi**: mascarar no console seria o tradutor a reinterpretar (proibido pelo §15), e pôr `Idle` por omissão seria **fabricar** um estado que o laço ainda não publicou. O teste usa uma **barreira causal** (espera a publicação, não dorme — TD-003) e o defeito fica nomeado. Escrever um teste que o afirmasse fixá-lo-ia como comportamento esperado, que é o erro que a fatia de 2026-08-07f recusou fazer.
+
+**Decisão registada, não contornada: `/api/profiles` responde 501.** O catálogo vive no `led-hardware-profile` e o console **não depende dele**. Servi-lo exigiria acrescentar um crate de domínio ao tradutor — que o gate `nenhuma_segunda_fonte_de_verdade_no_console` recusa pelo nome — ou acrescentar um comando ao **IPC v1, que está fechado**. **501 e não 404**, de propósito: a rota existe e está no contrato; o que falta é decidir por onde o catálogo chega. Um 404 diria que a rota não existe, e seria mentira.
+
+**Invariants verified.** **1024 testes** (+13), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados**; **IPC v1 não foi tocado nesta fatia**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados. `http.rs` acrescentado às `FONTES` do `surface_gate` — pelo terceiro ficheiro seguido, porque um ficheiro novo que não entre ali escapa a **todos** os gates do crate.
+
+**Pending.** **SSE é só a superfície**: `/api/events` anuncia-se `text/event-stream` e fecha; o `Fanout` existe e **não está ligado** — falta subscrição viva ao daemon e política de reconexão. Uma **ligação IPC por pedido** (`connect` + `hello`): correto e simples, sem pool, porque não há medição que justifique um. `/api/profiles` a 501, à espera de decisão. E o `"state":""` acima, que é do `led-daemon-bin` e não desta camada. A dívida do `tsc --noEmit` continua aberta, como a F3 registou.
+
+### 2026-08-09d — F3: o contrato TypeScript passa a ser gerado, e um controlo negativo prova que não diverge
+
+**Done.** [ADR-0027](./docs/adr/0027-contrato-tipos-rust-typescript.md) escrito **antes** do código. O ADR-0016 tinha tornado este gate **condição de validade** da escolha do React: em Leptos os tipos seriam partilhados por construção; em TypeScript passam a ser mantidos por gate. Ele existe agora, e foi falsificado 4×. **Nenhuma linha de UI construída** — sem React, sem Vite, sem HTTP, sem componentes.
+
+**Inspeção antes de decidir.** Verificado, não presumido: **zero** `serde`/`schemars`/`ts-rs`/`typeshare` no repo, **zero** `.ts` fora do `spike/`. `Elo::ALL` e `State::ALL` existem; **`EstadoUi` não tinha `ALL`**; e **`Rejected::code()` e `proto::code::*` não são enumeráveis** — um é `match` exaustivo, o outro `const` soltas, e ambos vivem a montante com o `led-daemon` **congelado**. Foi essa inspeção que ditou o desenho.
+
+**A decisão que sustenta tudo: dois caminhos independentes.** O **caminho A** (o gerador, `src/contract.rs`) emite dos valores Rust compilados. O **caminho B** (o gate, `tests/contract_gate.rs`) lê o **texto-fonte** e extrai os literais dos `match` exaustivos e das `const`. O gate exige que A cubra tudo o que B encontrou, **e** que o `.ts` versionado seja byte a byte o que A produz.
+
+**Porquê dois — e a prova de que era mesmo preciso.** A mutação M1 acrescentou uma variante ao `enum EstadoUi` e ao `as_str` (que o compilador obriga), **esquecendo-a no `ALL`**. O gerador não a viu, o `.ts` regenerado saiu sem ela, e `o_typescript_versionado_e_exatamente_o_gerado` **passou** — verde, e errado. Foi o caminho B que reprovou: *"o estado `STALE` existe no Rust e NAO esta no contrato TypeScript"*. Um desenho de caminho único teria deixado passar exatamente este defeito, que é o KB-012 na sua forma mais cara.
+
+**Gate falsificado 4×**, cada mutação num eixo diferente. **M1** variante ausente do `ALL` → caminho B reprova (acima). **M2** edição manual do `.ts` a inventar `"HARDWARE_OK"` — precisamente o colapso que o ADR-0026 proíbe → comparação com o gerado reprova. **M3** `staleMs: number | null` trocado por `staleMs?: number` → `os_opcionais_mantem_a_semantica_de_nulo` reprova, porque campo ausente e campo a `null` não são a mesma coisa. **M4** rota `/api/transport/blackout` inventada no cliente → *"o contrato declara a rota …, que o console NAO serve"*. Produção restaurada e verde nas quatro.
+
+**RED antes de verde, e a sério.** O `.ts` foi primeiro escrito **deliberadamente incompleto**: 7 dos 9 testes reprovaram, cada um a nomear o que faltava (`SIMULATION`, `software_sent`, `unauthenticated`, `/api/state`). Só depois foi gerado.
+
+**A regra que impede este gate de ser falso-verde:** uma extração que devolva **zero** literais é tratada como **falha**, nunca como "nada a verificar". Extrair zero e "não há divergência" seriam indistinguíveis — e este repo já foi mordido por isso (Miri N=0).
+
+**Invariants verified.** **1011 testes** (+9), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados. `contract.rs` foi acrescentado às `FONTES` do `surface_gate` — senão o ficheiro novo escapava aos gates estruturais do crate, como o `metrics.rs` quase escapou.
+
+**Pending.** O contrato cobre as **uniões de strings** que atravessam o fio; as formas de objeto (`/api/state`) só serão fixáveis quando o servidor HTTP existir e houver resposta real para descrever. O gate **não** corre `tsc`: prova que o `.ts` corresponde ao Rust, não que compila em TypeScript — para isso é preciso um toolchain Node na CI, que ainda não existe (custo já assumido no ADR-0016). Continua sem servidor HTTP, sem UI e sem qualquer dependência de frontend no repo.
+
+### 2026-08-09c — F2: ADR-0016 fechado por medição, e `/api/metrics` como proxy (ADR-0026 §9-bis)
+
+**Done.** O ADR-0016 estava bloqueado desde 2026-07-26. O anexo dizia porquê, em §3.2: *"decidir agora seria decidir contra o lado que não teve chance de ser medido"* — o Leptos não fora medido em axe, bundle nem build **porque faltavam `trunk`, `wasm-pack` e o target `wasm32`**. **Verifiquei o ambiente antes de aceitar o bloqueio, e a premissa já não valia:** `trunk 0.21.14`, `wasm32-unknown-unknown`, node v26.3.0 estão presentes. A assimetria foi **eliminada por medição**, não por argumento.
+
+**O que passou a ser MEDIDO** (spike **não** modificado — `git diff -- spike/` vazio; só artefactos gitignorados): axe no Leptos **0 violações / 35 regras** contra React **0 / 37**; bundle da app **47,82 kB** gzip (React) vs **84,72 kB** (Leptos); build morno release **4,27 s** vs **17,37 s**. Mais duas medições que decidem sozinhas um ponto de arquitetura: `led-console-bin` **não compila** para wasm32 (`mio`←`tokio`←`led-protocols`), mas o `truth.rs` isolado **compila**, em 2,46 s, com zero dependências.
+
+**Três correções ao registo, todas contra o que estava escrito.** (1) O spike afirma que *"os dois protótipos implementam a mesma tela mínima"* — **não implementam**: o React tem uma secção `Métricas` que o Leptos não tem, e é isso que explica 37 vs 35 regras, não qualidade de a11y. (2) O "0 violações" do React **só vale em regime estável**: a corrida que a própria página faz na montagem reporta **1 violação séria, `color-contrast` × 16**. As duas são verdadeiras em momentos diferentes — e a consequência é que verificação contínua de a11y tem de correr **depois do render assentar**. (3) A vantagem de partilha de tipos do Leptos é **real mas condicional**: exige extrair um crate leaf, e provei que a extração é barata em vez de a supor.
+
+**Decisão: React + TypeScript**, com uma obrigação inseparável — **nenhum enum escrito à mão** no frontend a espelhar `EstadoUi`/`Elo`; os tipos são **gerados** e um teste reprova a CI se divergirem. O precedente está em árvore (`os_limites_sao_os_do_gs3_e_nao_copias` fixa `MAX_BODY == MAX_LINE`). **A11y e WebGPU empatam medidos**, portanto não decidiram; o que decidiu foi o ecossistema para o que falta construir (tabelas virtualizadas, timeline) e o facto de o Leptos 0.6 ser major-zero. **H1–H5 deixaram de ser bloqueadores do ADR** — os dois emitem HTML equivalente com 0 violações — e passam a critério de aceitação da F3. O custo aceite e escrito: **um segundo toolchain**, e partilha de tipos **por gate** em vez de por construção.
+
+**`/api/metrics` — o achado que a F2 encontrou ao mapear o contrato de dados.** O enunciado listava `GET /metrics`, mas ele **não está no `ROTAS`**: é servido pelo `led_hal::serve_metrics`, um `TcpListener` **noutro processo**. Um browser a chamá-lo teria **duas origens**, e a segunda não atravessa o tradutor — exatamente a forma de a decisão 5 do ADR-0026 ser contornada sem ninguém reparar. Decisão do responsável: **proxy**. [ADR-0026 §9-bis](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do código.
+
+**O proxy é um cano, e há um gate que o obriga a continuar a ser.** `metrics.rs` repassa corpo e `Content-Type` **verbatim**. O teste forte não usa mocks: sobe o `led_hal::serve_metrics` **real** e compara o corpo com o `prometheus_text` **do próprio exporter** — uma comparação byte a byte que prova as quatro proibições (não recalcula, não agrega, não converte, não reescreve) de uma vez. `led-hal` entrou como **dev-dependency**; o grafo de produção não mudou.
+
+**Gate falsificado 3×**, um bug por garantia. **A** — o proxy a acrescentar `lumyx_total_agregado`: `o_corpo_atravessa_o_console_inalterado` reprova. **B** — `Content-Type` reescrito para `application/json`: `o_content_type_do_prometheus_nao_e_reescrito` reprova. **C** — a rota mudada de `/api/metrics` para `/metrics`: **dois** gates independentes reprovam. Produção restaurada e verde nos três.
+
+**Erro meu nesta rodada.** O teste de "exporter em baixo" usava `drop(srv)` e acusava o proxy de **fabricar** uma resposta. O defeito era do teste: o `MetricsServer` documenta, na própria API, que *"dropping it does NOT stop the server"* — o servidor continuava a atender e o proxy devolvia um 200 legítimo. Ler o contrato antes de o usar teria poupado o desvio; ficou escrito no teste.
+
+**Invariants verified.** **1002 testes** (+6), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados** (`git diff` vazio nos três). `show.gif` não tocado. `metrics.rs` foi acrescentado às `FONTES` do gate estrutural — senão o ficheiro novo escapava a **todos** os gates do crate.
+
+**Pending.** **Não há servidor HTTP**: `ROTAS` continua uma tabela `const` e o `buscar` do proxy ainda não tem router que o invoque — a rota está *declarada e testada*, não *servida*. O gate de tipos gerados TS↔Rust **ainda não existe** e é pré-requisito da F3, não opcional. Nenhuma UI construída, nenhuma stack instalada no repo. `led-console-model` (crate leaf) continua recomendação, não requisito.
+
+### 2026-08-09b — O limite de 64 KiB passa a ser imposto durante a leitura (e um achado do enunciado que não se confirmou)
+
+**Done.** O achado que a sessão anterior registou e não corrigiu está fechado. `handle_connection` deixou de usar `BufReader::lines()` e passa a ler com `reader.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf)`. `led-daemon` e `led-core` **intocados**; `show.gif` não foi tocado (já estava modificado na árvore desde antes desta sessão — verificado, e deixado como estava).
+
+**A medição que torna o defeito indiscutível.** O teste novo instala um **alocador global contador** e mede o pico de memória viva enquanto um cliente escreve 8 MiB sem um único `\n`. Antes da correção: **12,6 MB de crescimento** para 8 MB escritos (a duplicação do `Vec` do `read_line`) e **nenhuma resposta** — o daemon ficava à espera do `\n` que nunca vinha. Depois: crescimento abaixo de 64 KiB + 1 MiB de folga, e uma recusa `bad_request` limitada. O ficheiro tem **um só teste, de propósito**: cada ficheiro de teste é um binário próprio, e um `#[test]` vizinho a alocar em paralelo tornaria a medição ruído.
+
+**A decisão que o enunciado pedia por escrito: ao exceder o teto, fecha-se a ligação.** Não se drena. Drenar até ao próximo `\n` é ler uma quantidade que o **atacante** escolhe — a mesma negação de serviço mudada de sítio. E prosseguir sem drenar seria pior: a leitura seguinte retomaria a meio da linha gigante e o resto seria analisado como **um pedido novo**, dando ao atacante um modo de injetar pedidos que o cliente nunca escreveu. Depois de um corte a meio de linha o enquadramento não é recuperável, e fechar é a única saída limitada. Falsifiquei a decisão: trocar o `break` por `continue` reprova o teste, e a mensagem mostra o defeito real — o daemon passa a emitir **uma recusa por cada 64 KiB** que o atacante escreve, que é amplificação, não proteção.
+
+**O `+1` do `take(MAX_LINE + 1)` é o que mantém a fronteira no sítio, e quase escapou.** A primeira versão do teste de fronteira **não discriminava**: trocar `take(MAX_LINE + 1)` por `take(MAX_LINE)` deixava-o verde. A causa é que JSON malformado **também** devolve `bad_request` — o teste comparava códigos e os dois caminhos dão o mesmo código. Sem o `+1`, uma linha um byte acima do teto é **truncada** e analisada como JSON inválido: mesma resposta, motivo errado, e o resto da linha fica no socket. Corrigido para afirmar o **detalhe** (`"linha demasiado longa"`, não `"JSON inválido na posição 65536"`) e o **fecho da ligação**; assim mutado, reprova. É KB-012 apanhado no meu próprio teste, e vale mais registado que escondido.
+
+**O ponto 3 do enunciado não se confirmou — e verifiquei antes de o documentar.** A tarefa afirmava que `err_line(None, &e)` faz o cliente esperar para sempre, porque os clientes distinguem respostas de eventos pela **presença** de `id`. Mas `err_line(None, …)` não omite a chave: emite `"id":null`, e `Json::get("id")` sobre isso devolve `Some(Json::Null)` — ou seja, **presente**. Confirmei-o a correr, não a ler: `ledctl` e `led-console-bin` tratam a linha como **resposta**, e o cliente **não** bloqueia. O risco real é outro e menor — nenhum dos dois compara o `id` devolvido com o enviado, portanto uma recusa não-atribuível é aceite como resposta ao pedido em curso. Como só pode haver **uma** por ligação (o que se segue é o fecho), a atribuição está certa na prática. Escolhi **documentar o contrato** em vez de recuperar o `id`: ele pode estar para lá do byte 65 536, e adivinhá-lo de um prefixo truncado exigiria um analisador de JSON incompleto — mais superfície para um caso em que a ligação vai fechar. Um teste novo (`id_nulo_continua_a_ser_uma_resposta_e_nao_um_evento`) fixa a chave-presente-com-null e contrasta-a com um evento, para que ninguém a passe a omitir sem reparar.
+
+**Wire behaviour: a fronteira de aceitação não mudou; o que mudou foi o fecho.** Antes, `linha.len() > MAX_LINE` sobre a linha sem `\n`; agora, conteúdo ≤ 64 KiB aceite e > 64 KiB recusado — **a mesma fronteira**, e o teste anda um passo para cada lado dela para o provar. O que é novo no fio é o daemon **fechar** depois da recusa (antes continuava a ler). `docs/architecture/ipc-protocol-v1.md` foi atualizado nos três pontos: o teto é imposto durante a leitura, a ligação fecha e porquê, e a secção nova `id: null — o erro que não se consegue atribuir`.
+
+**Invariants verified.** **996 testes** no workspace (+3), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `led-daemon` e `led-core` intocados (`git diff` vazio), nenhum teste removido. Bytes inválidos em UTF-8 continuam a fechar a ligação, como `lines()` fazia — o desfecho foi preservado de propósito, não herdado por acidente. `show.gif` **não foi tocado**: aparece modificado no `git status`, mas já estava assim **antes** desta sessão (verificado no arranque).
+
+**Pending.** Continua sem `id` recuperável na recusa por comprimento (decisão documentada acima, não lacuna). Nenhum cliente **compara** o `id` devolvido com o enviado — nomeado aqui; corrigi-lo é tocar `ledctl` e `led-console-bin`, e não é esta fatia. Os testes de integração do daemon continuam a não exercitar o laço aplicador (pendente herdado da sessão anterior, não abordado).
+
 ### 2026-08-09 — F1-B: ADR-0026 + fundação do `led-console-bin` (fronteira, não UI)
 
 **Done.** A ponte console↔daemon deixou de ser uma decisão por tomar em silêncio na primeira linha de código da UI. [ADR-0026](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do crate, com 15 decisões numeradas. `led-daemon` e `led-core` **intocados** (`git diff` vazio). **Nenhuma UI construída, e nenhuma stack escolhida** — o ADR-0016 continua provisório e esta fatia não o desbloqueia.
@@ -160,7 +349,7 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 
 **29 testes** no crate (16 inline + 8 de integração contra o `Server` real + 5 estruturais). Os de integração **não têm mocks**: usam o `led_daemon_bin::server::Server` e o `run_with_control` de produção. **993 no workspace** (+29), clippy `--workspace --all-targets --all-features -D warnings` exit 0, build `--all-features` exit 0.
 
-**Achado registado, não corrigido: o limite de 64 KiB do daemon é verificado tarde demais.** `server.rs` lê a linha com `BufReader::lines()` — que cresce **sem limite** até ao `\n` — e só **depois** compara com `MAX_LINE`. O changelog do GS3 diz que o limite existe porque *"um cliente que nunca envie `\n` faz o daemon crescer sem limite"*, e contra esse cenário exato ele não protege. Não corrigi: é `led-daemon-bin`, fora do âmbito desta fatia, e a correção (ler com `take(MAX_LINE+1)`) muda o comportamento do transporte. Nomeado aqui em vez de deixado para outro teste o encontrar.
+**Achado registado, não corrigido: o limite de 64 KiB do daemon é verificado tarde demais.** `server.rs` lê a linha com `BufReader::lines()` — que cresce **sem limite** até ao `\n` — e só **depois** compara com `MAX_LINE`. O changelog do GS3 diz que o limite existe porque *"um cliente que nunca envie `\n` faz o daemon crescer sem limite"*, e contra esse cenário exato ele não protege. Não corrigi: é `led-daemon-bin`, fora do âmbito desta fatia, e a correção (ler com `take(MAX_LINE+1)`) muda o comportamento do transporte. Nomeado aqui em vez de deixado para outro teste o encontrar. **→ FECHADO em 2026-08-09b (entrada seguinte).**
 
 **Pending.** **Não há UI, e não há servidor HTTP** — `ROTAS` é uma tabela `const` para que os gates a possam percorrer antes de existir HTTP, e `Fanout` não está ligado a nada. A escolha React vs Leptos (ADR-0016) continua bloqueada por medição humana de a11y/GPU/DX. Autenticação continua vazia (ADR-0014, `ClientRegistry` declarado e sem entradas) — é o que mantém o console loopback-only. Os testes de integração do daemon (`tests/ipc.rs`) **nunca exercitam o laço aplicador**, o que este trabalho revelou por acidente e não corrigi.
 

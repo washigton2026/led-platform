@@ -1,0 +1,12 @@
+{
+  "name": "lumyx-contract-gate",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Gate de COMPILACAO do contrato gerado (ADR-0027). Nao e a UI, nao e o frontend: e o menor comando reproduzivel que prova que o TypeScript gerado compila de verdade.",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

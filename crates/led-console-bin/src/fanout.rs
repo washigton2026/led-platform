@@ -11,7 +11,7 @@
 //! está incompleta.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Quantos eventos um browser pode ficar a dever antes de começar a perder os antigos.
@@ -66,9 +66,48 @@ pub struct Fanout {
     subs: Mutex<Vec<Arc<Subscriber>>>,
     proximo_id: AtomicU64,
     capacidade: usize,
-    /// Quantas vezes o console subscreveu no daemon. **Tem de ser 1**, independentemente do
-    /// número de browsers — é o que o teste discriminante afirma.
+    /// Quantas vezes o console subscreveu no daemon **desde sempre**. Cumulativo: numa
+    /// reconexão legítima cresce, porque houve de facto uma subscrição nova.
     subscricoes_ipc: AtomicU64,
+    /// A **reivindicação**: alguém detém o direito de ser o subscritor. Privada de propósito
+    /// — serve a exclusão mútua, e não é o que o mundo lá fora quer saber.
+    reivindicada: AtomicBool,
+    /// A subscrição está **estabelecida** (o `subscribe` foi aceite)? É este o medidor
+    /// público.
+    ///
+    /// Os dois não são o mesmo, e confundi-los custou um teste intermitente: entre
+    /// reivindicar e o daemon aceitar há uma janela, e durante ela dizer "viva" é dizer que
+    /// há um fluxo que ainda não existe. Quem observar `subscricao_viva()` e difundir um
+    /// evento nessa janela perde-o.
+    estabelecida: AtomicBool,
+    /// Tentativas de ligação, com ou sem sucesso. Torna o backoff **observável**.
+    tentativas: AtomicU64,
+}
+
+/// A prova de posse da subscrição upstream. Enquanto existir, `subscricao_viva()` é `true`.
+///
+/// O `Drop` liberta — e é isso que faz o invariante sobreviver a `break`, a `?` e a `panic!`.
+#[derive(Debug)]
+pub struct GuardaSubscricao<'a> {
+    fanout: &'a Fanout,
+}
+
+impl GuardaSubscricao<'_> {
+    /// O daemon **aceitou** o `subscribe`. Só a partir daqui existe fluxo, e só a partir
+    /// daqui `subscricao_viva()` diz `true`.
+    pub fn estabelecida(&self) {
+        self.fanout.subscricoes_ipc.fetch_add(1, Ordering::Relaxed);
+        self.fanout.estabelecida.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for GuardaSubscricao<'_> {
+    fn drop(&mut self) {
+        // A ordem importa: primeiro deixa de haver fluxo, só depois se abre a porta a outro
+        // subscritor. Ao contrário, haveria um instante em que dois se julgariam vivos.
+        self.fanout.estabelecida.store(false, Ordering::Release);
+        self.fanout.reivindicada.store(false, Ordering::Release);
+    }
 }
 
 impl Fanout {
@@ -80,15 +119,67 @@ impl Fanout {
         Self { capacidade: capacidade.max(1), ..Default::default() }
     }
 
-    /// Regista que o console abriu a sua (única) subscrição no daemon.
+    /// Regista que uma subscrição foi **efetivamente estabelecida** — depois de o
+    /// `subscribe` ter sido aceite, nunca antes.
     ///
-    /// Chamado **uma vez**, na ligação de eventos — nunca por browser.
+    /// A distinção não é cosmética: contar no momento em que a subscrição é *reivindicada*
+    /// faria cada tentativa falhada contar como subscrição, e um console contra um daemon
+    /// ausente reportaria subscrições que nunca existiram. Uma reivindicação não é uma
+    /// subscrição — foi um teste da F5 que apanhou exatamente isso.
+    ///
+    /// Chamado só pelo supervisor — nunca por browser.
     pub fn marcar_subscricao_ipc(&self) {
         self.subscricoes_ipc.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Quantas subscrições houve **desde sempre**. É **cumulativo**, não um medidor: numa
+    /// reconexão legítima cresce, porque houve de facto uma subscrição nova.
+    ///
+    /// Para saber se existe uma **agora**, use [`Fanout::subscricao_viva`]. Confundir os dois
+    /// é fácil e caro, e foi por isso que este parágrafo existe.
     pub fn subscricoes_ipc(&self) -> u64 {
         self.subscricoes_ipc.load(Ordering::Relaxed)
+    }
+
+    /// **Existe uma subscrição upstream neste momento?** `false` enquanto o daemon está em
+    /// baixo — que é a verdade, e não um zero fabricado.
+    pub fn subscricao_viva(&self) -> bool {
+        self.estabelecida.load(Ordering::Acquire)
+    }
+
+    /// `1` se existe subscrição upstream agora, `0` se não. É o **medidor** em forma de
+    /// número, para os testes poderem afirmar "nunca passa de um" sem traduzir booleanos.
+    ///
+    /// Não pode devolver 2: o valor vem de um `bool`, e é isso que torna o invariante uma
+    /// propriedade do **tipo** em vez de uma esperança.
+    pub fn subscricoes_simultaneas(&self) -> u64 {
+        u64::from(self.subscricao_viva())
+    }
+
+    /// Quantas **tentativas** de ligação o supervisor já fez. Existe para o backoff ser
+    /// observável: sem isto, um busy-loop e um backoff correto são indistinguíveis de fora.
+    pub fn tentativas_de_ligacao(&self) -> u64 {
+        self.tentativas.load(Ordering::Relaxed)
+    }
+
+    /// Conta uma tentativa de ligação, tenha ela sucesso ou não.
+    pub fn marcar_tentativa(&self) {
+        self.tentativas.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// **Reivindica** a subscrição upstream. Devolve `None` se já houver uma viva.
+    ///
+    /// É isto que torna "duas subscrições ao mesmo tempo" **não representável**, em vez de
+    /// proibido por convenção: quem não conseguir a reivindicação não tem por onde abrir a
+    /// segunda. O `compare_exchange` é a exclusão; o `Drop` da guarda é a libertação.
+    ///
+    /// Mesma disciplina do resto do projeto: quando dá, garantir por construção em vez de
+    /// verificar em runtime.
+    pub fn reivindicar_subscricao(&self) -> Option<GuardaSubscricao<'_>> {
+        self.reivindicada
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| GuardaSubscricao { fanout: self })
     }
 
     /// Um browser novo liga-se. **Não** abre ligação nenhuma ao daemon.
