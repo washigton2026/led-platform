@@ -22,3 +22,11 @@ led-hal = { path = "../led-hal" }
 [lib]
 name = "led_console_bin"
 path = "src/lib.rs"
+
+# O processo do console (ADR-0028 D6). O nome do binario segue a convencao do
+# `led-daemon-bin`, cujo executavel se chama `led-daemon`: o sufixo `-bin` e do crate, nao do
+# binario. Sem este processo, a garantia do ADR-0013 — "o output nao partilha processo de
+# falha com a UI" — nao chega a ser exercida, porque nao ha processo nenhum.
+[[bin]]
+name = "led-console"
+path = "src/main.rs"
