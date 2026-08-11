@@ -33,7 +33,12 @@ recuperada do changelog.
 | [0020](0020-whitemode-subtrativo.md) | `WhiteMode::MinSubtract`: derivação subtrativa do branco (RGBW deixa de somar ~4x de corrente) | aceito | 2026-08-02 |
 | [0021](0021-efeitos-funcoes-puras-estado-derivado.md) | Efeito é função pura de `(tempo, posição, índice)`; aleatoriedade é hash, nunca fluxo; estado é derivado, nunca armazenado | aceito | 2026-08-03 |
 | [0022](0022-wearable-playback-autonomo-sync-deterministico.md) | Traje de LED: playback autônomo + sincronização por relógio comum (o traje é *player*, não *device*); ADR-0005 intacto | aceito | 2026-08-03 |
+| [0023](0023-superficie-de-transporte-do-engine.md) | Superfície de transporte do engine (estado de show em runtime) | aceito | 2026-08-05 |
+| [0024](0024-fronteira-de-validacao-do-hardwareprofile.md) | A fronteira de validação do `HardwareProfile` | aceito | 2026-08-07 |
+| [0025](0025-refresh-hz-e-a-cadencia-pedida.md) | `refresh_hz` é um limite, e o daemon recusa ultrapassá-lo | aceito | 2026-08-07 |
+| [0026](0026-console-daemon-boundary.md) | A fronteira console↔daemon: o console é cliente do IPC v1, e traduz sem interpretar | aceito | 2026-08-07 |
 | [0027](0027-contrato-tipos-rust-typescript.md) | O contrato TypeScript é **gerado** do Rust; dois caminhos independentes provam que não divergiu | aceito | 2026-08-09 |
+| [0028](0028-web-platform-topology-and-state-boundary.md) | Topologia da Web Platform (`console-web/`) e a **fronteira de estado** que ela não pode atravessar | aceito | 2026-08-10 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma
