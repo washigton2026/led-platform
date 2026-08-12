@@ -39,6 +39,56 @@ function pareceErro(x: unknown): x is CorpoDeErro {
 }
 
 /**
+ * Um evento tal como chegou — **sem interpretação**.
+ *
+ * O `Evento` do contrato declara `payload: unknown`, e é honesto: o payload tem sete
+ * formas (`transitioned`, `show_loaded`, `show_unloaded`, `position_changed`,
+ * `reached_end`, `faulted`, `fault_cleared`), todas produzidas por `event_to_json` no
+ * daemon — mas **nenhuma está tipada no contrato**.
+ *
+ * Enquanto não estiver, esta UI mostra a linha **crua**. Não inventa campos, não adivinha
+ * formas, e não escreve à mão o que o gerador ainda não emite. Tipar o payload é a fatia
+ * seguinte, e segue o mesmo caminho do `EstadoDoDaemon`: Rust → contrato gerado → frontend.
+ */
+export interface EventoCru {
+  /** Monotónico, só para dar ordem estável na lista. Não vem do backend. */
+  readonly seq: number;
+  /** O JSON do `payload`, tal como veio no fio. */
+  readonly linha: string;
+}
+
+/**
+ * `GET /api/events` — o fluxo SSE.
+ *
+ * **Uma ligação por browser, e o console faz o fan-out** a partir de uma única subscrição
+ * no daemon (ADR-0026 §4). Reconectar aqui **não** abre nada a montante: o `EventSource`
+ * religa-se sozinho, e o supervisor do console mantém a sua subscrição independente disso.
+ *
+ * Devolve a função de cancelamento. Sem ela, uma tela que desmonta deixaria a ligação viva.
+ */
+export function subscreverEventos(
+  aoEvento: (e: EventoCru) => void,
+  aoLigacao: (ligado: boolean) => void,
+): () => void {
+  let seq = 0;
+  const fonte = new EventSource("/api/events");
+
+  fonte.onopen = () => aoLigacao(true);
+
+  // O `EventSource` religa-se sozinho; `onerror` é o sinal de que está em baixo AGORA.
+  // Não o tratamos como fim — tratá-lo assim faria a UI dizer "offline" para sempre depois
+  // de um soluço de rede.
+  fonte.onerror = () => aoLigacao(false);
+
+  fonte.onmessage = (e: MessageEvent<string>) => {
+    seq += 1;
+    aoEvento({ seq, linha: e.data });
+  };
+
+  return () => fonte.close();
+}
+
+/**
  * `GET /api/state`.
  *
  * **Nunca inventa um estado.** Se o daemon não responder, o console devolve 503 com

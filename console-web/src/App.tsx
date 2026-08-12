@@ -11,15 +11,33 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
-import { lerEstado, type EstadoDoDaemon, type Ligacao } from "./transport/api";
+import {
+  lerEstado,
+  subscreverEventos,
+  type EstadoDoDaemon,
+  type EventoCru,
+  type Ligacao,
+} from "./transport/api";
 
-/** Cadência do polling. SSE (`/api/events`) é Phase 3 — aqui ainda não. */
+/**
+ * Cadência do polling do **estado**.
+ *
+ * O SSE traz os eventos, mas **não** traz o estado: o `status` é um snapshot que se
+ * consulta, e os eventos são transições que se recebem. São coisas diferentes, e derivar
+ * o estado a partir dos eventos seria reconstruir a máquina do ADR-0023 no browser —
+ * exactamente a segunda fonte de verdade que o ADR-0026 §15 proíbe.
+ */
 const INTERVALO_MS = 1000;
+
+/** Quantos eventos manter à vista. O fluxo é infinito; a lista não pode ser. */
+const EVENTOS_VISIVEIS = 12;
 
 export function App() {
   // `null` = ainda não perguntámos. **Não é** offline, e não é ok: é ausência de
   // resposta, e o ecrã di-lo em vez de escolher um dos dois.
   const [ligacao, setLigacao] = useState<Ligacao | null>(null);
+  const [eventos, setEventos] = useState<readonly EventoCru[]>([]);
+  const [fluxo, setFluxo] = useState<boolean | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -34,6 +52,15 @@ export function App() {
       clearInterval(t);
     };
   }, []);
+
+  useEffect(
+    () =>
+      subscreverEventos(
+        (e) => setEventos((anteriores) => [e, ...anteriores].slice(0, EVENTOS_VISIVEIS)),
+        setFluxo,
+      ),
+    [],
+  );
 
   return (
     <main style={estilos.pagina}>
@@ -56,7 +83,50 @@ export function App() {
       ) : ligacao?.tipo === "offline" ? (
         <Indisponivel code={ligacao.code} detail={ligacao.detail} />
       ) : null}
+
+      <hr style={estilos.regua} />
+      <Eventos eventos={eventos} fluxo={fluxo} />
     </main>
+  );
+}
+
+/**
+ * O registo de eventos, **cru**.
+ *
+ * Mostra a linha tal como o daemon a escreveu. Não há ícones por tipo, nem cores por
+ * gravidade, nem tradução de `transitioned` para prosa: o payload não está tipado no
+ * contrato, e interpretá-lo aqui seria adivinhar a forma. Quando o contrato o descrever,
+ * isto ganha estrutura — e não antes.
+ */
+function Eventos({
+  eventos,
+  fluxo,
+}: {
+  eventos: readonly EventoCru[];
+  fluxo: boolean | null;
+}) {
+  return (
+    <section aria-labelledby="h-eventos">
+      <h2 id="h-eventos" style={estilos.seccao}>
+        EVENTS
+      </h2>
+      <p style={estilos.linha} role="status" aria-live="polite">
+        {fluxo === null ? "○ …" : fluxo ? "● Streaming" : "● Stream down"}
+      </p>
+      {eventos.length === 0 ? (
+        // Silêncio é silêncio. Um daemon parado não emite transições, e dizer isso é mais
+        // honesto do que uma lista vazia sem explicação.
+        <p style={estilos.detalhe}>sem eventos desde que esta ligação abriu</p>
+      ) : (
+        <ol style={estilos.eventos}>
+          {eventos.map((e) => (
+            <li key={e.seq} style={estilos.evento}>
+              {e.linha}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 
@@ -115,4 +185,12 @@ const estilos = {
   valor: { margin: 0, fontVariantNumeric: "tabular-nums" as const },
   codigo: { margin: "0.25rem 0 0", fontWeight: 600 },
   detalhe: { margin: "0.25rem 0 0", opacity: 0.6, fontSize: "0.85rem" },
+  eventos: { margin: "0.5rem 0 0", padding: 0, listStyle: "none" as const },
+  evento: {
+    fontSize: "0.75rem",
+    padding: "0.1rem 0",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    opacity: 0.85,
+  },
 } as const;
