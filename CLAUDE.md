@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (1051 tests)
+cargo test --workspace                  # all suites (1061 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -42,7 +42,8 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
 | `led-daemon-bin` | **NEW** — o **processo** (GS2): laço, pacer injetável, journal JSONL, loader `.lumyx`. Bin `led-daemon`. **Sem saída** — nenhum frame deixa o processo | — |
 | `led-daemon` | **NEW** — a superfície de transporte do engine (ADR-0023): `State` (8 estados), `Command`, `Event`, `ShowRuntime`. **Zero dependências** — nem `led-core`; o pré-voo chega como dado | — |
-| `led-console-bin` | **NEW** — a ponte console↔daemon (ADR-0026): **cliente** do IPC v1, processo separado. Traduz transporte e **não** reimplementa domínio — um gate estrutural reprova se máquina de estados, MTU, `refresh_hz`, `Calibration` ou `HardwareProfile` aparecerem aqui. Loopback-only enquanto o ADR-0014 não der auth. **Sem UI ainda** |
+| `led-console-bin` | **NEW** — a ponte console↔daemon (ADR-0026): **cliente** do IPC v1, processo separado. Traduz transporte e **não** reimplementa domínio — um gate estrutural reprova se máquina de estados, MTU, `refresh_hz`, `Calibration` ou `HardwareProfile` aparecerem aqui. Loopback-only enquanto o ADR-0014 não der auth. **Binário `led-console`** (ADR-0028 D6): `--bind` e `--socket` obrigatórios, sem porta por omissão |
+| `console-web` *(fora de `crates/`)* | **NEW** — a Application Shell (ADR-0028 D1). React + TS + Vite, Node 22. Consome `/api/state` e **só** o que ele prova; os tipos vêm do contrato **gerado**, nunca copiados. `src/transport/api.ts` é o único sítio com `fetch`. O proxy do Vite mantém a mesma origem — o console não emite CORS, por decisão |
 | `led-bridge` | **integration seam** — the only crate that imports both `audio-core` (v1) and `led-pixel-engine` (v0). Owns: `adapt`/`adapt_into` (v1→v0 adapter), `BridgeHandle` (watch→AudioShare thread), `SimLoop` (hardware-free end-to-end live loop) | — |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
@@ -88,10 +89,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (1051 tests)
+cargo test --workspace                  # all suites (1061 tests)
 ```
 
-16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1051 tests green** · zero warnings.
+16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1061 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -134,6 +135,32 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-11 — Web Platform Phase 0 + Phase 1: o console ganha processo, e a primeira tela vê o daemon a sério
+
+**Done.** A LUMYX Web Platform saiu do papel. [ADR-0028](./docs/adr/0028-web-platform-topology-and-state-boundary.md) escrito **antes** de existir uma linha de frontend, e o índice dos ADRs — que saltava de 0022 para 0027 — passou a incluir 0023–0026 e 0028.
+
+**COMMAND 03 — o console passa a ser um processo.** O crate chamava-se `-bin` e era uma *library*: `serve()` existia e estava provado, mas **nada o lançava** senão os testes. A garantia do ADR-0013 (*"o output não partilha processo de falha com a UI"*) não chegava a ser exercida. Agora há `led-console`, e o `main` é **só o invólucro** — não abre sockets, não encaminha rotas, e **não repete a política de bind**: `serve()` já chama `bind_permitido` antes do bind, e um segundo sítio a verificar seria uma segunda regra a divergir.
+
+**`--bind` é obrigatório, e isso foi uma correcção.** A primeira versão caía em `127.0.0.1:0` — não inventava um número, mas inventava a **omissão**, e com porta 0 o endereço muda a cada arranque. A convenção do workspace é clara: `serve_metrics` e `serve_readmodel` recebem o `SocketAddr` de quem chama, `led-player --metrics` exige valor, `led-daemon --socket` exige caminho. **Nenhum servidor deste projeto escolhe sozinho onde escuta.** Falsificado: reintroduzir o `unwrap_or` reprova dois gates.
+
+**Phase 1.1 — o tipo de `/api/state`, antes do frontend e não depois.** O contrato tinha o envelope mas **nenhum tipo para o corpo do `status`**. Era o único ponto onde um atalho custava caro: sem ele, a UI escreveria a forma à mão — a segunda fonte de verdade que o ADR-0026 §15 proíbe. `EstadoDoDaemon` é **gerado**, com nomes em `snake_case` porque é o que o fio leva; renomear seria traduzir vocabulário, e o console traduz transporte.
+
+**O caminho B novo é o que torna isso verificável:** um gate extrai os campos do arm `Cmd::Status` de `server.rs` — o produtor real — e confronta-os com o TS. Sem ele, um campo novo no `Snapshot` sairia em falta e o ficheiro versionado, gerado pelo mesmo caminho, concordaria com o erro. Falsificado com um `campo_novo` no produtor.
+
+**Phase 1.2–1.4 — a Shell.** `console-web/` fora de `crates/` (ADR-0028 D1). Mostra `state`, `position_ms`, `duration_ms`, `ticks`, `show_id` e o estado da ligação. **Nada mais** — sem saúde de hardware, controlador, rede, certificação, evidência ou frescura, porque nenhum tem produtor (ADR-0028 D3). Três estados de ligação, e o terceiro importa: antes da primeira resposta mostra `○ …`, não um dos outros dois — ausência de resposta não é offline nem ok. `api.ts` é o **único** sítio com `fetch`.
+
+**Proxy em vez de CORS.** O Vite encaminha `/api`, o que mantém a mesma origem. A saída fácil seria acrescentar CORS ao console; o ADR-0028 D7 proíbe-o, e com razão — um console loopback-only que aceita qualquer origem deixa de o ser na prática.
+
+**A evidência principal, com daemon REAL e zero mocks:** daemon vivo → `200` com `ticks:10502` → a UI mostra `● Connected · IDLE · Ticks 10502 · Show none`. `kill -TERM` → `503 console.daemon_offline` → a UI mostra `● Offline` e **o código do backend verbatim**. A transição aconteceu sem recarregar a página.
+
+**O gate TS passa a correr dois projectos**, e correm **sempre os dois** — abortar no primeiro esconderia o segundo. Falsificado 3×: contrato quebrado reprova, app quebrada reprova, ambos bons passa. Node **22** normativo (`.nvmrc` + `engines`), e o `cache-dependency-path` da CI passou a cobrir **os dois** lockfiles.
+
+**Três erros meus, todos apanhados por verificação.** (1) O `preview_start` serviu o **spike React** em vez da minha app — se eu tivesse tirado o screenshot sem ler o `<title>`, teria apresentado o spike como prova da Phase 1. (2) O gate do `/api/state` extraía **4 de 5** campos, porque `show_id` está em tuplo multi-linha; foi o meu próprio `assert` de contagem que o apanhou. (3) O controlo negativo da porta reprovava por causa da **sua própria linha de asserção** — a mesma armadilha da lista de palavras proibidas do ADR-0017.
+
+**Invariants verified.** **1061 testes** (+10), clippy `--workspace --all-targets --all-features -D warnings` exit 0, build `--all-targets` exit 0, `tsc_gate.sh` exit 0 nos dois projectos. O `.ts` versionado é **byte-idêntico** ao regenerado. `led-core`, `led-daemon`, IPC v1 e `spike/` intocados.
+
+**Pending.** SSE não ligado — a Shell faz polling de 1 s; `/api/events` é Phase 3. `led-console` continua **sem tratamento de sinais** (`KNOWN GAP — NOT BLOCKING`, mesma postura do `led-daemon`). A porta 7878 é convenção do dev server, **não** norma. O `tsc_gate.sh` instala `node_modules` se faltarem — funciona, mas um gate que instala pode falhar por rede em vez de por tipos. F7.2 intocada: macOS determinístico em CI (6/6), Ubuntu não-determinístico.
 
 ### 2026-08-10c — F7.2: baseline persistido e CI real — FECHADA COM DÍVIDA NOMEADA
 
