@@ -89,12 +89,22 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: crates/led-console-bin/contract/package-lock.json
+          # OS DOIS lockfiles. Com só um, a chave de cache ignoraria mudanças nas
+          # dependências do `console-web` e o runner podia restaurar um cache desatualizado.
+          cache-dependency-path: |
+            crates/led-console-bin/contract/package-lock.json
+            console-web/package-lock.json
       # `npm ci` e não `npm install`: instala **exatamente** o lockfile e falha se ele
       # divergir do `package.json`. `install` poderia resolver uma versão diferente da
       # pinada, e o gate deixaria de correr contra o que está versionado.
-      - name: npm ci (lockfile exato)
+      - name: npm ci (lockfile exato) — contrato
         working-directory: crates/led-console-bin/contract
+        run: npm ci
+      # A app entra no MESMO job: `tsc` produz o mesmo veredito em qualquer SO, e o gate
+      # exige os dois projectos. Instalar aqui é o que torna o `tsc_gate.sh` reproduzível
+      # sem ele ter de instalar nada por sua conta durante a CI.
+      - name: npm ci (lockfile exato) — console-web
+        working-directory: console-web
         run: npm ci
       # O **mesmo** comando que corre localmente. Se a CI corresse um comando próprio, a
       # reprodução local deixaria de provar o que a CI prova.

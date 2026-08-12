@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "description": "Gate de COMPILACAO do contrato gerado (ADR-0027). Nao e a UI, nao e o frontend: e o menor comando reproduzivel que prova que o TypeScript gerado compila de verdade.",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "check": "tsc --noEmit"
   },
