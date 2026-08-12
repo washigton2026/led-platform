@@ -127,3 +127,25 @@ export interface Evento {
   readonly async: true;
   readonly payload: unknown;
 }
+
+/**
+ * O corpo de `GET /api/state` — a resposta do comando `status` do IPC v1,
+ * repassada VERBATIM pelo console.
+ *
+ * Cada campo tem produtor real: o laco publica um `Snapshot` a cada tick
+ * (`run.rs`) e `Cmd::Status` le-o (`server.rs`). Nenhum e calculado no console
+ * nem no frontend.
+ *
+ * `show_id: number | null` — `null` significa SEM SHOW CARREGADO, nunca `0`.
+ * A distincao e do Rust (`Option<u64>`) e sobrevive ate aqui de proposito.
+ */
+export interface EstadoDoDaemon {
+  readonly v: number;
+  readonly id: number;
+  readonly ok: true;
+  readonly state: DaemonState;
+  readonly position_ms: number;
+  readonly duration_ms: number;
+  readonly ticks: number;
+  readonly show_id: number | null;
+}

@@ -23,6 +23,8 @@ const TRUTH_RS: &str = include_str!("../src/truth.rs");
 const SURFACE_RS: &str = include_str!("../src/surface.rs");
 const DAEMON_RS: &str = include_str!("../../led-daemon/src/lib.rs");
 const PROTO_RS: &str = include_str!("../../led-daemon-bin/src/proto.rs");
+/// O **produtor** do corpo de `/api/state`: o arm `Cmd::Status` escreve os campos aqui.
+const SERVER_RS: &str = include_str!("../../led-daemon-bin/src/server.rs");
 /// O artefacto versionado que o frontend importa.
 const TS_VERSIONADO: &str = include_str!("../contract/lumyx-contract.generated.ts");
 
@@ -208,6 +210,83 @@ fn as_rotas_do_contrato_sao_exatamente_as_do_console() {
              um comando inexistente no cliente"
         );
     }
+}
+
+/// **Todo campo que o `status` põe no fio existe no contrato.**
+///
+/// Caminho B para o corpo de `/api/state`: extrai os nomes do arm `Cmd::Status` de
+/// `server.rs` — o **produtor real** — e confronta-os com o TypeScript gerado.
+///
+/// Sem isto, um campo acrescentado ao `Snapshot` e ao `Cmd::Status` sairia em falta do
+/// contrato, e o frontend leria `undefined` num campo que o backend enviou. O gerador
+/// sozinho não o apanharia: ele emite o que lhe escreveram, e o ficheiro versionado —
+/// gerado pelo mesmo caminho — concordaria com a omissão.
+#[test]
+fn nenhum_campo_do_status_falta_no_contrato() {
+    // O arm começa em `Cmd::Status =>` e acaba no arm seguinte.
+    let arm = SERVER_RS
+        .split("Cmd::Status =>")
+        .nth(1)
+        .expect("o arm `Cmd::Status` tem de existir em server.rs")
+        .split("Cmd::")
+        .next()
+        .expect("corpo do arm");
+
+    // Cada campo é o 1.º elemento de um tuplo, e aparece em **duas** formas no código:
+    // `("nome", valor)` numa linha, e `"nome",` sozinho quando o tuplo é multi-linha (é o
+    // caso do `show_id`). A 1.ª versão deste gate só apanhava a primeira forma e extraía 4
+    // de 5 campos — passava a verificar menos do que dizia. Foi o `assert` de contagem
+    // abaixo que o apanhou, e é por isso que ele existe.
+    let campos: Vec<String> = arm
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim().trim_start_matches('(');
+            let resto = t.strip_prefix('"')?;
+            let fim = resto.find('"')?;
+            // Só conta se for mesmo o 1.º elemento de um tuplo: `"nome",`
+            resto[fim + 1..].trim_start().starts_with(',').then(|| resto[..fim].to_string())
+        })
+        .collect();
+
+    let campos = nao_vazio(campos, "campos do Cmd::Status");
+    for c in &campos {
+        assert!(
+            TS_VERSIONADO.contains(&format!("readonly {c}:")),
+            "o campo `{c}` e escrito no fio por `Cmd::Status` e NAO esta no contrato \
+             TypeScript. Um campo que o backend envia e o contrato desconhece chega ao \
+             frontend como `undefined`."
+        );
+    }
+    assert!(
+        campos.len() >= 5,
+        "esperava pelo menos os 5 campos do snapshot, extrai {}: {campos:?}",
+        campos.len()
+    );
+
+    // E o envelope, que vem do `ok_line` e não do arm.
+    for c in ["v", "id", "ok"] {
+        assert!(
+            TS_VERSIONADO.contains(&format!("readonly {c}:")),
+            "o envelope do IPC v1 tem `{c}`, e o contrato tem de o descrever"
+        );
+    }
+}
+
+/// **`show_id` é anulável, e isso é semântica — não conveniência.**
+///
+/// O Rust tem `Option<u64>` e o fio escreve `null` quando não há show. `number | null`
+/// preserva a distinção; `number` sozinho obrigaria o frontend a inventar um sentinela, e
+/// `0` é um `ShowId` legítimo.
+#[test]
+fn show_id_nulavel_sobrevive_ate_ao_contrato() {
+    assert!(
+        SERVER_RS.contains("s.show_id.map(|i| i.to_string()).unwrap_or_else(|| \"null\".into())"),
+        "o produtor mudou a forma como escreve `show_id`; este gate ficou desatualizado"
+    );
+    assert!(
+        TS_VERSIONADO.contains("readonly show_id: number | null;"),
+        "`show_id` tem de ser `number | null` — `null` e SEM SHOW, nunca 0"
+    );
 }
 
 // ── 3. A semântica de opcional sobrevive ─────────────────────────────────────

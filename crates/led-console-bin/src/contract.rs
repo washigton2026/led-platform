@@ -213,6 +213,37 @@ pub fn gerar_typescript() -> String {
          readonly v: number;\n  \
          readonly async: true;\n  \
          readonly payload: unknown;\n\
+         }\n\n",
+    );
+
+    // ── O corpo de GET /api/state ───────────────────────────────────────────
+    //
+    // Os nomes sao os do FIO, em snake_case, porque e assim que o daemon os escreve
+    // (`Cmd::Status` em `server.rs`) e o console repassa a linha **verbatim**. Renomea-los
+    // para camelCase seria uma traducao — e o console traduz transporte, nao vocabulario
+    // (ADR-0026 §15). O `Instantaneo` usa camelCase porque NAO e um tipo de fio: e
+    // vocabulario da UI. Os dois nao seguem a mesma convencao de propósito.
+    s.push_str(
+        "/**\n \
+         * O corpo de `GET /api/state` — a resposta do comando `status` do IPC v1,\n \
+         * repassada VERBATIM pelo console.\n \
+         *\n \
+         * Cada campo tem produtor real: o laco publica um `Snapshot` a cada tick\n \
+         * (`run.rs`) e `Cmd::Status` le-o (`server.rs`). Nenhum e calculado no console\n \
+         * nem no frontend.\n \
+         *\n \
+         * `show_id: number | null` — `null` significa SEM SHOW CARREGADO, nunca `0`.\n \
+         * A distincao e do Rust (`Option<u64>`) e sobrevive ate aqui de proposito.\n \
+         */\n\
+         export interface EstadoDoDaemon {\n  \
+         readonly v: number;\n  \
+         readonly id: number;\n  \
+         readonly ok: true;\n  \
+         readonly state: DaemonState;\n  \
+         readonly position_ms: number;\n  \
+         readonly duration_ms: number;\n  \
+         readonly ticks: number;\n  \
+         readonly show_id: number | null;\n\
          }\n",
     );
 

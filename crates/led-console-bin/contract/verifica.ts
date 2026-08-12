@@ -18,6 +18,7 @@ import {
   type Elo,
   type EstadoUi,
   type Evento,
+  type EstadoDoDaemon,
   type Instantaneo,
   type Resposta,
   type Rota,
@@ -126,6 +127,76 @@ const eventoComId: Evento = { v: 1, async: true, payload: null, id: 7 };
 // @ts-expect-error — `id` é obrigatório numa resposta: omiti-lo torna-a um evento.
 const respostaSemId: Resposta = { v: 1, ok: true };
 
+// ── 4-bis. O corpo de /api/state ─────────────────────────────────────────────
+// O tipo tem de descrever o que o daemon REALMENTE envia — nem mais, nem menos.
+
+const estadoReal: EstadoDoDaemon = {
+  v: 1,
+  id: 2,
+  ok: true,
+  state: "idle",
+  position_ms: 0,
+  duration_ms: 0,
+  ticks: 0,
+  show_id: null, // sem show carregado
+};
+
+const comShow: EstadoDoDaemon = {
+  v: 1,
+  id: 3,
+  ok: true,
+  state: "playing",
+  position_ms: 1250,
+  duration_ms: 8100,
+  ticks: 50,
+  show_id: 7,
+};
+
+// @ts-expect-error — `state` é a união fechada dos oito estados do ADR-0023. Um valor
+// inventado não compila, e é isso que impede o frontend de exibir um nono estado.
+const estadoImpossivel: EstadoDoDaemon = { ...estadoReal, state: "conectado" };
+
+// @ts-expect-error — `show_id` é `number | null`. `undefined` não é `null`: "sem show" é
+// uma afirmação, "não sei" é outra, e o Rust distingue-as com `Option<u64>`.
+const showUndefined: EstadoDoDaemon = { ...estadoReal, show_id: undefined };
+
+// @ts-expect-error — omitir `ticks` torna o objecto incompleto. Se o campo fosse opcional,
+// este erro não aconteceria — é isso que esta linha prova.
+const semTicks: EstadoDoDaemon = {
+  v: 1,
+  id: 4,
+  ok: true,
+  state: "idle",
+  position_ms: 0,
+  duration_ms: 0,
+  show_id: null,
+};
+
+// @ts-expect-error — os campos são `readonly`: a UI apresenta o estado, não o edita.
+estadoReal.position_ms = 999;
+
+/** O `state` alimenta um `switch` exaustivo — o mesmo alarme dos outros enums. */
+function descreve(e: EstadoDoDaemon): string {
+  switch (e.state) {
+    case "idle":
+      return "sem show";
+    case "loaded":
+      return "carregado";
+    case "ready":
+      return "pronto";
+    case "playing":
+      return "a tocar";
+    case "paused":
+      return "em pausa";
+    case "stopped":
+      return "parado";
+    case "finished":
+      return "terminado";
+    case "error":
+      return "em falha";
+  }
+}
+
 // ── 5. Os dados gerados são usáveis, e imutáveis ─────────────────────────────
 
 const todos: readonly EstadoUi[] = ESTADOS_UI;
@@ -158,5 +229,7 @@ export const prova = {
   respostaSemId,
   rotulos: [rotulo("PASS"), rotuloElo("led_verified")],
   aprovaPass: aprova("PASS"),
+  estados: [estadoReal, comShow, estadoImpossivel, showUndefined, semTicks],
+  descricao: descreve(estadoReal),
   contagens: [todos.length, aprovados.length, elos.length, estadosDaemon.length, rotas.length],
 };
