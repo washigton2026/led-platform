@@ -16,6 +16,7 @@ import {
   subscreverEventos,
   type EstadoDoDaemon,
   type EventoCru,
+  type EventoPayload,
   type Ligacao,
 } from "./transport/api";
 
@@ -91,12 +92,10 @@ export function App() {
 }
 
 /**
- * O registo de eventos, **cru**.
+ * O registo de eventos.
  *
- * Mostra a linha tal como o daemon a escreveu. Não há ícones por tipo, nem cores por
- * gravidade, nem tradução de `transitioned` para prosa: o payload não está tipado no
- * contrato, e interpretá-lo aqui seria adivinhar a forma. Quando o contrato o descrever,
- * isto ganha estrutura — e não antes.
+ * O payload é agora **tipado pelo contrato gerado**, e por isso pode ser lido em vez de
+ * despejado. Um evento que não analise mostra a linha crua — não se deita fora.
  */
 function Eventos({
   eventos,
@@ -121,13 +120,47 @@ function Eventos({
         <ol style={estilos.eventos}>
           {eventos.map((e) => (
             <li key={e.seq} style={estilos.evento}>
-              {e.linha}
+              {e.payload === null ? (
+                // Ilegível: mostra-se o que veio, sem fingir que se entendeu.
+                <span style={estilos.detalhe}>{e.linha}</span>
+              ) : (
+                <>
+                  <span style={estilos.instante}>{e.payload.t_ms}</span>
+                  <span>{descreveEvento(e.payload)}</span>
+                </>
+              )}
             </li>
           ))}
         </ol>
       )}
     </section>
   );
+}
+
+/**
+ * Traduz um evento para uma linha legível.
+ *
+ * `switch` exaustivo **sem `default`**: se o daemon ganhar uma forma nova e o contrato for
+ * regenerado, esta função deixa de compilar. É esse o alarme — obriga alguém a decidir o
+ * que mostrar, em vez de o evento cair num ramo genérico e desaparecer do ecrã.
+ */
+function descreveEvento(p: EventoPayload): string {
+  switch (p.event) {
+    case "transitioned":
+      return `${p.from} → ${p.to}`;
+    case "show_loaded":
+      return `show ${p.show_id} carregado`;
+    case "show_unloaded":
+      return `show ${p.show_id} descarregado`;
+    case "position_changed":
+      return `posição ${p.ms} ms (${p.cause})`;
+    case "reached_end":
+      return "fim do show";
+    case "faulted":
+      return `falha: ${p.code}`;
+    case "fault_cleared":
+      return "falha resolvida";
+  }
 }
 
 function Daemon({ estado }: { estado: EstadoDoDaemon }) {
@@ -186,6 +219,7 @@ const estilos = {
   codigo: { margin: "0.25rem 0 0", fontWeight: 600 },
   detalhe: { margin: "0.25rem 0 0", opacity: 0.6, fontSize: "0.85rem" },
   eventos: { margin: "0.5rem 0 0", padding: 0, listStyle: "none" as const },
+  instante: { opacity: 0.45, marginRight: "0.6rem", fontVariantNumeric: "tabular-nums" as const },
   evento: {
     fontSize: "0.75rem",
     padding: "0.1rem 0",

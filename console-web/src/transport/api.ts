@@ -11,10 +11,12 @@
 import type {
   CodigoErro,
   EstadoDoDaemon,
+  EventoPayload,
+  EventoTipado,
 } from "../../../crates/led-console-bin/contract/lumyx-contract.generated";
 
-/** Reexportado do contrato **gerado** — nunca redeclarado. */
-export type { EstadoDoDaemon };
+/** Reexportados do contrato **gerado** — nunca redeclarados. */
+export type { EstadoDoDaemon, EventoPayload };
 
 /**
  * O que a UI sabe sobre a ligação. **Dois estados, e nenhum inventado.**
@@ -39,21 +41,22 @@ function pareceErro(x: unknown): x is CorpoDeErro {
 }
 
 /**
- * Um evento tal como chegou — **sem interpretação**.
+ * Um evento recebido, com o payload **tipado pelo contrato gerado**.
  *
- * O `Evento` do contrato declara `payload: unknown`, e é honesto: o payload tem sete
- * formas (`transitioned`, `show_loaded`, `show_unloaded`, `position_changed`,
- * `reached_end`, `faulted`, `fault_cleared`), todas produzidas por `event_to_json` no
- * daemon — mas **nenhuma está tipada no contrato**.
+ * As sete formas (`transitioned`, `show_loaded`, `show_unloaded`, `position_changed`,
+ * `reached_end`, `faulted`, `fault_cleared`) são uma união discriminada por `event`, gerada
+ * a partir de `event_to_json` — o produtor real — e verificada por um gate que reprova se
+ * o daemon emitir uma forma que o contrato desconhece.
  *
- * Enquanto não estiver, esta UI mostra a linha **crua**. Não inventa campos, não adivinha
- * formas, e não escreve à mão o que o gerador ainda não emite. Tipar o payload é a fatia
- * seguinte, e segue o mesmo caminho do `EstadoDoDaemon`: Rust → contrato gerado → frontend.
+ * A linha crua fica **sempre**: se o JSON não analisar, é ela que se mostra. Um evento
+ * ilegível é informação; escondê-lo não é.
  */
 export interface EventoCru {
-  /** Monotónico, só para dar ordem estável na lista. Não vem do backend. */
+  /** Monotónico, só para dar ordem estável na lista. **Não vem do backend.** */
   readonly seq: number;
-  /** O JSON do `payload`, tal como veio no fio. */
+  /** O payload **tipado**, quando a linha é analisável. */
+  readonly payload: EventoPayload | null;
+  /** A linha crua. Fica sempre — é o que se mostra quando o payload não analisa. */
   readonly linha: string;
 }
 
@@ -82,7 +85,19 @@ export function subscreverEventos(
 
   fonte.onmessage = (e: MessageEvent<string>) => {
     seq += 1;
-    aoEvento({ seq, linha: e.data });
+    // A linha crua fica SEMPRE. Se o JSON não analisar, mostra-se o que veio em vez de
+    // deitar fora o evento: um evento ilegível é informação, e escondê-lo não é.
+    let payload: EventoPayload | null = null;
+    try {
+      const env = JSON.parse(e.data) as EventoTipado;
+      // `payload` vem do backend e o contrato descreve-o; a asserção é o limite da
+      // fronteira, não uma invenção — a alternativa seria validar aqui a forma que o
+      // gerador já garante, e isso seria a segunda fonte de verdade.
+      payload = env.payload ?? null;
+    } catch {
+      payload = null;
+    }
+    aoEvento({ seq, payload, linha: e.data });
   };
 
   return () => fonte.close();

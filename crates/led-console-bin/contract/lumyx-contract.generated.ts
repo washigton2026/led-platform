@@ -128,6 +128,45 @@ export interface Evento {
   readonly payload: unknown;
 }
 
+/** Porque a posicao mudou. `pause` e `tick` sao ambos `advanced` (ADR-0023 F2). */
+export type CausaDePosicao =
+  | "advanced"
+  | "sought"
+  | "reset";
+
+/** Os codigos de falha do runtime. */
+export type CodigoDeFalha =
+  | "device_lost"
+  | "source_failed"
+  | "policy_violation"
+  | "output_stalled";
+
+/**
+ * O `payload` de um evento SSE — as SETE formas que `event_to_json` produz.
+ *
+ * Uniao DISCRIMINADA por `event`: um `switch` sobre esse campo estreita o tipo, e
+ * o compilador obriga a tratar todas. Uma forma nova no daemon deixa o `switch`
+ * incompleto e o frontend nao compila — que e exactamente o efeito desejado.
+ *
+ * `t_ms` e o instante do DAEMON, nao do browser: dois relogios diferentes, e este
+ * e o que ordena os eventos entre si.
+ */
+export type EventoPayload =
+  | { readonly t_ms: number; readonly event: "transitioned"; readonly from: DaemonState; readonly to: DaemonState }
+  | { readonly t_ms: number; readonly event: "show_loaded"; readonly show_id: number }
+  | { readonly t_ms: number; readonly event: "show_unloaded"; readonly show_id: number }
+  | { readonly t_ms: number; readonly event: "position_changed"; readonly ms: number; readonly cause: CausaDePosicao }
+  | { readonly t_ms: number; readonly event: "reached_end" }
+  | { readonly t_ms: number; readonly event: "faulted"; readonly code: CodigoDeFalha }
+  | { readonly t_ms: number; readonly event: "fault_cleared" };
+
+/** Um evento SSE completo: o envelope do IPC v1 com o payload tipado. */
+export interface EventoTipado {
+  readonly v: number;
+  readonly async: true;
+  readonly payload: EventoPayload;
+}
+
 /**
  * O corpo de `GET /api/state` — a resposta do comando `status` do IPC v1,
  * repassada VERBATIM pelo console.

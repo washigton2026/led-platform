@@ -49,6 +49,17 @@ const CODIGOS_PROTOCOLO: &[&str] = &[
 /// Aqui não há `const` a que se agarrar: `Rejected::code()` é um `match`, e o crate está
 /// congelado. São literais — e é precisamente por isso que o caminho B os extrai do
 /// `match` da fonte e os confronta nos dois sentidos.
+/// As causas de `position_changed` (`PositionCause::as_str`, ADR-0023 F2).
+///
+/// **Três causas para quatro origens, de propósito:** `pause` e `tick` são ambos
+/// `advanced` — pausar *avança* até ao instante da pausa. Uma quarta variante descreveria o
+/// *comando*, não a *causa*.
+const CAUSAS_DE_POSICAO: &[&str] = &["advanced", "sought", "reset"];
+
+/// Os códigos de falha (`FaultCode::as_str`).
+const CODIGOS_DE_FALHA: &[&str] =
+    &["device_lost", "source_failed", "policy_violation", "output_stalled"];
+
 const CODIGOS_RUNTIME: &[&str] = &[
     "no_show_loaded",
     "show_already_loaded",
@@ -213,6 +224,50 @@ pub fn gerar_typescript() -> String {
          readonly v: number;\n  \
          readonly async: true;\n  \
          readonly payload: unknown;\n\
+         }\n\n",
+    );
+
+    // ── O payload dos eventos SSE ───────────────────────────────────────────
+    //
+    // Sete formas, todas produzidas por `event_to_json` no daemon. Cada uma discrimina-se
+    // pelo campo `event`, o que faz delas uma uniao discriminada em TypeScript: um `switch`
+    // sobre `event` estreita o tipo, e o compilador obriga a tratar as sete.
+    let causas: Vec<String> = CAUSAS_DE_POSICAO.iter().map(|c| (*c).to_string()).collect();
+    s.push_str(&uniao(
+        "CausaDePosicao",
+        "Porque a posicao mudou. `pause` e `tick` sao ambos `advanced` (ADR-0023 F2).",
+        &causas,
+    ));
+    s.push('\n');
+
+    let falhas: Vec<String> = CODIGOS_DE_FALHA.iter().map(|c| (*c).to_string()).collect();
+    s.push_str(&uniao("CodigoDeFalha", "Os codigos de falha do runtime.", &falhas));
+    s.push('\n');
+
+    s.push_str(
+        "/**\n \
+         * O `payload` de um evento SSE — as SETE formas que `event_to_json` produz.\n \
+         *\n \
+         * Uniao DISCRIMINADA por `event`: um `switch` sobre esse campo estreita o tipo, e\n \
+         * o compilador obriga a tratar todas. Uma forma nova no daemon deixa o `switch`\n \
+         * incompleto e o frontend nao compila — que e exactamente o efeito desejado.\n \
+         *\n \
+         * `t_ms` e o instante do DAEMON, nao do browser: dois relogios diferentes, e este\n \
+         * e o que ordena os eventos entre si.\n \
+         */\n\
+         export type EventoPayload =\n  \
+         | { readonly t_ms: number; readonly event: \"transitioned\"; readonly from: DaemonState; readonly to: DaemonState }\n  \
+         | { readonly t_ms: number; readonly event: \"show_loaded\"; readonly show_id: number }\n  \
+         | { readonly t_ms: number; readonly event: \"show_unloaded\"; readonly show_id: number }\n  \
+         | { readonly t_ms: number; readonly event: \"position_changed\"; readonly ms: number; readonly cause: CausaDePosicao }\n  \
+         | { readonly t_ms: number; readonly event: \"reached_end\" }\n  \
+         | { readonly t_ms: number; readonly event: \"faulted\"; readonly code: CodigoDeFalha }\n  \
+         | { readonly t_ms: number; readonly event: \"fault_cleared\" };\n\n\
+         /** Um evento SSE completo: o envelope do IPC v1 com o payload tipado. */\n\
+         export interface EventoTipado {\n  \
+         readonly v: number;\n  \
+         readonly async: true;\n  \
+         readonly payload: EventoPayload;\n\
          }\n\n",
     );
 

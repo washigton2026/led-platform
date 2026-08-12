@@ -272,6 +272,72 @@ fn nenhum_campo_do_status_falta_no_contrato() {
     }
 }
 
+/// **Toda forma de evento que o daemon emite existe no contrato.**
+///
+/// Caminho B para o SSE: extrai os literais `"event":"..."` de `event_to_json` — o produtor
+/// real — e confronta-os com a união gerada.
+///
+/// Uma forma nova no daemon que não chegue ao contrato faz o frontend cair no ramo que não
+/// existe: o `switch` compila (a união não a conhece) e o evento é **silenciosamente
+/// ignorado**. É pior que um erro, porque não aparece em lado nenhum.
+#[test]
+fn nenhuma_forma_de_evento_falta_no_contrato() {
+    const JOURNAL_RS: &str = include_str!("../../led-daemon-bin/src/journal.rs");
+
+    let corpo = JOURNAL_RS
+        .split("pub fn event_to_json")
+        .nth(1)
+        .expect("`event_to_json` tem de existir")
+        .split("\npub fn ")
+        .next()
+        .expect("corpo da funcao");
+
+    // Cada forma escreve `"event":"nome"` no seu literal de formato.
+    //
+    // O `event_to_json` usa *raw strings* (`r#"…"#`), portanto no ficheiro as aspas NAO
+    // estao escapadas. A 1.ª versao deste gate procurava `\"event\":\"` e extraia ZERO —
+    // e teria passado com um laco vazio se o `nao_vazio` nao existisse. E o KB-012 na sua
+    // forma mais barata, e foi a guarda que o apanhou.
+    let formas: Vec<String> = corpo
+        .match_indices("\"event\":\"")
+        .filter_map(|(i, m)| {
+            let resto = &corpo[i + m.len()..];
+            let fim = resto.find('"')?;
+            Some(resto[..fim].to_string())
+        })
+        .filter(|f| !f.is_empty())
+        .collect();
+
+    let formas = nao_vazio(formas, "formas de evento em event_to_json");
+    for f in &formas {
+        assert!(
+            TS_VERSIONADO.contains(&format!("event: \"{f}\"")),
+            "o evento `{f}` e emitido por `event_to_json` e NAO esta na uniao do contrato. \
+             O frontend ignora-o em silencio — nem sequer da erro."
+        );
+    }
+    assert_eq!(
+        formas.len(),
+        7,
+        "esperava as 7 formas do `Event` do ADR-0023, extrai {}: {formas:?}",
+        formas.len()
+    );
+}
+
+/// **As causas e os códigos de falha também não podem divergir.**
+#[test]
+fn causas_e_codigos_de_falha_batem_com_o_runtime() {
+    for c in nao_vazio(valores_do_match(DAEMON_RS, "PositionCause"), "PositionCause::as_str") {
+        assert!(contem(TS_VERSIONADO, &c), "a causa `{c}` existe no Rust e falta no contrato");
+    }
+    for c in nao_vazio(valores_do_match(DAEMON_RS, "FaultCode"), "FaultCode::as_str") {
+        assert!(
+            contem(TS_VERSIONADO, &c),
+            "o codigo de falha `{c}` existe no Rust e falta no contrato"
+        );
+    }
+}
+
 /// **`show_id` é anulável, e isso é semântica — não conveniência.**
 ///
 /// O Rust tem `Option<u64>` e o fio escreve `null` quando não há show. `number | null`
