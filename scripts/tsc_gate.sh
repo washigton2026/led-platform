@@ -75,10 +75,26 @@ if [ -d "$APP" ]; then
     echo "   FALHOU" >&2
     falhou=1
   fi
+
+  # O typecheck prova que os tipos batem; NAO prova que a logica faz o que diz.
+  # `descreveEvento` compila na mesma se devolver a string errada, e `interpretarErro`
+  # compila na mesma se reescrever o codigo do daemon. Sao propriedades diferentes, e
+  # por isso correm as duas.
+  if [ -d "$APP/node_modules/vitest" ]; then
+    echo "── console-web: testes"
+    if (cd "$APP" && node node_modules/vitest/vitest.mjs run --reporter=dot); then
+      echo "   OK"
+    else
+      echo "   FALHOU" >&2
+      falhou=1
+    fi
+  else
+    falhar "vitest ausente em console-web — o gate NAO salta testes."
+  fi
 fi
 
 # Os dois correm SEMPRE, mesmo que o primeiro falhe: um gate que aborta no primeiro erro
 # esconde o segundo, e quem o corre volta a correr as vezes que houver projectos.
-[ "$falhou" -eq 0 ] || falhar "o TypeScript NAO compila."
-echo "PASS: contrato e console-web compilam, e as assercoes de tipo valem."
+[ "$falhou" -eq 0 ] || falhar "o gate do TypeScript reprovou (ver acima QUAL dos passos)."
+echo "PASS: contrato e console-web compilam, os testes passam, e as assercoes de tipo valem."
 exit 0

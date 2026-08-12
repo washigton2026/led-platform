@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
+import { descreveEvento, ehProgresso } from "./eventos";
 import {
   comandar,
   lerEstado,
@@ -19,7 +20,6 @@ import {
   type ComandoTransporte,
   type EstadoDoDaemon,
   type EventoCru,
-  type EventoPayload,
   type Ligacao,
   type Resultado,
 } from "./transport/api";
@@ -36,22 +36,6 @@ const INTERVALO_MS = 1000;
 
 /** Quantas TRANSIÇÕES manter à vista. O fluxo é infinito; a lista não pode ser. */
 const EVENTOS_VISIVEIS = 12;
-
-/**
- * `position_changed` chega a cada tick (~20 ms) e afogava a lista: dez das doze linhas
- * eram posição, e as transições — o que um operador precisa de ver — saíam do ecrã em
- * segundos.
- *
- * A posição **já está** no campo `Position`, que o polling mantém actualizado. No registo,
- * cada linha dessas acrescenta ruído sem acrescentar facto.
- *
- * Por isso é **colapsada, não descartada**: guarda-se a última (com a `cause`, que o
- * `/api/state` não traz) e a **contagem** de todas. Nada fica escondido — o número diz
- * quantas houve.
- */
-function ehProgresso(p: EventoPayload | null): boolean {
-  return p?.event === "position_changed";
-}
 
 export function App() {
   // `null` = ainda não perguntámos. **Não é** offline, e não é ok: é ausência de
@@ -252,32 +236,6 @@ function Eventos({
       )}
     </section>
   );
-}
-
-/**
- * Traduz um evento para uma linha legível.
- *
- * `switch` exaustivo **sem `default`**: se o daemon ganhar uma forma nova e o contrato for
- * regenerado, esta função deixa de compilar. É esse o alarme — obriga alguém a decidir o
- * que mostrar, em vez de o evento cair num ramo genérico e desaparecer do ecrã.
- */
-function descreveEvento(p: EventoPayload): string {
-  switch (p.event) {
-    case "transitioned":
-      return `${p.from} → ${p.to}`;
-    case "show_loaded":
-      return `show ${p.show_id} carregado`;
-    case "show_unloaded":
-      return `show ${p.show_id} descarregado`;
-    case "position_changed":
-      return `posição ${p.ms} ms (${p.cause})`;
-    case "reached_end":
-      return "fim do show";
-    case "faulted":
-      return `falha: ${p.code}`;
-    case "fault_cleared":
-      return "falha resolvida";
-  }
 }
 
 function Daemon({ estado }: { estado: EstadoDoDaemon }) {

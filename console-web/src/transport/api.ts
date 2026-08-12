@@ -42,6 +42,25 @@ function pareceErro(x: unknown): x is CorpoDeErro {
 }
 
 /**
+ * Extrai `code`/`detail` de uma resposta de erro — **função pura**, para poder ser testada
+ * sem rede e sem duplos.
+ *
+ * O `code` do backend atravessa VERBATIM: o console já o preservou desde o daemon
+ * (ADR-0026 §6), e reescrevê-lo aqui apagaria a razão da falha. Só quando o corpo é
+ * ilegível é que se usa um código **do cliente**, prefixado `console-web.` para nunca se
+ * confundir com um do backend.
+ */
+export function interpretarErro(status: number, texto: string): { code: string; detail: string } {
+  try {
+    const j: unknown = JSON.parse(texto);
+    if (pareceErro(j)) return { code: j.error.code, detail: j.error.detail };
+  } catch {
+    // corpo ilegível: cai no genérico, sem inventar um código do backend
+  }
+  return { code: "console-web.bad_response", detail: `HTTP ${status}` };
+}
+
+/**
  * Um evento recebido, com o payload **tipado pelo contrato gerado**.
  *
  * As sete formas (`transitioned`, `show_loaded`, `show_unloaded`, `position_changed`,
@@ -138,12 +157,8 @@ export async function lerEstado(): Promise<Ligacao> {
   }
 
   if (!r.ok) {
-    // O código do backend atravessa VERBATIM. O console já o preservou desde o daemon
-    // (ADR-0026 §6); reescrevê-lo aqui apagaria a razão da falha.
-    if (pareceErro(corpo)) {
-      return { tipo: "offline", code: corpo.error.code, detail: corpo.error.detail };
-    }
-    return { tipo: "offline", code: "console-web.bad_response", detail: `HTTP ${r.status}` };
+    const { code, detail } = interpretarErro(r.status, JSON.stringify(corpo));
+    return { tipo: "offline", code, detail };
   }
 
   return { tipo: "dados", estado: corpo as EstadoDoDaemon };
@@ -221,13 +236,6 @@ export async function comandar(cmd: ComandoTransporte, args?: object): Promise<R
   const texto = await r.text();
   if (r.ok) return { tipo: "aceite", cmd, corpo: texto };
 
-  try {
-    const j: unknown = JSON.parse(texto);
-    if (pareceErro(j)) {
-      return { tipo: "recusado", cmd, code: j.error.code, detail: j.error.detail };
-    }
-  } catch {
-    // corpo ilegível: cai para o genérico abaixo, sem inventar um código
-  }
-  return { tipo: "recusado", cmd, code: "console-web.bad_response", detail: `HTTP ${r.status}` };
+  const { code, detail } = interpretarErro(r.status, texto);
+  return { tipo: "recusado", cmd, code, detail };
 }
