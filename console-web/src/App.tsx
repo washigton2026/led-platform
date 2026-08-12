@@ -34,8 +34,24 @@ import {
  */
 const INTERVALO_MS = 1000;
 
-/** Quantos eventos manter à vista. O fluxo é infinito; a lista não pode ser. */
+/** Quantas TRANSIÇÕES manter à vista. O fluxo é infinito; a lista não pode ser. */
 const EVENTOS_VISIVEIS = 12;
+
+/**
+ * `position_changed` chega a cada tick (~20 ms) e afogava a lista: dez das doze linhas
+ * eram posição, e as transições — o que um operador precisa de ver — saíam do ecrã em
+ * segundos.
+ *
+ * A posição **já está** no campo `Position`, que o polling mantém actualizado. No registo,
+ * cada linha dessas acrescenta ruído sem acrescentar facto.
+ *
+ * Por isso é **colapsada, não descartada**: guarda-se a última (com a `cause`, que o
+ * `/api/state` não traz) e a **contagem** de todas. Nada fica escondido — o número diz
+ * quantas houve.
+ */
+function ehProgresso(p: EventoPayload | null): boolean {
+  return p?.event === "position_changed";
+}
 
 export function App() {
   // `null` = ainda não perguntámos. **Não é** offline, e não é ok: é ausência de
@@ -60,12 +76,20 @@ export function App() {
     };
   }, []);
 
+  const [progresso, setProgresso] = useState<{
+    ultima: EventoCru | null;
+    total: number;
+  }>({ ultima: null, total: 0 });
+
   useEffect(
     () =>
-      subscreverEventos(
-        (e) => setEventos((anteriores) => [e, ...anteriores].slice(0, EVENTOS_VISIVEIS)),
-        setFluxo,
-      ),
+      subscreverEventos((e) => {
+        if (ehProgresso(e.payload)) {
+          setProgresso((a) => ({ ultima: e, total: a.total + 1 }));
+        } else {
+          setEventos((anteriores) => [e, ...anteriores].slice(0, EVENTOS_VISIVEIS));
+        }
+      }, setFluxo),
     [],
   );
 
@@ -103,7 +127,7 @@ export function App() {
       />
 
       <hr style={estilos.regua} />
-      <Eventos eventos={eventos} fluxo={fluxo} />
+      <Eventos eventos={eventos} fluxo={fluxo} progresso={progresso} />
     </main>
   );
 }
@@ -183,9 +207,11 @@ function Transporte({
 function Eventos({
   eventos,
   fluxo,
+  progresso,
 }: {
   eventos: readonly EventoCru[];
   fluxo: boolean | null;
+  progresso: { ultima: EventoCru | null; total: number };
 }) {
   return (
     <section aria-labelledby="h-eventos">
@@ -195,10 +221,18 @@ function Eventos({
       <p style={estilos.linha} role="status" aria-live="polite">
         {fluxo === null ? "○ …" : fluxo ? "● Streaming" : "● Stream down"}
       </p>
+      {/* O progresso, colapsado. A contagem existe para nada parecer escondido. */}
+      {progresso.ultima === null ? null : (
+        <p style={estilos.detalhe}>
+          <span style={estilos.instante}>{progresso.ultima.payload?.t_ms}</span>
+          {progresso.ultima.payload !== null ? descreveEvento(progresso.ultima.payload) : ""} ·{" "}
+          {progresso.total} evento{progresso.total === 1 ? "" : "s"} de posição
+        </p>
+      )}
       {eventos.length === 0 ? (
         // Silêncio é silêncio. Um daemon parado não emite transições, e dizer isso é mais
         // honesto do que uma lista vazia sem explicação.
-        <p style={estilos.detalhe}>sem eventos desde que esta ligação abriu</p>
+        <p style={estilos.detalhe}>sem transições desde que esta ligação abriu</p>
       ) : (
         <ol style={estilos.eventos}>
           {eventos.map((e) => (
