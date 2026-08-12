@@ -12,12 +12,16 @@
 
 import { useEffect, useState } from "react";
 import {
+  comandar,
   lerEstado,
   subscreverEventos,
+  TRANSPORTE,
+  type ComandoTransporte,
   type EstadoDoDaemon,
   type EventoCru,
   type EventoPayload,
   type Ligacao,
+  type Resultado,
 } from "./transport/api";
 
 /**
@@ -39,6 +43,8 @@ export function App() {
   const [ligacao, setLigacao] = useState<Ligacao | null>(null);
   const [eventos, setEventos] = useState<readonly EventoCru[]>([]);
   const [fluxo, setFluxo] = useState<boolean | null>(null);
+  const [resultado, setResultado] = useState<Resultado | null>(null);
+  const [seekMs, setSeekMs] = useState("0");
 
   useEffect(() => {
     let vivo = true;
@@ -86,8 +92,85 @@ export function App() {
       ) : null}
 
       <hr style={estilos.regua} />
+      <Transporte
+        seekMs={seekMs}
+        aoMudarSeek={setSeekMs}
+        aoComandar={(cmd) => {
+          const args = cmd === "seek" ? { to_ms: Number(seekMs) || 0 } : undefined;
+          void comandar(cmd, args).then(setResultado);
+        }}
+        resultado={resultado}
+      />
+
+      <hr style={estilos.regua} />
       <Eventos eventos={eventos} fluxo={fluxo} />
     </main>
+  );
+}
+
+/**
+ * A superfície de comando — **transporte apenas**.
+ *
+ * Os botões estão SEMPRE activos. Desactivá-los consoante o estado seria reimplementar a
+ * matriz de 80 pares do ADR-0023 no browser, e ela divergiria no dia em que a matriz
+ * mudasse. Quem decide se um comando se aplica é o daemon; o que a UI faz é **mostrar a
+ * resposta dele** — incluindo a recusa, com o código verbatim.
+ *
+ * `load` e `unload` não estão aqui: mudam o show carregado, não a posição no tempo, e
+ * pertencem à gestão de shows.
+ */
+function Transporte({
+  seekMs,
+  aoMudarSeek,
+  aoComandar,
+  resultado,
+}: {
+  seekMs: string;
+  aoMudarSeek: (v: string) => void;
+  aoComandar: (cmd: ComandoTransporte) => void;
+  resultado: Resultado | null;
+}) {
+  return (
+    <section aria-labelledby="h-transporte">
+      <h2 id="h-transporte" style={estilos.seccao}>
+        TRANSPORT
+      </h2>
+      <div style={estilos.botoes}>
+        {TRANSPORTE.map((cmd) => (
+          <button key={cmd} type="button" style={estilos.botao} onClick={() => aoComandar(cmd)}>
+            {cmd}
+          </button>
+        ))}
+        <label style={estilos.rotuloSeek}>
+          to_ms
+          <input
+            type="number"
+            min={0}
+            value={seekMs}
+            onChange={(e) => aoMudarSeek(e.target.value)}
+            style={estilos.entrada}
+          />
+        </label>
+      </div>
+      {resultado === null ? null : (
+        <p style={estilos.linha} role="status" aria-live="polite">
+          {resultado.tipo === "aceite" ? (
+            <>
+              <span style={estilos.rotulo}>{resultado.cmd}</span> aceite
+            </>
+          ) : (
+            <>
+              <span style={estilos.rotulo}>{resultado.cmd}</span> recusado —{" "}
+              {/* O código do daemon, verbatim: é ele que diz PORQUÊ. */}
+              <span style={estilos.codigo}>{resultado.code}</span>
+            </>
+          )}
+        </p>
+      )}
+      {resultado?.tipo === "recusado" ? (
+        <p style={estilos.detalhe}>{resultado.detail}</p>
+      ) : null}
+    </section>
   );
 }
 
@@ -219,6 +302,18 @@ const estilos = {
   codigo: { margin: "0.25rem 0 0", fontWeight: 600 },
   detalhe: { margin: "0.25rem 0 0", opacity: 0.6, fontSize: "0.85rem" },
   eventos: { margin: "0.5rem 0 0", padding: 0, listStyle: "none" as const },
+  botoes: { display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" as const, marginBottom: "0.6rem" },
+  botao: {
+    fontFamily: mono,
+    fontSize: "0.8rem",
+    padding: "0.25rem 0.7rem",
+    border: "1px solid currentColor",
+    background: "transparent",
+    cursor: "pointer",
+    borderRadius: 2,
+  },
+  rotuloSeek: { display: "flex", gap: "0.35rem", alignItems: "center", fontSize: "0.75rem", opacity: 0.7 },
+  entrada: { fontFamily: mono, fontSize: "0.8rem", width: "6rem", padding: "0.2rem 0.3rem" },
   instante: { opacity: 0.45, marginRight: "0.6rem", fontVariantNumeric: "tabular-nums" as const },
   evento: {
     fontSize: "0.75rem",

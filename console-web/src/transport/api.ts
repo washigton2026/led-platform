@@ -8,11 +8,12 @@
 // copiados. Uma cópia seria a segunda fonte de verdade que o ADR-0026 §15 proíbe.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type {
-  CodigoErro,
-  EstadoDoDaemon,
-  EventoPayload,
-  EventoTipado,
+import {
+  ROTAS,
+  type CodigoErro,
+  type EstadoDoDaemon,
+  type EventoPayload,
+  type EventoTipado,
 } from "../../../crates/led-console-bin/contract/lumyx-contract.generated";
 
 /** Reexportados do contrato **gerado** — nunca redeclarados. */
@@ -146,4 +147,87 @@ export async function lerEstado(): Promise<Ligacao> {
   }
 
   return { tipo: "dados", estado: corpo as EstadoDoDaemon };
+}
+
+// ── Comandos de transporte ───────────────────────────────────────────────────
+
+/**
+ * Os comandos que esta UI expõe: **transporte**, e só.
+ *
+ * A linha não é "destrutivo vs seguro" — é **mover no tempo** contra **mudar o que está
+ * carregado**. O ADR-0023 decisão 3 é explícito: `Stop` e `Pause` NÃO apagam o palco; em
+ * `paused`/`stopped` o heartbeat continua a reenviar o último quadro válido. Por isso
+ * `stop` é transporte, não destruição.
+ *
+ * `load` e `unload` mudam o show carregado, e `load` precisa de um caminho de ficheiro —
+ * uma superfície de entrada que pertence à gestão de shows, não a esta fatia.
+ */
+export const TRANSPORTE = ["play", "pause", "stop", "seek"] as const;
+export type ComandoTransporte = (typeof TRANSPORTE)[number];
+
+/**
+ * O caminho de um comando, **derivado do contrato**.
+ *
+ * Não há string de rota escrita à mão aqui: se o console mudar um caminho, o contrato é
+ * regenerado e isto acompanha. Um comando sem rota correspondente é um erro de programação,
+ * e rebenta no arranque em vez de dar 404 em produção.
+ */
+function caminhoDe(cmd: ComandoTransporte): string {
+  const sufixo = `/api/transport/${cmd}`;
+  const rota = ROTAS.find((r) => r.caminho === sufixo && r.verbo === "POST");
+  if (!rota) throw new Error(`sem rota POST para \`${cmd}\` no contrato`);
+  return rota.caminho;
+}
+
+/** O que aconteceu a um comando. O `code` de uma recusa é o do daemon, verbatim. */
+export type Resultado =
+  | { readonly tipo: "aceite"; readonly cmd: ComandoTransporte; readonly corpo: string }
+  | {
+      readonly tipo: "recusado";
+      readonly cmd: ComandoTransporte;
+      readonly code: string;
+      readonly detail: string;
+    };
+
+/**
+ * Envia um comando de transporte.
+ *
+ * **A UI não decide se o comando é válido.** Quem decide é a máquina de estados do
+ * ADR-0023, e ela tem 80 pares estado×comando. Desactivar botões consoante o estado seria
+ * reimplementar essa matriz no browser — a segunda fonte de verdade que o ADR-0026 §15
+ * proíbe, e que divergiria no dia em que a matriz mudasse.
+ *
+ * Por isso os botões estão **sempre activos**, e o que se mostra é a resposta REAL: um
+ * `play` sem show devolve `no_show_loaded`, e é isso que o operador vê.
+ */
+export async function comandar(cmd: ComandoTransporte, args?: object): Promise<Resultado> {
+  const corpo = args === undefined ? "" : JSON.stringify(args);
+  let r: Response;
+  try {
+    r = await fetch(caminhoDe(cmd), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: corpo,
+    });
+  } catch (e) {
+    return {
+      tipo: "recusado",
+      cmd,
+      code: "console-web.unreachable",
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  const texto = await r.text();
+  if (r.ok) return { tipo: "aceite", cmd, corpo: texto };
+
+  try {
+    const j: unknown = JSON.parse(texto);
+    if (pareceErro(j)) {
+      return { tipo: "recusado", cmd, code: j.error.code, detail: j.error.detail };
+    }
+  } catch {
+    // corpo ilegível: cai para o genérico abaixo, sem inventar um código
+  }
+  return { tipo: "recusado", cmd, code: "console-web.bad_response", detail: `HTTP ${r.status}` };
 }
