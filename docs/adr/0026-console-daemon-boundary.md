@@ -223,6 +223,68 @@ funcionar.
 console; declarar `led-hardware-profile` como dependência de produção; inventar um `cmd_ipc`
 que o IPC v1 não define. Cada um destes tem um teste, e dois deles foram falsificados.
 
+### 9-quinquies · O estado da subscrição upstream é **observável**, e o SSE do browser não o substitui
+
+**A regra, em duas frases.** O estado da subscrição console→daemon é observável em
+`GET /api/upstream`. O estado da ligação SSE do browser **MUST NOT** ser usado como proxy do
+estado da subscrição console→daemon.
+
+**O defeito que a obrigou a existir, observado ao vivo.** O show chegou ao fim, o daemon
+encerrou, e a interface continuou a mostrar o fluxo de eventos como estando de pé. Nada estava
+partido no browser: o `EventSource` **está** mesmo vivo, porque o console o mantém com
+comentários de keep-alive a cada 200 ms — e o keep-alive é escrito sem consultar a subscrição.
+O que morreu foi o elo a montante. A interface media *browser→console* e apresentava-o como se
+fosse *browser→daemon*.
+
+**Porque isto é da mesma família do §9.** *"`frames_sent` a crescer diz que o `sendto` local
+teve sucesso"* — e um `sendto` para um destino inexistente também tem. Aqui: *"o `onopen` do
+`EventSource` diz que a ligação ao console abriu"* — e ela abre na mesma com o daemon morto.
+Nos dois casos, o sinal mais fácil de observar é o mais **local**, e apresentá-lo como se
+fosse o elo seguinte é a mentira que este ADR existe para impedir.
+
+**Há duas ligações UDS, e elas divergem.** A decisão 3 já as separa: a de **comando**
+(`"lumyx-console"`, aberta por pedido) e a de **eventos** (`"lumyx-console-eventos"`, longa,
+uma por processo). `/api/state` mede a primeira; nada media a segunda. Durante o backoff do
+supervisor, o daemon pode estar alcançável e a subscrição não existir — e os dois indicadores
+**devem** divergir nesse instante, em vez de um colapsar o outro.
+
+**Rota própria, e não um campo em `/api/state`.** Três razões, e a terceira é a que decide.
+(1) `/api/state` é o instantâneo do **daemon**; um campo do console dentro dele seria um facto
+de uma camada no envelope de outra. (2) Com o daemon em baixo, `/api/state` devolve **503** —
+o campo desapareceria exactamente quando mais interessa. (3) O corpo de `/api/state` **não é
+construído pelo console**: é a linha do daemon repassada verbatim. Acrescentar-lhe um campo
+obrigaria o console a passar a **reescrever** essa linha, e essa propriedade vale mais do que a
+conveniência de ter tudo num sítio.
+
+**Não é um meta-evento no SSE.** O console difunde a linha do daemon **tal como veio** e nunca
+origina eventos; uma forma nova em `EventoPayload` — que é gerado do `event_to_json` do daemon
+— seria uma segunda fonte de verdade no fluxo. E tem uma falha própria: um meta-evento só
+chega se o canal funcionar, portanto **push não sabe reportar a sua própria ausência**. Com
+`GET`, um console morto não responde, e isso é a informação.
+
+**O corpo é `{"upstream": boolean}`, e mais nada.** Sem `v`, sem `ok`, sem `id`. Não é
+minimalismo: `v` é a versão do **IPC v1** e `ok` significa *"o comando IPC teve sucesso"* —
+ambos emitidos pelo daemon. Um corpo autorado pelo console que os incluísse afirmaria uma
+proveniência que não tem, que é o mesmo tipo de erro que esta secção corrige. Esta rota também
+não tem modo de falha próprio — a medição é a leitura de um `AtomicBool` local — logo não há
+corpo de erro a desenhar, e o `200` já diz que o pedido correu.
+
+**O que `upstream: true` significa, exaustivamente:** existe **agora** uma subscrição
+estabelecida entre o console e o daemon. Não significa `HEALTHY`, `STREAMING_READY`,
+`OUTPUT_OK`, `NETWORK_OK`, `HARDWARE_OK`, `LED_OK` nem `SHOW_RUNNING`. Nenhuma dessas
+conclusões é derivável daqui, e a cadeia de evidência da decisão 8 continua a valer intacta.
+
+**`null` é NOT_MEASURED.** Antes da primeira resposta não há valor, e ausência de resposta não
+é `false` — a mesma regra que o `stale_ms()` já segue ao ser `Option<u64>` em vez de fabricar
+um zero.
+
+**Fica de fora, deliberadamente:** `EstadoUi` (o ADR-0028 D3 mantém-se intacto — esta rota fala
+um booleano com produtor real, não o vocabulário de evidência sem produtor), `subscricoes_ipc`
+(é **cumulativo**, não é estado actual), `tentativas_de_ligacao` e `descartados`. Os dois
+últimos são medições reais e a sua ausência é uma lacuna nomeada, não um esquecimento:
+acrescentá-los aqui transformaria uma correcção de fronteira de verdade numa expansão de
+observabilidade, e um teste verde deixaria de dizer qual das propriedades está provada.
+
 ### 10 · Loopback-only enquanto o ADR-0014 não der auth
 
 O console **recusa bind não-loopback**, como o `led-readmodel` já faz. O `ClientRegistry` do

@@ -13,10 +13,12 @@
 
 import { useEffect, useState } from "react";
 import { descreveEvento, ehProgresso } from "./eventos";
+import { marcaDeEstado, rotulosDeFluxo } from "./ligacoes";
 import { Campo, estilos, Indicador, Seccao } from "./ui";
 import {
   comandar,
   lerEstado,
+  lerUpstream,
   subscreverEventos,
   TRANSPORTE,
   type ComandoTransporte,
@@ -45,14 +47,22 @@ export function App() {
   const [ligacao, setLigacao] = useState<Ligacao | null>(null);
   const [eventos, setEventos] = useState<readonly EventoCru[]>([]);
   const [fluxo, setFluxo] = useState<boolean | null>(null);
+  // O elo a MONTANTE, medido por `/api/upstream`. `null` = ainda não perguntámos.
+  // Vive separado do `fluxo` de propósito: são camadas diferentes e caem em momentos
+  // diferentes (ADR-0026 §9-quinquies).
+  const [upstream, setUpstream] = useState<boolean | null>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [seekMs, setSeekMs] = useState("0");
 
   useEffect(() => {
     let vivo = true;
     const perguntar = async () => {
-      const r = await lerEstado();
-      if (vivo) setLigacao(r);
+      // Os dois na mesma cadência: são leituras baratas e correlacioná-las no tempo é
+      // o que torna a divergência entre elas legível para quem olha.
+      const [r, u] = await Promise.all([lerEstado(), lerUpstream()]);
+      if (!vivo) return;
+      setLigacao(r);
+      setUpstream(u);
     };
     void perguntar();
     const t = setInterval(() => void perguntar(), INTERVALO_MS);
@@ -86,9 +96,12 @@ export function App() {
 
       <Seccao id="h-console" titulo="CONSOLE">
         <Indicador
-          estado={ligacao === null ? null : ligacao.tipo === "dados"}
-          ligado="Connected"
-          desligado="Offline"
+          camada="Console API"
+          texto={marcaDeEstado(
+            ligacao === null ? null : ligacao.tipo === "dados",
+            "Connected",
+            "Offline",
+          )}
         />
       </Seccao>
 
@@ -112,7 +125,7 @@ export function App() {
       />
 
       <hr style={estilos.regua} />
-      <Eventos eventos={eventos} fluxo={fluxo} progresso={progresso} />
+      <Eventos eventos={eventos} fluxo={fluxo} upstream={upstream} progresso={progresso} />
     </main>
   );
 }
@@ -189,15 +202,24 @@ export function Transporte({
 export function Eventos({
   eventos,
   fluxo,
+  upstream,
   progresso,
 }: {
   eventos: readonly EventoCru[];
   fluxo: boolean | null;
+  upstream: boolean | null;
   progresso: { ultima: EventoCru | null; total: number };
 }) {
+  // As DUAS entradas atravessam a mesma funcao. Derivar uma da outra ficaria visivel
+  // num so sitio, e o teste (sseAberto: true, upstream: false) reprova se acontecer.
+  const rotulos = rotulosDeFluxo(fluxo, upstream);
   return (
     <Seccao id="h-eventos" titulo="EVENTS">
-      <Indicador estado={fluxo} ligado="Streaming" desligado="Stream down" />
+      {/* Browser -> console. Fica aberta com o daemon morto: o console mantem-na viva
+          com comentarios de keep-alive. Por si so, NAO prova que chegam eventos. */}
+      <Indicador camada={rotulos.browser.camada} texto={rotulos.browser.texto} />
+      {/* Console -> daemon. E este o elo que diz se ha fluxo a montante de verdade. */}
+      <Indicador camada={rotulos.upstream.camada} texto={rotulos.upstream.texto} />
       {/* O progresso, colapsado. A contagem existe para nada parecer escondido. */}
       {progresso.ultima === null ? null : (
         <p style={estilos.detalhe}>

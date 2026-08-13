@@ -121,28 +121,25 @@ export function Seccao({
 }
 
 /**
- * Um indicador de ligação com **três** estados, e o terceiro é o que interessa.
+ * O estado de **uma** ligação — e o nome da camada que ele descreve.
  *
- * `null` é *ainda não sabemos* — não é offline e não é ok. Estava escrito duas vezes,
- * e a segunda cópia é exactamente onde um `?:` de dois ramos entraria um dia, colapsando
- * "sem resposta" em "offline". Com o tipo a ser `boolean | null`, o ramo do meio tem de
- * ser tratado.
+ * A `camada` não é decoração: é o que impede este ecrã de repetir o defeito que o
+ * ADR-0026 §9-quinquies corrigiu. Havia dois indicadores lado a lado a medir elos
+ * diferentes — *browser→console* e *console→daemon* — e nenhum dizia qual; o operador
+ * lia-os como uma cadeia contínua, e um deles estava a afirmar fluxo sobre silêncio.
+ * Com a camada escrita, nenhum indicador pode ser confundido com o vizinho.
+ *
+ * Este componente **não decide** o texto: recebe-o já feito de `ligacoes.ts`. Calcular
+ * aqui daria um segundo sítio a saber traduzir estado em rótulo, e o dia em que os dois
+ * divergissem seria invisível.
  *
  * `aria-live="polite"` porque isto muda sozinho: um leitor de ecrã tem de saber que a
  * ligação caiu sem o operador ter feito nada.
  */
-export function Indicador({
-  estado,
-  ligado,
-  desligado,
-}: {
-  estado: boolean | null;
-  ligado: string;
-  desligado: string;
-}) {
+export function Indicador({ camada, texto }: { camada: string; texto: string }) {
   return (
     <p style={estilos.linha} role="status" aria-live="polite">
-      {estado === null ? "○ …" : estado ? `● ${ligado}` : `● ${desligado}`}
+      <span style={estilos.rotulo}>{camada}</span> {texto}
     </p>
   );
 }

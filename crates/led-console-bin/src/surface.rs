@@ -53,6 +53,14 @@ pub const ROTAS: &[Rota] = &[
     },
     Rota {
         verbo: Verbo::Get,
+        caminho: "/api/upstream",
+        cmd_ipc: None,
+        razao: "estado da subscricao console->daemon (ADR-0026 §9-quinquies). NAO e o SSE do \
+                browser: o EventSource abre na mesma com o daemon morto, porque o console o \
+                mantem vivo com keep-alive. Mede o elo a montante, e so esse",
+    },
+    Rota {
+        verbo: Verbo::Get,
         caminho: "/api/profiles",
         cmd_ipc: None,
         razao: "catalogo de presets, estatico; nenhum valor fisico e recalculado aqui",

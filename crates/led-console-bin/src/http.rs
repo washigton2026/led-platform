@@ -374,7 +374,7 @@ fn atender(
         return sse(stream, fanout, stop);
     }
 
-    escrever(&mut stream, encaminhar(metodo, caminho, &corpo, cfg))
+    escrever(&mut stream, encaminhar(metodo, caminho, &corpo, cfg, fanout))
 }
 
 fn content_length(cabecalhos: &str) -> Option<usize> {
@@ -385,7 +385,13 @@ fn content_length(cabecalhos: &str) -> Option<usize> {
 }
 
 /// **O encaminhamento percorre a `ROTAS`.** Não há segunda tabela de caminhos.
-fn encaminhar(metodo: &str, caminho: &str, corpo: &str, cfg: &Config) -> Saida {
+fn encaminhar(
+    metodo: &str,
+    caminho: &str,
+    corpo: &str,
+    cfg: &Config,
+    fanout: &crate::fanout::Fanout,
+) -> Saida {
     // Sem query-string: a superfície não tem nenhuma, e aceitá-la em silêncio abriria uma
     // forma de o mesmo recurso ter dois nomes.
     let caminho = caminho.split('?').next().unwrap_or(caminho);
@@ -413,6 +419,7 @@ fn encaminhar(metodo: &str, caminho: &str, corpo: &str, cfg: &Config) -> Saida {
         "/api/state" => daemon(cfg, "status", ""),
         "/api/version" => daemon(cfg, "version", ""),
         "/api/events" => eventos(),
+        "/api/upstream" => upstream(fanout),
         "/api/metrics" => metricas(cfg),
         "/api/profiles" => perfis(),
         // Transporte: o comando é o segmento final, e vem da própria `ROTAS`.
@@ -427,6 +434,36 @@ fn encaminhar(metodo: &str, caminho: &str, corpo: &str, cfg: &Config) -> Saida {
             None => Saida::erro(501, "console.not_implemented", &format!("{caminho} sem handler")),
         },
     }
+}
+
+/// `GET /api/upstream` — **existe agora uma subscrição console→daemon?** (ADR-0026 §9-quinquies)
+///
+/// # O que esta rota mede, e o que não mede
+///
+/// Mede **um** elo: `console → daemon`, a ligação `"lumyx-console-eventos"` da decisão 3. Não
+/// mede a ligação SSE do browser, não mede se o processo do daemon está vivo, não mede o
+/// transporte do show, não mede a saída, e **nunca** diz nada sobre hardware.
+///
+/// `upstream: true` significa exatamente *"o `subscribe` foi aceite e o fluxo está de pé"* —
+/// nada mais. Não é `HEALTHY`, `STREAMING_READY` nem `OUTPUT_OK`; nenhuma dessas conclusões é
+/// derivável daqui, e a cadeia de evidência do §8 continua intacta.
+///
+/// # Porque o corpo não tem `v` nem `ok`
+///
+/// Este é o **primeiro** corpo JSON que o console autora: `/api/state` e `/api/version` são a
+/// linha do daemon repassada verbatim, e `/api/events`/`/api/metrics`/`/api/profiles` não
+/// produzem JSON de sucesso. O `v` é a versão do **IPC v1** e o `ok` significa *"o comando IPC
+/// teve sucesso"* — ambos escritos pelo daemon, em `proto.rs`. Incluí-los aqui afirmaria uma
+/// proveniência que este corpo não tem, que é a mesma classe de defeito que esta rota corrige.
+///
+/// E não há corpo de erro a desenhar: a medição é a leitura de um `AtomicBool` **local**, sem
+/// I/O e sem modo de falha próprio. Se o console responde, responde com a verdade; se não
+/// responde, isso é visível ao nível do HTTP — e é essa a razão de ser uma rota `GET` e não um
+/// evento empurrado, que só chegaria se o canal já estivesse a funcionar.
+fn upstream(fanout: &crate::fanout::Fanout) -> Saida {
+    // `subscricao_viva()`, nunca `subscricoes_ipc()`: o segundo é **cumulativo** e diria "já
+    // houve" quando a pergunta é "há agora".
+    Saida::json(200, format!(r#"{{"upstream":{}}}"#, fanout.subscricao_viva()))
 }
 
 /// Fala com o daemon e **repassa a resposta dele**.

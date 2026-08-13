@@ -12,6 +12,7 @@ import {
   ROTAS,
   type CodigoErro,
   type EstadoDoDaemon,
+  type EstadoUpstream,
   type EventoPayload,
   type EventoTipado,
 } from "../../../crates/led-console-bin/contract/lumyx-contract.generated";
@@ -162,6 +163,35 @@ export async function lerEstado(): Promise<Ligacao> {
   }
 
   return { tipo: "dados", estado: corpo as EstadoDoDaemon };
+}
+
+/**
+ * `GET /api/upstream` — **existe subscrição console→daemon agora?** (ADR-0026 §9-quinquies)
+ *
+ * Isto **não** é o estado do `EventSource`. O `subscreverEventos` acima mede
+ * *browser→console*; esta função mede *console→daemon*, que é outro elo e cai noutro
+ * momento. O console mantém o SSE vivo com keep-alive, portanto a ligação do browser
+ * continua aberta com o daemon morto — e foi assim que o ecrã chegou a afirmar fluxo
+ * sobre silêncio.
+ *
+ * Devolve `null` para **não medido**: console inalcançável ou corpo ilegível. Nunca
+ * `false`, que seria afirmar que a subscrição não existe quando o que não houve foi
+ * resposta. É a mesma distinção que o `Ligacao | null` já faz do outro lado.
+ */
+export async function lerUpstream(): Promise<boolean | null> {
+  const rota = ROTAS.find((r) => r.caminho === "/api/upstream" && r.verbo === "GET");
+  if (!rota) return null; // o contrato não declara a rota: não há nada a medir
+  try {
+    const r = await fetch(rota.caminho, { headers: { accept: "application/json" } });
+    if (!r.ok) return null;
+    // O corpo é `{upstream: boolean}` e mais nada — sem `v`/`ok`/`id`, porque não
+    // atravessa o IPC v1. A asserção é o limite da fronteira: o contrato descreve a
+    // forma, e revalidá-la aqui seria a segunda fonte de verdade do ADR-0026 §15.
+    const corpo = (await r.json()) as EstadoUpstream;
+    return typeof corpo.upstream === "boolean" ? corpo.upstream : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Comandos de transporte ───────────────────────────────────────────────────

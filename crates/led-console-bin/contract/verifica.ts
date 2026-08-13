@@ -19,6 +19,7 @@ import {
   type EstadoUi,
   type Evento,
   type EstadoDoDaemon,
+  type EstadoUpstream,
   type Instantaneo,
   type Resposta,
   type Rota,
@@ -211,6 +212,43 @@ ESTADOS_UI.push("PASS");
 // @ts-expect-error — nem de reordenar a cadeia de evidência, cuja ordem é do Rust.
 ELOS_POR_FORCA[0] = "led_verified";
 
+// ── 5-bis. `/api/upstream` — o elo console→daemon (ADR-0026 §9-quinquies) ────
+//
+// Estas asserções invertidas fixam, em compilação, o que a rota NÃO pode vir a dizer.
+// Cada `@ts-expect-error` reprova o `tsc` se o erro deixar de acontecer — ou seja, se
+// alguém alargar o tipo para caber uma destas.
+
+const upstreamVivo: EstadoUpstream = { upstream: true };
+const upstreamEmBaixo: EstadoUpstream = { upstream: false };
+
+// @ts-expect-error — `upstream` é um FACTO booleano, não um veredito. `HEALTHY` é
+// precisamente a palavra que alguém escreveria para dizer "está tudo bem", e "tudo" é
+// exatamente o que esta rota não mede: ela mede UM elo.
+const upstreamComVeredito: EstadoUpstream = { upstream: "HEALTHY" };
+
+// @ts-expect-error — `null` é NOT_MEASURED e vive no CLIENTE, antes da primeira
+// resposta. O backend nunca o emite: se responde, mediu. Aceitá-lo aqui apagaria a
+// diferença entre "ainda não perguntámos" e "perguntámos e não há".
+const upstreamNaoMedido: EstadoUpstream = { upstream: null };
+
+// @ts-expect-error — nada de campos derivados do próprio campo. `streaming` seria um
+// segundo nome para a mesma medição, e o segundo nome é por onde entra a segunda
+// semântica: um dia alguém preenche-o a partir do SSE do browser.
+const upstreamComDerivado: EstadoUpstream = { upstream: true, streaming: true };
+
+// @ts-expect-error — o SSE do browser NÃO entra neste corpo. O console não sabe (nem
+// pode saber) se o EventSource de um separador está aberto; misturar as duas camadas
+// no mesmo objecto é o defeito que o §9-quinquies existe para impedir.
+const upstreamComSse: EstadoUpstream = { upstream: true, sseAberto: true };
+
+// @ts-expect-error — sem `v`/`ok`/`id`: este corpo NÃO atravessa o IPC v1, e o `v` é a
+// versão desse protocolo. Incluí-lo afirmaria uma proveniência que o corpo não tem.
+const upstreamComEnvelopeIpc: EstadoUpstream = { v: 1, ok: true, upstream: true };
+
+// A rota existe no contrato — e existe como GET. Um POST aqui seria um comando, e esta
+// superfície é de leitura.
+const rotaUpstream = ROTAS.find((r) => r.caminho === "/api/upstream" && r.verbo === "GET");
+
 // ── 6. Consumo mínimo, para nada disto ficar "não usado" ─────────────────────
 
 export const prova = {
@@ -231,5 +269,15 @@ export const prova = {
   aprovaPass: aprova("PASS"),
   estados: [estadoReal, comShow, estadoImpossivel, showUndefined, semTicks],
   descricao: descreve(estadoReal),
+  upstream: [
+    upstreamVivo,
+    upstreamEmBaixo,
+    upstreamComVeredito,
+    upstreamNaoMedido,
+    upstreamComDerivado,
+    upstreamComSse,
+    upstreamComEnvelopeIpc,
+    rotaUpstream,
+  ],
   contagens: [todos.length, aprovados.length, elos.length, estadosDaemon.length, rotas.length],
 };

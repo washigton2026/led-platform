@@ -79,11 +79,23 @@ const CASOS: ReadonlyArray<readonly [keyof typeof ESPERADO, JSX.Element]> = [
     />,
   ],
   ["INDISPONIVEL", <Indisponivel code="console.daemon_offline" detail="/tmp/x.sock" />],
-  ["EVENTOS_VAZIO", <Eventos eventos={[]} fluxo={null} progresso={{ ultima: null, total: 0 }} />],
-  ["EVENTOS_CHEIO", <Eventos eventos={EVENTOS} fluxo={true} progresso={PROGRESSO} />],
+  // Nada medido ainda: os DOIS elos a `○ …`, e nenhum arredondado para "em baixo".
+  [
+    "EVENTOS_VAZIO",
+    <Eventos eventos={[]} fluxo={null} upstream={null} progresso={{ ultima: null, total: 0 }} />,
+  ],
+  ["EVENTOS_CHEIO", <Eventos eventos={EVENTOS} fluxo={true} upstream={true} progresso={PROGRESSO} />],
   [
     "EVENTOS_EM_BAIXO",
-    <Eventos eventos={[]} fluxo={false} progresso={{ ultima: null, total: 0 }} />,
+    <Eventos eventos={[]} fluxo={false} upstream={false} progresso={{ ultima: null, total: 0 }} />,
+  ],
+  // **O caso discriminante do F-01, congelado na marcacao.** Browser ligado, daemon
+  // morto: e a unica combinacao em que a fonte errada parece saudavel. Se alguem
+  // religar o rotulo ao `onopen`, esta marcacao muda e o teste reprova — a proteccao
+  // deixa de depender so do teste de logica.
+  [
+    "EVENTOS_UPSTREAM_MORTO",
+    <Eventos eventos={[]} fluxo={true} upstream={false} progresso={{ ultima: null, total: 0 }} />,
   ],
   [
     "TRANSPORTE",

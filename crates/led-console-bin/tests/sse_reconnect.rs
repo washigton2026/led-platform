@@ -451,3 +451,147 @@ fn depois_de_varias_falhas_fica_exatamente_uma() {
     assert_eq!(c.fanout.subscricoes_simultaneas(), 1, "exatamente uma, saudavel");
     c.stop();
 }
+
+// ── F-01: o estado da subscrição passa a ser OBSERVÁVEL ──────────────────────
+//
+// ADR-0026 §9-quinquies. O medidor `subscricao_viva()` existia, estava testado, e
+// **nenhuma rota o expunha** — o frontend só tinha o `onopen` do `EventSource`, que mede
+// *browser→console*. Esta secção prova que `/api/upstream` mede o elo certo, e que ele
+// diverge do SSE do browser exactamente quando tem de divergir.
+
+/// `GET <caminho>` no console. Devolve `(status, corpo)`.
+fn get(c: &ConsoleServer, caminho: &str) -> (u16, String) {
+    let mut s = TcpStream::connect(c.addr).expect("ligar");
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    write!(s, "GET {caminho} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+    s.flush().unwrap();
+    let mut bruto = String::new();
+    let _ = s.read_to_string(&mut bruto);
+    let status = bruto
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or_else(|| panic!("resposta sem status: {bruto:?}"));
+    let corpo = bruto.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    (status, corpo)
+}
+
+/// **CASO A — daemon vivo e subscrição viva: a rota diz `true`.**
+#[test]
+fn upstream_diz_true_quando_a_subscricao_esta_de_pe() {
+    let r = subir("up-a");
+    let p = r.proxy();
+    let c = r.console();
+    esperar(|| c.fanout.subscricao_viva(), "a subscricao tem de subir");
+
+    let (status, corpo) = get(&c, "/api/upstream");
+    assert_eq!(status, 200);
+    assert_eq!(corpo, r#"{"upstream":true}"#, "corpo minimo, sem envelope do IPC");
+
+    // O corpo NAO leva `v`/`ok`/`id`: nao atravessa o IPC v1, e afirmar essa versao
+    // seria declarar uma proveniencia que este corpo nao tem (ADR-0026 §9-quinquies).
+    for proibido in ["\"v\"", "\"ok\"", "\"id\""] {
+        assert!(!corpo.contains(proibido), "o corpo do console nao pode falar {proibido}: {corpo}");
+    }
+    drop(p);
+    c.stop();
+}
+
+/// **CASO B — O DISCRIMINANTE. Browser ligado, daemon morto.**
+///
+/// É a única combinação em que a fonte errada parece saudável: a ligação SSE do browser
+/// continua **genuinamente aberta** — o console mantém-na viva com comentários de
+/// keep-alive — enquanto a subscrição a montante já morreu. Foi exactamente isto que
+/// apareceu no ecrã a dizer `● Streaming` sobre silêncio.
+///
+/// Um teste que matasse o *browser* passaria com o defeito presente. Tem de ser o daemon
+/// a cair **com o browser vivo**.
+#[test]
+fn com_o_daemon_morto_o_sse_fica_aberto_e_o_upstream_diz_false() {
+    let r = subir("up-b");
+    let p = r.proxy();
+    let c = r.console();
+    esperar(|| c.fanout.subscricao_viva(), "subscricao inicial");
+
+    let mut b = Browser::abre(&c);
+    esperar(|| c.fanout.ligados() == 1, "browser ligado");
+    assert_eq!(get(&c, "/api/upstream").1, r#"{"upstream":true}"#);
+
+    // Puxa o cabo até ao daemon. O browser NÃO é tocado.
+    p.desligar();
+    esperar(|| !c.fanout.subscricao_viva(), "a subscricao tem de morrer com o daemon");
+
+    let (status, corpo) = get(&c, "/api/upstream");
+    assert_eq!(status, 200, "a rota responde: a medicao e local, nao depende do daemon");
+    assert_eq!(corpo, r#"{"upstream":false}"#, "sem daemon nao ha subscricao");
+
+    // **E a outra metade do achado**: a ligação do browser continua viva. É esta
+    // asserção que torna o caso discriminante — sem ela, o teste não distinguiria
+    // "o upstream caiu" de "caiu tudo", e o defeito original não seria reproduzido.
+    assert!(
+        b.proximo_dado().is_none(),
+        "nenhum evento pode chegar com o daemon morto — mas a ligacao NAO fechou"
+    );
+    assert_eq!(c.fanout.ligados(), 1, "o browser continua ligado ao console");
+
+    c.stop();
+}
+
+/// **CASO D — o daemon reinicia: `true → false → true`, sem o browser recarregar.**
+#[test]
+fn upstream_volta_a_true_quando_o_daemon_regressa() {
+    let r = subir("up-d");
+    let p = r.proxy();
+    let c = r.console();
+    esperar(|| c.fanout.subscricao_viva(), "subscricao inicial");
+    let _b = Browser::abre(&c);
+    esperar(|| c.fanout.ligados() == 1, "browser ligado");
+    assert_eq!(get(&c, "/api/upstream").1, r#"{"upstream":true}"#);
+
+    p.desligar();
+    esperar(|| !c.fanout.subscricao_viva(), "cai");
+    assert_eq!(get(&c, "/api/upstream").1, r#"{"upstream":false}"#);
+
+    let _p2 = r.proxy();
+    esperar(|| c.fanout.subscricao_viva(), "volta");
+    assert_eq!(
+        get(&c, "/api/upstream").1,
+        r#"{"upstream":true}"#,
+        "o mesmo browser ve a recuperacao sem recarregar"
+    );
+    c.stop();
+}
+
+/// **A rota reporta o AGORA, nunca o acumulado.**
+///
+/// `subscricoes_ipc()` é cumulativo — depois de uma reconexão vale 2 e **nunca desce**. Se
+/// a rota o devolvesse, responderia *"já houve"* a uma pergunta que é *"há agora"*, e um
+/// daemon morto **depois** de um ciclo pareceria vivo. É o mesmo erro que o `stale_ms()` a
+/// devolver `0` cometia, e a razão de o `fanout.rs` avisar que confundir os dois é *"fácil
+/// e caro"*.
+///
+/// O proxy nasce e morre **dentro** da volta, como no teste dos três ciclos. Guardá-lo
+/// numa variável e chamar `drop` não o desliga: o `Proxy` não tem `Drop` — quem corta o
+/// cano é o `desligar()`, e a primeira versão deste teste esperou 20 s por uma queda que
+/// nunca ia acontecer porque o proxy continuava a servir.
+#[test]
+fn upstream_reporta_o_agora_e_nao_o_acumulado() {
+    let r = subir("up-acum");
+    let c = r.console();
+
+    for volta in 0..2 {
+        let p = r.proxy();
+        esperar(|| c.fanout.subscricao_viva(), &format!("volta {volta}: subir"));
+        assert_eq!(get(&c, "/api/upstream").1, r#"{"upstream":true}"#);
+        p.desligar();
+        esperar(|| !c.fanout.subscricao_viva(), &format!("volta {volta}: cair"));
+    }
+
+    assert!(c.fanout.subscricoes_ipc() >= 2, "houve duas subscricoes ao longo do tempo");
+    assert_eq!(
+        get(&c, "/api/upstream").1,
+        r#"{"upstream":false}"#,
+        "duas subscricoes NO PASSADO nao sao uma subscricao AGORA"
+    );
+    c.stop();
+}

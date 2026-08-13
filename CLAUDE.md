@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (1061 tests)
+cargo test --workspace                  # all suites (1067 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -89,10 +89,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (1061 tests)
+cargo test --workspace                  # all suites (1067 tests)
 ```
 
-16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1061 tests green** · zero warnings.
+16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1067 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -135,6 +135,38 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-13b — F-01: o `● Streaming` mentiroso fecha — o elo a montante passa a ser observável
+
+**Done.** O achado que a Phase 2 nomeou e não corrigiu está fechado. [ADR-0026 §9-quinquies](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do código, e `GET /api/upstream` expõe o estado da subscrição console→daemon. `led-daemon`, `led-core`, `led-protocols`, `led-player` e o IPC v1 **intocados**.
+
+**O defeito, e porque era da família do §9.** O ecrã dizia `● Streaming` com o daemon morto. Nada estava partido no browser: o `EventSource` **está** mesmo vivo, porque o console o mantém com comentários de keep-alive a cada 200 ms — escritos sem consultar a subscrição. A UI media *browser→console* e apresentava-o como *browser→daemon*. É o mesmo erro que o `frames_sent` a crescer sobre um `sendto` para um IP inexistente: **o sinal mais fácil de observar é o mais local**, e apresentá-lo como o elo seguinte é a mentira que este ADR existe para impedir.
+
+**A investigação foi read-only e mediu antes de decidir.** `grep` sobre `subscricao_viva|subscricoes_ipc|subscricoes_simultaneas|tentativas_de_ligacao` deu **53 ocorrências: 51 em `tests/`, 2 em comentários, zero em handlers ou rotas**. O produtor (`GuardaSubscricao::estabelecida`) e a medição (`subscricao_viva()`) existiam e estavam falsificados desde a F6; o que faltava era o **elo API**.
+
+**Rota própria, não um campo em `/api/state` — e a terceira razão é a que decide.** (1) `/api/state` é o instantâneo do *daemon*; um campo do console lá dentro seria um facto de uma camada no envelope de outra. (2) Com o daemon em baixo aquela rota devolve **503**, portanto o campo desapareceria exactamente quando mais interessa. (3) **O corpo de `/api/state` não é construído pelo console** — é a linha do daemon repassada verbatim (`Ok(linha) => Saida::json(200, linha)`). Acrescentar-lhe um campo obrigaria o console a **reescrever** essa linha, e essa propriedade vale mais que a conveniência.
+
+**Meta-evento no SSE foi rejeitado por uma razão que não é de gosto:** push **não sabe reportar a própria ausência**. Console morto → nenhum meta-evento → indistinguível de "sem novidades". Com `GET`, não responder É a informação.
+
+**O corpo é `{"upstream": boolean}` — sem `v`, sem `ok`, sem `id` — e isto foi uma correcção ao enunciado.** O comando especificava `{v, ok, upstream}`. Verifiquei: `v` é `PROTOCOL_V = 1`, a versão do **IPC v1**, e `ok` significa *"o comando IPC teve sucesso"* — ambos emitidos pelo **daemon**, em `proto.rs:199`. E as três rotas com `cmd_ipc: None` (`/api/events`, `/api/profiles`, `/api/metrics`) não produzem JSON de sucesso, logo **`/api/upstream` é o primeiro corpo JSON que o console autora**. Incluir `v` afirmaria uma proveniência que aquele corpo não tem — a mesma classe de defeito que a rota corrige. E não há corpo de erro a desenhar: a medição é a leitura de um `AtomicBool` local, sem I/O e sem modo de falha próprio.
+
+**`EstadoUi` ficou de fora, e o ADR-0028 D3 continua intocado.** `upstream` é um booleano com produtor real, não o vocabulário de evidência sem produtor que D3 proíbe. Também ficaram de fora `tentativas_de_ligacao` e `descartados`: são medições reais, mas acrescentá-las transformaria uma correcção de fronteira de verdade numa expansão de observabilidade, e um teste verde deixaria de dizer qual das propriedades está provada.
+
+**`subscricoes_ipc()` é proibido nesta rota, e há um teste que o prova.** É **cumulativo**: depois de dois ciclos vale 2 e nunca desce. Devolvê-lo responderia *"já houve"* a uma pergunta que é *"há agora"*.
+
+**A regressão a impedir tem nome — `upstream = sseAberto` — e a rede tem dois níveis que falham por razões diferentes.** `rotulosDeFluxo(sseAberto, upstream)` recebe **duas** entradas: quem quiser derivar um elo do outro tem de **apagar um parâmetro**, e aí o teste deixa de **compilar**. Sobre isso, a asserção `(true, false)` → não pode dizer "Live". Falsificado 3×: **(1)** o rótulo de montante a ler o `onopen` → 4 testes de lógica reprovam **e** a marcação `EVENTOS_UPSTREAM_MORTO` reprova; **(2)** o parâmetro apagado da assinatura → `tsc` reprova em 4 sítios com `TS2554`, incluindo o `App.tsx`; **(3)** a rota a devolver o acumulado → 3 testes de integração reprovam.
+
+**A prova principal, com daemon REAL e zero mocks.** Daemon vivo → `{"upstream":true}` e o ecrã mostra `Console API ● Connected · Browser stream ● Open · Daemon subscription ● Live`. `pkill` no daemon → `{"upstream":false}`, e a ligação SSE do browser **continua a crescer** (81 → 126 bytes de keep-alive): o ecrã passa a `Browser stream ● Open` **ao lado de** `Daemon subscription ● Down`. É exactamente o estado que antes dizia `● Streaming`. Daemon de volta → os três verdes, com `performance.navigation.type === "navigate"` a provar que a página **nunca** recarregou.
+
+**E observei o CASO C sem o procurar.** Nos 2 s seguintes ao regresso do daemon, `/api/state` já dava **200** e `/api/upstream` ainda dizia **false** — daemon alcançável, subscrição ainda em backoff. Medido instante a instante (`t+1s`, `t+2s` divergentes; `t+3s` convergidos). São duas ligações UDS distintas (`"lumyx-console"` por pedido, `"lumyx-console-eventos"` longa) e divergem na realidade, no momento que o desenho previa. Colapsá-las teria escondido isto.
+
+**Todos os indicadores passaram a NOMEAR a camada.** `Console API`, `Browser stream`, `Daemon subscription`. Sem o nome, dois indicadores lado a lado voltam a ser lidos como uma cadeia contínua — que é como o defeito passou despercebido. O `Indicador` deixou de decidir o texto (recebe-o de `ligacoes.ts`): calcular nos dois sítios daria um segundo tradutor de estado→rótulo, e o dia em que divergissem seria invisível.
+
+**Três erros meus nesta rodada, todos apanhados por não confiar no primeiro resultado.** (1) Um `cat >>` que **escreveu antes de ser recusado** duplicou o bloco de testes; e a minha limpeza por índice apagou o bloco **errado**, deixando a versão com `drop(_p2)` — que não desliga nada, porque o `Proxy` não tem `Drop`. O teste esperou 20 s por uma queda impossível, e a falha era do teste, não da produção. (2) Verifiquei com `striptest.lumyx` (2,3 s) e li `upstream:false` **antes** de matar o daemon — ele já tinha terminado; a leitura não provava nada. Corrigido usando `--socket` sem show, que o `--help` documenta como caminho para um daemon que fica. (3) O primeiro `curl` ao Vite deu `connection refused` em `127.0.0.1`: ele escuta só em `[::1]`.
+
+**Invariants verified.** **1067 testes** no workspace (+4), exit 0 lido **sem pipe** (KB-013). `./scripts/tsc_gate.sh` exit 0 nos três passos. **26 testes** no console-web (+7). Clippy `-D warnings` exit 0. O `.ts` versionado mudou **só por regeneração**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/`, `spike/` não tocados.
+
+**Pending.** `descartados_totais()` continua sem rota, e o ADR-0026 §13 exige que a perda seja **reportada** — lacuna nomeada, não esquecida. Os dois achados cosméticos da baseline (dois `<hr>` seguidos com `ligacao === null`; `margin` vertical em `<span>`). `secundario` (0.6) e `rotuloDeCampo` (0.7) continuam dois degraus para o mesmo papel. `/api/state` a devolver 503 não distingue daemon morto de socket sem permissões — o `detail` traz o erro do SO, o código é sempre `console.daemon_offline`. Dívida F7.2 intocada.
 
 ### 2026-08-13 — Phase 2: o sistema de design sai de repetição medida, e um refactor byte-idêntico prova-o
 

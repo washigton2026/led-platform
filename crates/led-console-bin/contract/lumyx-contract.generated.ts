@@ -85,6 +85,7 @@ export const ROTAS: readonly Rota[] = [
   { verbo: "GET", caminho: "/api/state" },
   { verbo: "GET", caminho: "/api/version" },
   { verbo: "GET", caminho: "/api/events" },
+  { verbo: "GET", caminho: "/api/upstream" },
   { verbo: "GET", caminho: "/api/profiles" },
   { verbo: "GET", caminho: "/api/metrics" },
   { verbo: "POST", caminho: "/api/transport/load" },
@@ -187,4 +188,25 @@ export interface EstadoDoDaemon {
   readonly duration_ms: number;
   readonly ticks: number;
   readonly show_id: number | null;
+}
+
+/**
+ * O corpo de `GET /api/upstream` (ADR-0026 §9-quinquies).
+ *
+ * `upstream: true` significa EXATAMENTE: existe agora uma subscricao
+ * estabelecida entre o console e o daemon. Nada mais.
+ *
+ * NAO significa HEALTHY, STREAMING_READY, OUTPUT_OK, NETWORK_OK, HARDWARE_OK,
+ * LED_OK nem SHOW_RUNNING — nenhuma dessas conclusoes e derivavel daqui, e a
+ * cadeia de evidencia do ADR-0026 §8 continua intacta.
+ *
+ * E NAO e o estado da ligacao SSE do browser: o `EventSource` fica aberto com o
+ * daemon morto, porque o console o mantem vivo com keep-alive. Sao camadas
+ * diferentes, e usar uma como proxy da outra e o defeito que esta rota corrige.
+ *
+ * Sem `v`, sem `ok`, sem `id`: este corpo nao atravessa o IPC v1, e nao tem modo
+ * de falha proprio (a medicao e a leitura de um booleano local).
+ */
+export interface EstadoUpstream {
+  readonly upstream: boolean;
 }

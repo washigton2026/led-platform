@@ -299,6 +299,35 @@ pub fn gerar_typescript() -> String {
          readonly duration_ms: number;\n  \
          readonly ticks: number;\n  \
          readonly show_id: number | null;\n\
+         }\n\n",
+    );
+
+    // ── /api/upstream ────────────────────────────────────────────────────────
+    //
+    // O PRIMEIRO corpo JSON que o console AUTORA. Todos os outros de sucesso sao a linha
+    // do daemon repassada verbatim — e e por isso que este nao leva `v` nem `ok`: esses
+    // pertencem ao envelope do IPC v1 e sao escritos pelo daemon em `proto.rs`. Um corpo
+    // do console que os incluisse afirmaria uma proveniencia que nao tem.
+    s.push_str(
+        "/**\n \
+         * O corpo de `GET /api/upstream` (ADR-0026 §9-quinquies).\n \
+         *\n \
+         * `upstream: true` significa EXATAMENTE: existe agora uma subscricao\n \
+         * estabelecida entre o console e o daemon. Nada mais.\n \
+         *\n \
+         * NAO significa HEALTHY, STREAMING_READY, OUTPUT_OK, NETWORK_OK, HARDWARE_OK,\n \
+         * LED_OK nem SHOW_RUNNING — nenhuma dessas conclusoes e derivavel daqui, e a\n \
+         * cadeia de evidencia do ADR-0026 §8 continua intacta.\n \
+         *\n \
+         * E NAO e o estado da ligacao SSE do browser: o `EventSource` fica aberto com o\n \
+         * daemon morto, porque o console o mantem vivo com keep-alive. Sao camadas\n \
+         * diferentes, e usar uma como proxy da outra e o defeito que esta rota corrige.\n \
+         *\n \
+         * Sem `v`, sem `ok`, sem `id`: este corpo nao atravessa o IPC v1, e nao tem modo\n \
+         * de falha proprio (a medicao e a leitura de um booleano local).\n \
+         */\n\
+         export interface EstadoUpstream {\n  \
+         readonly upstream: boolean;\n\
          }\n",
     );
 
