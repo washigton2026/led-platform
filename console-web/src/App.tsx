@@ -6,12 +6,14 @@
 // tem produtor (ADR-0028 D3), e inventá-los seria a mentira que o ADR-0026 §9 e o
 // Operational Truth Boundary existem para impedir.
 //
-// Nada de design system aqui. Os estilos são o mínimo para a informação ser
-// legível; extrair componentes vem depois, quando a repetição existir de facto.
+// Os componentes partilhados e os tokens vivem em `ui.tsx`. Foram extraídos DEPOIS
+// de a repetição existir e ser contada — `Seccao` tinha cinco cópias do par
+// `aria-labelledby`/`id`, `Indicador` tinha duas do tri-estado.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
 import { descreveEvento, ehProgresso } from "./eventos";
+import { Campo, estilos, Indicador, Seccao } from "./ui";
 import {
   comandar,
   lerEstado,
@@ -82,14 +84,13 @@ export function App() {
       <h1 style={estilos.marca}>LUMYX</h1>
       <hr style={estilos.regua} />
 
-      <section aria-labelledby="h-console">
-        <h2 id="h-console" style={estilos.seccao}>
-          CONSOLE
-        </h2>
-        <p style={estilos.linha} role="status" aria-live="polite">
-          {ligacao === null ? "○ …" : ligacao.tipo === "dados" ? "● Connected" : "● Offline"}
-        </p>
-      </section>
+      <Seccao id="h-console" titulo="CONSOLE">
+        <Indicador
+          estado={ligacao === null ? null : ligacao.tipo === "dados"}
+          ligado="Connected"
+          desligado="Offline"
+        />
+      </Seccao>
 
       <hr style={estilos.regua} />
 
@@ -127,7 +128,7 @@ export function App() {
  * `load` e `unload` não estão aqui: mudam o show carregado, não a posição no tempo, e
  * pertencem à gestão de shows.
  */
-function Transporte({
+export function Transporte({
   seekMs,
   aoMudarSeek,
   aoComandar,
@@ -139,10 +140,7 @@ function Transporte({
   resultado: Resultado | null;
 }) {
   return (
-    <section aria-labelledby="h-transporte">
-      <h2 id="h-transporte" style={estilos.seccao}>
-        TRANSPORT
-      </h2>
+    <Seccao id="h-transporte" titulo="TRANSPORT">
       <div style={estilos.botoes}>
         {TRANSPORTE.map((cmd) => (
           <button key={cmd} type="button" style={estilos.botao} onClick={() => aoComandar(cmd)}>
@@ -178,7 +176,7 @@ function Transporte({
       {resultado?.tipo === "recusado" ? (
         <p style={estilos.detalhe}>{resultado.detail}</p>
       ) : null}
-    </section>
+    </Seccao>
   );
 }
 
@@ -188,7 +186,7 @@ function Transporte({
  * O payload é agora **tipado pelo contrato gerado**, e por isso pode ser lido em vez de
  * despejado. Um evento que não analise mostra a linha crua — não se deita fora.
  */
-function Eventos({
+export function Eventos({
   eventos,
   fluxo,
   progresso,
@@ -198,13 +196,8 @@ function Eventos({
   progresso: { ultima: EventoCru | null; total: number };
 }) {
   return (
-    <section aria-labelledby="h-eventos">
-      <h2 id="h-eventos" style={estilos.seccao}>
-        EVENTS
-      </h2>
-      <p style={estilos.linha} role="status" aria-live="polite">
-        {fluxo === null ? "○ …" : fluxo ? "● Streaming" : "● Stream down"}
-      </p>
+    <Seccao id="h-eventos" titulo="EVENTS">
+      <Indicador estado={fluxo} ligado="Streaming" desligado="Stream down" />
       {/* O progresso, colapsado. A contagem existe para nada parecer escondido. */}
       {progresso.ultima === null ? null : (
         <p style={estilos.detalhe}>
@@ -234,16 +227,13 @@ function Eventos({
           ))}
         </ol>
       )}
-    </section>
+    </Seccao>
   );
 }
 
-function Daemon({ estado }: { estado: EstadoDoDaemon }) {
+export function Daemon({ estado }: { estado: EstadoDoDaemon }) {
   return (
-    <section aria-labelledby="h-daemon">
-      <h2 id="h-daemon" style={estilos.seccao}>
-        DAEMON
-      </h2>
+    <Seccao id="h-daemon" titulo="DAEMON">
       <dl style={estilos.lista}>
         <Campo rotulo="State" valor={estado.state.toUpperCase()} />
         <Campo rotulo="Position" valor={`${estado.position_ms} ms`} />
@@ -252,66 +242,19 @@ function Daemon({ estado }: { estado: EstadoDoDaemon }) {
         {/* `null` significa SEM SHOW — e é isso que se escreve, não `0`. */}
         <Campo rotulo="Show" valor={estado.show_id === null ? "none" : String(estado.show_id)} />
       </dl>
-    </section>
+    </Seccao>
   );
 }
 
-function Indisponivel({ code, detail }: { code: string; detail: string }) {
+export function Indisponivel({ code, detail }: { code: string; detail: string }) {
   return (
-    <section aria-labelledby="h-erro">
-      <h2 id="h-erro" style={estilos.seccao}>
-        DAEMON
-      </h2>
+    <Seccao id="h-erro" titulo="DAEMON">
       <p style={estilos.linha}>Daemon unavailable</p>
       {/* O código do backend, verbatim. É o que diz PORQUÊ. */}
       <p style={estilos.codigo}>{code}</p>
       <p style={estilos.detalhe}>{detail}</p>
-    </section>
+    </Seccao>
   );
 }
 
-function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
-  return (
-    <div style={estilos.par}>
-      <dt style={estilos.rotulo}>{rotulo}</dt>
-      <dd style={estilos.valor}>{valor}</dd>
-    </div>
-  );
-}
 
-const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
-
-const estilos = {
-  pagina: { fontFamily: mono, maxWidth: "34rem", margin: "3rem auto", padding: "0 1rem" },
-  marca: { fontSize: "1rem", letterSpacing: "0.3em", margin: 0 },
-  regua: { border: 0, borderTop: "1px solid currentColor", opacity: 0.25, margin: "1rem 0" },
-  seccao: { fontSize: "0.7rem", letterSpacing: "0.2em", opacity: 0.6, margin: "0 0 0.5rem" },
-  linha: { margin: 0 },
-  lista: { margin: 0 },
-  par: { display: "flex", justifyContent: "space-between", padding: "0.15rem 0" },
-  rotulo: { opacity: 0.6 },
-  valor: { margin: 0, fontVariantNumeric: "tabular-nums" as const },
-  codigo: { margin: "0.25rem 0 0", fontWeight: 600 },
-  detalhe: { margin: "0.25rem 0 0", opacity: 0.6, fontSize: "0.85rem" },
-  eventos: { margin: "0.5rem 0 0", padding: 0, listStyle: "none" as const },
-  botoes: { display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" as const, marginBottom: "0.6rem" },
-  botao: {
-    fontFamily: mono,
-    fontSize: "0.8rem",
-    padding: "0.25rem 0.7rem",
-    border: "1px solid currentColor",
-    background: "transparent",
-    cursor: "pointer",
-    borderRadius: 2,
-  },
-  rotuloSeek: { display: "flex", gap: "0.35rem", alignItems: "center", fontSize: "0.75rem", opacity: 0.7 },
-  entrada: { fontFamily: mono, fontSize: "0.8rem", width: "6rem", padding: "0.2rem 0.3rem" },
-  instante: { opacity: 0.45, marginRight: "0.6rem", fontVariantNumeric: "tabular-nums" as const },
-  evento: {
-    fontSize: "0.75rem",
-    padding: "0.1rem 0",
-    whiteSpace: "pre-wrap" as const,
-    wordBreak: "break-all" as const,
-    opacity: 0.85,
-  },
-} as const;

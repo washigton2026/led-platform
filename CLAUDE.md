@@ -136,6 +136,36 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-13 — Phase 2: o sistema de design sai de repetição medida, e um refactor byte-idêntico prova-o
+
+**Done.** Os componentes partilhados e os tokens saíram do `App.tsx` para [`console-web/src/ui.tsx`](./console-web/src/ui.tsx). **Nenhum crate Rust tocado**; `led-daemon`, `led-core`, IPC v1 e `spike/` intocados.
+
+**A rede veio antes do refactor, porque os 9 testes que existiam não a davam.** `eventos.ts` e `api.ts` são lógica pura — um refactor que trocasse o ecrã inteiro passaria por eles sem os acordar. `App.render.test.tsx` renderiza nove superfícies com `renderToStaticMarkup` (do `react-dom`, **sem dependência nova**, sem jsdom) e compara com marcação **capturada do código pré-refactor** e colada à mão em `marcacao.esperada.ts`. Não é snapshot: um ficheiro que se regenera com `-u` aprova o que quer que aconteça.
+
+**As 9 marcações continuam byte-a-byte iguais depois do refactor.** É essa a prova de que os componentes mudaram de sítio e o ecrã não mudou um carácter.
+
+**Falsificado 3×, e as duas primeiras tentativas foram inválidas — por minha causa.** Usei `git checkout` para restaurar entre mutações, e isso apagou os `export` que eu tinha acrescentado (não estavam commitados). As mutações B e C pareceram reprovar 8 testes cada; as 8 falhas eram os componentes a chegarem `undefined`, não a mutação. **O padrão denunciou-o:** falhou tudo *excepto* `APP_INICIAL`, o único cujo componente continuava exportado. Repetido com cópias de segurança: **A** (opacidade da régua 0.25→0.3) → 1 falha, exactamente `APP_INICIAL`; **B** (campo `Show` apagado) → 2, exactamente os dois cenários do daemon; **C** (cenário removido de `CASOS`) → 1, o gate da contagem. Cada mutação acorda quem devia e mais ninguém.
+
+**O que foi extraído, e o que NÃO foi.** `Seccao` (5 usos), `Indicador` (2), `Campo` (5), e a `estilos` partida em tokens de ênfase. **`Botao` ficou de fora**: tem um só chamador, e um componente com um chamador é indirecção que não paga a viagem.
+
+**A `Seccao` não existe para poupar linhas.** O par `aria-labelledby`/`id` estava escrito à mão em cinco sítios; uma letra trocada rompe o nome acessível **sem partir nada visível**, e nenhum teste apanha uma string que deixou de casar com outra string. Agora vem do mesmo argumento e não pode divergir — verificado no browser: as quatro secções resolvem o nome, zero `ROMPIDO`.
+
+**Não há paleta, e isso é uma decisão.** Esta interface não tem uma única cor escrita: é `currentColor` com opacidade, o que a faz herdar o tema do browser sem código para isso. Inventar cores agora seria escolher um tema que ninguém pediu e perder essa propriedade.
+
+**Dois achados que a baseline revelou e que NÃO foram corrigidos aqui**, porque o refactor tinha de ser byte-idêntico: (a) **dois `<hr>` seguidos** enquanto `ligacao === null` — as réguas são colocadas pelo pai e a secção do daemon não renderiza, portanto a secção que falta deixa a régua para trás; (b) **`estilos.codigo` e `estilos.detalhe` aplicados a `<span>`**, com `margin` vertical que em elemento inline não faz nada. Ambos são de um commit próprio.
+
+**O achado com consequência real: `● Streaming` com o daemon morto.** Observado ao vivo — o show chegou a `reached_end`, o daemon encerrou, e o indicador continuou a dizer que o fluxo estava de pé. O `EventSource` do browser **está** mesmo vivo (o console mantém-no com comentários de keep-alive); o que morreu foi a subscrição a montante. A UI mede *browser→console* e apresenta-o como se fosse *browser→daemon*. Nenhum evento pode chegar e o ecrã diz que está tudo bem — é a classe que o ADR-0026 §9 existe para impedir. **Nomeado, não corrigido**: a correcção exige o console expor o estado da subscrição, que hoje só existe como medidor interno (`subscricoes_ipc()`).
+
+**O `tsc` apanhou o que o `vitest` não apanha.** O meu ficheiro de teste **nunca compilou**: faltavam `v`/`id`/`ok` do envelope em `EstadoDoDaemon`. O `vitest` usa esbuild, que remove tipos sem os verificar — 19 verdes sobre um ficheiro com erro de tipos. Foi o `tsc --noEmit` do gate que o viu. Acrescentar os três campos não mudou uma única marcação, porque o `Daemon` não os lê.
+
+**Verificado contra a cadeia real, sem mocks:** `led-daemon` a tocar `robot_sequence.lumyx` (98,1 s, o show real) → `led-console` → proxy do Vite → browser. `● Connected`, `PLAYING`, posição a avançar, 2680 eventos de posição colapsados. **Clique verdadeiro** no `pause` → `pause aceite` → `PAUSED` em 87203 ms, e a transição `playing → paused` chegou por SSE e apareceu no registo, separada do progresso.
+
+**Três erros meus de instrumentação, todos apanhados por não confiar no primeiro resultado.** (1) O `preview_start` serviu o **spike React** outra vez — li o `<title>` antes de olhar para o ecrã, e era `LUMYX Spike — React`. É a segunda vez; a lição não pegou à primeira. (2) O `read_page` devolveu `(empty page)` com viewport `0x0` enquanto a página estava renderizada (provado por `javascript_tool`) — quinta ocorrência. (3) O primeiro clique falhou: o espaço de coordenadas é 800×450, mas a imagem que eu vejo está a 1600×900, portanto as minhas estimativas visuais vinham a dobrar. Medi o rectângulo do botão em vez de continuar a adivinhar.
+
+**Invariants verified.** `./scripts/tsc_gate.sh` exit 0 nos três passos (contrato `tsc`, console-web `tsc`, console-web testes). **19 testes** no console-web (+10). `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados.
+
+**Pending.** O `● Streaming` mentiroso, acima — é o próximo a fechar neste caminho, e é de verdade, não de estilo. Os dois achados cosméticos da baseline. `secundario` (0.6) e `rotuloDeCampo` (0.7) são ambos rótulos e deviam ser um só degrau — uni-los muda pixels. `load`/`unload` continuam fora da UI (abrem a gestão de shows, e `load` precisa de superfície de entrada de caminho). Dívida F7.2 intocada. `.claude/launch.json` ganhou uma entrada `console-web` que **não funcionou** — o harness arrancou `spike-react` na mesma; ficou por commitar por não fazer o que diz.
+
 ### 2026-08-11 — Web Platform Phase 0 + Phase 1: o console ganha processo, e a primeira tela vê o daemon a sério
 
 **Done.** A LUMYX Web Platform saiu do papel. [ADR-0028](./docs/adr/0028-web-platform-topology-and-state-boundary.md) escrito **antes** de existir uma linha de frontend, e o índice dos ADRs — que saltava de 0022 para 0027 — passou a incluir 0023–0026 e 0028.
