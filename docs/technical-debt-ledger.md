@@ -480,3 +480,67 @@ distinction: |
   (OS thread block). A different risk profile from TD-003. Converted where
   beneficial; the one Type B is documented and acceptable.
 ```
+
+## TD-014 — F-01 (resíduo): `console.dropped` é prometido como reportado, e não é
+
+```yaml
+td_id:     TD-014
+title:     "A perda de eventos por browser lento tem contador, tem ADR que exige reporte, e nenhum caminho ate ao operador"
+severity:  Medium
+status:    open
+origin:    "Achado separado durante o fecho do F-01 (COMMAND 04), 2026-08-13. NAO incorporado ao F-01 por decisao do responsavel: e uma expansao de observabilidade, e F-01 era correccao de fronteira de verdade."
+context: |
+  Verificado por grep, nao presumido:
+
+  1. ADR-0026 §13 diz, literalmente: "Fila cheia -> descarta o mais antigo e
+     incrementa `console.dropped`, que e REPORTADO, nao escondido."
+  2. O comentario de modulo de fanout.rs repete a promessa: "O contador e
+     **reportado** (`console.dropped`), nao escondido: o operador tem de saber
+     que a sua vista esta incompleta."
+  3. `grep -rn "console.dropped" --include=*.rs crates/` devolve UMA ocorrencia:
+     o comentario acima. NAO existe identificador, campo, cabecalho nem rota com
+     esse nome em lado nenhum.
+  4. `Subscriber::descartados()` e `Fanout::descartados_totais()` existem e estao
+     correctos. Consumidores: `tests/sse.rs:249`. UM, e e um teste. Zero em
+     producao, zero em `ROTAS`, zero no contrato gerado.
+
+  A medicao existe e esta provada (o teste `browser_lento_nao_aplica_backpressure_e_a_perda_e_contada`
+  afirma 96 descartes exactos). O que falta e o mesmo elo que faltava no F-01:
+  a API.
+impact: |
+  Um operador com um separador lento ve uma lista de eventos INCOMPLETA e nao tem
+  como saber disso. E a forma mais barata do defeito que o ADR-0026 §9 existe para
+  impedir: nao ha estado falso no ecra, ha uma AUSENCIA que se parece com silencio.
+  Um daemon parado e um browser a perder eventos produzem hoje a mesma tela.
+
+  Severidade Medium e nao High porque exige um browser genuinamente lento — a fila
+  e de 256 eventos por browser — e porque nada e AFIRMADO de falso; o que existe e
+  omissao. Mas a promessa escrita no ADR nao esta cumprida, e uma promessa por
+  cumprir num documento aceite e pior que uma lacuna nao documentada: quem ler o
+  §13 conclui que o reporte existe.
+mitigation_now: |
+  Nenhuma. O contador e correcto e esta testado; simplesmente nao chega a ninguem.
+  Nao ha mascara nem valor fabricado — a ausencia e honesta, so nao e visivel.
+required_fix: |
+  Fatia propria. Duas decisoes por tomar, e nenhuma e edicao:
+
+  a) ONDE. O F-01 acabou de estabelecer o precedente: facto do console vive em
+     superficie do console, nunca dentro do envelope do daemon. `/api/upstream`
+     e a rota natural para o acompanhar, mas acrescentar-lhe um campo alarga um
+     contrato que acabou de ser congelado como "um booleano e mais nada" — o que
+     exige emendar o ADR-0026 §9-quinquies, nao so escrever codigo.
+  b) O QUE. `descartados_totais()` e cumulativo e agrega TODOS os browsers. O
+     operador quer saber se A SUA vista esta incompleta, nao a soma. Por browser
+     exigiria identidade de sessao no SSE, que nao existe. Decidir antes de medir.
+
+  PROIBIDO: inventar um `console.dropped` com semantica diferente da que o §13
+  descreve; expor o acumulado como se fosse estado actual (o erro que o
+  `subscricoes_ipc()` ja tem documentado no fanout.rs); ou renomear o campo para
+  algo que soe melhor — o nome esta no ADR e e o contrato.
+falsification_required: |
+  Um teste que encha a fila de um browser (100x a capacidade, como o
+  `browser_lento_...` ja faz) e afirme que o numero de descartes CHEGA ao cliente.
+  Controle negativo obrigatorio: um browser que le tudo tem de reportar zero — sem
+  isso, um campo que devolvesse sempre uma constante passaria.
+review_by: "proxima fatia de observabilidade do console"
+```
