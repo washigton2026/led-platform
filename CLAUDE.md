@@ -166,7 +166,13 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 
 **Invariants verified.** **1067 testes** no workspace (+4), exit 0 lido **sem pipe** (KB-013). `./scripts/tsc_gate.sh` exit 0 nos três passos. **26 testes** no console-web (+7). Clippy `-D warnings` exit 0. O `.ts` versionado mudou **só por regeneração**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/`, `spike/` não tocados.
 
-**Pending.** `descartados_totais()` continua sem rota, e o ADR-0026 §13 exige que a perda seja **reportada** — lacuna nomeada, não esquecida. Os dois achados cosméticos da baseline (dois `<hr>` seguidos com `ligacao === null`; `margin` vertical em `<span>`). `secundario` (0.6) e `rotuloDeCampo` (0.7) continuam dois degraus para o mesmo papel. `/api/state` a devolver 503 não distingue daemon morto de socket sem permissões — o `detail` traz o erro do SO, o código é sempre `console.daemon_offline`. Dívida F7.2 intocada.
+**Estado de evidência, com a fronteira exacta do que a CI provou.** Publicado em `9b23961`; run **31749885199**. `contrato TS (tsc --noEmit)` = **success** — é o job que valida esta fatia, e corre os três passos do `tsc_gate.sh` (contrato + `console-web` + os 26 testes, incluindo os 6 do `ligacoes.test.ts` e a marcação congelada de `EVENTOS_UPSTREAM_MORTO`).
+
+**Os testes Rust do F-01 NÃO foram observados na CI.** Os jobs `test` abortaram nas duas dívidas F7.2 — macOS `absolute_pacing_on_schedule_reports_no_lateness` (`stream.rs:330`, `left: 2 right: 0`) e Ubuntu `ddp_backend_send_path_is_alloc_free` (`no_alloc.rs:68`, **N=4** alocações) — **antes** de os 13 do `sse_reconnect` darem veredito. Não são regressão desta fatia, e a prova não é a cor do job: `git diff 109135d..9b23961 --name-only | grep -cE "led-player|led-protocols"` → **0**. Nenhum caminho que aqueles dois testes exercitam foi tocado.
+
+Portanto o registo honesto é: **commitada e validada localmente; contrato TS confirmado na CI; testes Rust não observados na CI por falhas pré-existentes da F7.2.** Verde local não é verde de CI, e a distinção fica escrita em vez de arredondada.
+
+**Pending.** `descartados_totais()` continua sem rota, e o ADR-0026 §13 exige que a perda seja **reportada** — lacuna nomeada, não esquecida, e registada como **TD-014** (`9b23961`, commit separado do F-01 de propósito). Os dois achados cosméticos da baseline (dois `<hr>` seguidos com `ligacao === null`; `margin` vertical em `<span>`). `secundario` (0.6) e `rotuloDeCampo` (0.7) continuam dois degraus para o mesmo papel. `/api/state` a devolver 503 não distingue daemon morto de socket sem permissões — o `detail` traz o erro do SO, o código é sempre `console.daemon_offline`. Dívida F7.2 intocada.
 
 ### 2026-08-13 — Phase 2: o sistema de design sai de repetição medida, e um refactor byte-idêntico prova-o
 
