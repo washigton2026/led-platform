@@ -156,7 +156,9 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 
 **Invariants verified.** Clippy `-D warnings` exit 0 (uma correcção minha: `needless_range_loop` no formatador do diagnóstico). O gate continua a passar localmente. `led-daemon`, `led-core`, IPC v1, `console-web/` e `led-player` **intocados nesta fatia**.
 
-**Pending — e é o que bloqueia fechar a F7.2.** O instrumento **só dá dados depois de um push e de um run na CI do Ubuntu**, que não estão autorizados. Até lá, *"eliminar as 4 alocações"* não é executável: não há o que eliminar que eu consiga ver. A próxima falha no Ubuntu passa a trazer `tamanhos=[…]` e `fora da thread do teste=N`, e é isso que decide entre **contaminação do processo** (se `N > 0`) e **alocação real no caminho DDP** (se `N == 0`, e aí o tamanho nomeia o culpado).
+**O run correu, e NÃO deu dados — o que é um desfecho, não um sucesso.** Run 31782955100 (`427d648`): `test (ubuntu-latest)` = **success**. O instrumento só fala quando apanha alguma coisa, e não apanhou nada porque nada falhou. **Isto não é evidência de que as 4 alocações desapareceram**: esta fatia não mudou uma linha de produção, e a amostra do Ubuntu é agora 1 falha em 5 runs observados (`9b23961` ❌, `109135d` ✅, `f9153ba` ✅, `f562adc` ✅, `427d648` ✅) — exactamente o não-determinismo já classificado. Um verde aqui vale zero.
+
+**Pending — e é o que bloqueia fechar a F7.2.** Falta a **próxima falha no Ubuntu**, que é quando o instrumento produz o diagnóstico: `tamanhos=[…]` e `fora da thread do teste=N`. É esse `N` que decide entre **contaminação do processo** (`N > 0` ⇒ o defeito é do gate, não do caminho de envio) e **alocação real no DDP** (`N == 0` ⇒ o tamanho nomeia o culpado). Até lá, *"eliminar as 4 alocações"* continua não-executável — e esperar por uma falha é a única via honesta, porque não há Linux nesta máquina para a provocar.
 
 ### 2026-08-13c — F7.2 fatia 1 (macOS): o teste era uma corrida contra o próprio arranque
 
@@ -182,7 +184,9 @@ O período desce de 25 ms para 10 ms porque com o relógio fixo cada espera é o
 
 **Achado por caminho, nomeado e NÃO corrigido.** Numa execução do workspace, `o_daemon_recusa_a_linha_longa_por_si_proprio` (`led-console-bin/tests/ipc_contra_o_daemon.rs:177`) falhou com **BrokenPipe**; na re-execução passou, e passa 6/6 isolado. Não é desta fatia (o diff é só `stream.rs`, noutro crate). É uma corrida **inerente à decisão da F1-B**: `server.rs:226-231` escreve a recusa e **fecha sem drenar**, enquanto o cliente ainda escreve 64 KiB+ — o `writeln!` do teste apanha EPIPE. É a **primeira observação** registada: não constava do changelog, do ledger nem do KB. Corrigi-lo é fatia própria, e a correcção provável é do lado do **teste** (tolerar EPIPE na escrita, porque o fecho é o comportamento *desejado*), não do daemon.
 
-**Pending.** **Esta correcção não foi vista a passar em macOS na CI** — só localmente, e localmente o teste já passava antes. A validação real exige push, que não está autorizado. Fatia 2 (Ubuntu, as 4 alocações no caminho DDP) **não começou**.
+**VALIDADA NA CI — run 31782955100, `427d648`: `test (macos-latest)` = success.** É a primeira vez que este job passa nesta branch. O histórico contra o qual isto se lê: `9b23961` failure, `109135d` failure, `f9153ba` failure, `f562adc` failure — e mais 4 falhas documentadas na investigação da F7.2 (0 ✅ / 4 ❌). **Falha determinística em ≥8 runs observados, sucesso no primeiro run com a correcção.** Uma amostra chegaria pouco contra um teste instável; contra um determinístico, é o sinal. E o mecanismo já estava provado à parte, com os dois valores da CI reproduzidos por offsets controlados.
+
+**Pending.** Nada por validar nesta fatia.
 
 ### 2026-08-13b — F-01: o `● Streaming` mentiroso fecha — o elo a montante passa a ser observável
 
