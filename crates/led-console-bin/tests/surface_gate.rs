@@ -23,11 +23,33 @@ const FONTES: &[(&str, &str)] = &[
     ("metrics.rs", include_str!("../src/metrics.rs")),
     ("contract.rs", include_str!("../src/contract.rs")),
     ("http.rs", include_str!("../src/http.rs")),
+    // A superfície da CLI. Ficou de fora desde o COMMAND 03 e **escapava aos três gates
+    // textuais** deste ficheiro — no único sítio onde um operador escreve flags. Só pôde
+    // entrar depois de `linhas_de_codigo` aprender a parar nos testes: o `mod tests` do
+    // `main.rs` nomeia `blackout` de propósito, para o proibir no `--help`.
+    ("main.rs", include_str!("../src/main.rs")),
 ];
 
-/// Linhas de código (comentários e doc-comments são legítimos e podem citar os nomes).
+/// Linhas de **produção**. Duas exclusões, por razões diferentes.
+///
+/// **Comentários** (`//`, `*`) são legítimos e podem citar os nomes: é preciso poder
+/// escrever *"o ADR-0017 proíbe blackout"* sem que o gate reprove por isso.
+///
+/// **O `mod tests` e tudo o que vem depois**, porque um gate não pode reprovar por causa
+/// de um teste que nomeia o proibido **para o proibir**. É exactamente o caso do
+/// `main.rs`: o seu `a_ajuda_descreve_as_flags_reais_e_os_limites_reais` percorre
+/// `["blackout", "--auth", "--cors", "0.0.0.0"]` para afirmar que o `--help` não os
+/// menciona. Sem este corte, acrescentá-lo às `FONTES` faria o gate do ADR-0017 reprovar
+/// contra um teste que impõe a **mesma** regra — a segunda vez que este repositório
+/// tropeçaria em *"um gate não pode ser o sítio onde o proibido é escrito"* (F1-B).
+///
+/// O corte é por `"mod tests"` e **não** por `#[cfg(test)]` de propósito: o `main.rs`
+/// declara-o como `#[cfg(all(test, unix))]`, que um filtro pelo atributo não apanharia.
+/// O idioma é o que o próprio `main.rs` já usa contra si mesmo
+/// (`FONTE.split("mod tests")`), e reusá-lo evita uma segunda regra para o mesmo fim.
 fn linhas_de_codigo(fonte: &str) -> impl Iterator<Item = &str> {
-    fonte.lines().filter(|l| {
+    let producao = fonte.split("mod tests").next().unwrap_or(fonte);
+    producao.lines().filter(|l| {
         let t = l.trim_start();
         !t.starts_with("//") && !t.starts_with("*") && !t.is_empty()
     })

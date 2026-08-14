@@ -1,0 +1,29 @@
+# TD-015 — surface_gate: main.rs nas FONTES + corte no mod tests
+git-hash: 19e37d3
+source_files: crates/led-console-bin/tests/surface_gate.rs
+required_test: nenhum_blackout_na_superficie_nem_no_codigo
+data: 2026-08-14T09:10:58Z
+
+## Verde (main.rs JA nas FONTES)
+test o_exporter_nao_e_alcancavel_diretamente_pelo_browser ... ok
+test o_proxy_de_metricas_nao_calcula_nada ... ok
+test shutdown_nao_e_alcancavel_pela_superficie_http ... ok
+test toda_rota_declara_a_sua_razao ... ok
+test nenhum_timeout_duplicado_a_mao ... ok
+test nenhum_blackout_na_superficie_nem_no_codigo ... ok
+test nenhuma_segunda_fonte_de_verdade_no_console ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+## Controlo A — blackout em PRODUCAO do main.rs -> REPROVA
+  main.rs: `blackout` em codigo — o ADR-0017 esta ADIADO
+  test result: FAILED. 6 passed; 1 failed
+
+## Controlo B (NEGATIVO) — a lista dentro do mod tests NAO reprova
+  main.rs:319  for proibido in ["blackout", "--auth", "--cors", "0.0.0.0"] {
+  test result: ok. 7 passed; 0 failed
+  Sem este controlo, a correccao poderia ter desligado o gate em vez de o corrigir.
+
+## Controlo C — o corte nao apagou o gate nos outros ficheiros
+  grand_master plantado em producao de surface.rs
+  surface.rs: `grand_master` em codigo — o ADR-0017 esta ADIADO
+  test result: FAILED. 6 passed; 1 failed

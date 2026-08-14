@@ -553,7 +553,23 @@ review_by: "proxima fatia de observabilidade do console"
 td_id:     TD-015
 title:     "As FONTES do surface_gate excluem main.rs, e o filtro nao distingue #[cfg(test)] de producao"
 severity:  Medium
-status:    open
+status:    closed
+evidence_ref: docs/evidence/td-015-surface-gate-main-rs.txt
+required_test: nenhum_blackout_na_superficie_nem_no_codigo
+source_files: crates/led-console-bin/tests/surface_gate.rs
+negative_control: |
+  Tres controlos, e o B e o que impede a "correccao" de ser um desligar do gate:
+  A) `blackout` em codigo de PRODUCAO do main.rs -> REPROVA, nomeando o ficheiro.
+  B) NEGATIVO: a lista da linha 319, dentro do mod tests, NAO reprova. Sem isto, cortar
+     no `mod tests` poderia ter simplesmente apagado o gate em vez de o corrigir.
+  C) `grand_master` em producao de surface.rs -> REPROVA. Prova que o corte nao
+     desligou a verificacao nos nove ficheiros que ja estavam nas FONTES.
+resolucao: |
+  `linhas_de_codigo` passa a cortar no `mod tests`, REUSANDO o idioma que o proprio
+  `main.rs` ja usava contra si mesmo (`FONTE.split("mod tests")`) — e nao um filtro por
+  `#[cfg(test)]`, que nao apanharia o `#[cfg(all(test, unix))]` do main.rs. Com o corte
+  no sitio, `main.rs` entrou nas FONTES: a superficie da CLI passa a ser coberta pelos
+  tres gates textuais do crate.
 origin:    "Encontrado ao verificar o fechamento documental do F-01, 2026-08-13"
 context: |
   Provado por leitura e contagem, nao presumido:
@@ -579,10 +595,25 @@ context: |
      `main.rs` faz o gate do ADR-0017 reprovar por causa de um teste que existe
      precisamente para impor a mesma regra.
 
-  4. E o problema e maior que `main.rs`: os NOVE ficheiros ja nas FONTES tem TODOS
-     `mod tests` inline (verificado, 9/9). O gate le esse codigo de teste como
-     producao. Passam por SORTE — nenhum dos seus testes calha conter uma palavra
-     proibida. Nao passam por desenho.
+  4. E o problema e maior que `main.rs`: QUATRO dos nove ja nas FONTES tem `mod tests`
+     inline (fanout.rs, limits.rs, surface.rs, truth.rs). O gate le esse codigo de
+     teste como producao. Passam por SORTE — nenhum dos seus testes calha conter uma
+     palavra proibida. Nao passam por desenho.
+
+     CORRECCAO DE UM ERRO MEU: a primeira versao desta entrada dizia "os NOVE tem
+     TODOS mod tests (9/9)". Era falso. O numero veio de um `grep -c ... || echo 0`,
+     que imprime DOIS zeros quando nao ha acerto — e `"0\n0" != "0"` da verdadeiro
+     para todos. E exactamente o bug de shell que este repo ja registou em 2026-07-11b,
+     e cai nele. Recontado sem o `|| echo 0`: sao 4, nao 9.
+
+  5. E `main.rs` ja resolve este problema CONTRA SI PROPRIO. A linha 253-254:
+
+         const FONTE: &str = include_str!("main.rs");
+         let producao = FONTE.split("mod tests").next().expect(...);
+
+     O idioma certo ja existe no repo, escrito para o ficheiro que esta de fora. E e
+     mais forte que filtrar `#[cfg(test)]`: o `main.rs` usa `#[cfg(all(test, unix))]`,
+     que um filtro por `cfg(test)` nao apanharia.
 impact: |
   A superficie da CLI — o unico sitio onde um operador escreve flags — nao tem
   nenhum gate estrutural. E a proteccao dos outros nove e mais fraca do que parece:
@@ -602,10 +633,11 @@ required_fix: |
   os NOVE ficheiros passam a ser verificados contra, e pode revelar violacoes hoje
   invisiveis:
 
-  a) Ensinar `linhas_de_codigo` a parar no primeiro `#[cfg(test)]` de cada ficheiro,
-     e SO DEPOIS acrescentar `main.rs` as FONTES. Custo: o gate deixa de ver codigo
-     de teste — o que e correcto, mas e uma reducao de alcance que tem de ser
-     deliberada e nao acidental.
+  a) Ensinar `linhas_de_codigo` a cortar no `mod tests`, REUSANDO o idioma que o
+     `main.rs` ja usa contra si proprio, e so depois acrescentar `main.rs` as FONTES.
+     Cortar por `mod tests` e melhor que filtrar `#[cfg(test)]`: apanha tambem o
+     `#[cfg(all(test, unix))]` do `main.rs`. Custo: o gate deixa de ver codigo de
+     teste — correcto, mas e uma reducao de alcance que tem de ser deliberada.
   b) Acrescentar `main.rs` e mover a lista da linha 319 para outro sitio. Rejeitado
      a partida: a lista esta ja no sitio que o F1-B prescreveu (dentro do teste), e
      move-la outra vez seria repetir o ciclo em vez de o fechar.
