@@ -544,3 +544,77 @@ falsification_required: |
   isso, um campo que devolvesse sempre uma constante passaria.
 review_by: "proxima fatia de observabilidade do console"
 ```
+
+---
+
+## TD-015 — `surface_gate` lê código de teste como se fosse produção, e `main.rs` fica de fora
+
+```yaml
+td_id:     TD-015
+title:     "As FONTES do surface_gate excluem main.rs, e o filtro nao distingue #[cfg(test)] de producao"
+severity:  Medium
+status:    open
+origin:    "Encontrado ao verificar o fechamento documental do F-01, 2026-08-13"
+context: |
+  Provado por leitura e contagem, nao presumido:
+
+  1. `crates/led-console-bin/src/` tem DEZ ficheiros. NOVE estao nas `FONTES` do
+     `tests/surface_gate.rs`. O decimo — `main.rs`, a superficie da CLI — nao esta.
+     Foi acrescentado no COMMAND 03 sem entrar na lista, apesar de o changelog deste
+     repo avisar tres vezes seguidas que "um ficheiro novo que nao entre ali escapa
+     a TODOS os gates do crate" (entradas de 2026-08-09c, 09d e 09e).
+
+  2. Tres gates leem as `FONTES` (linhas 71, 105 e 128): as palavras proibidas do
+     ADR-0017, a segunda-fonte-de-verdade, e o timeout duplicado. `main.rs` escapa
+     aos tres. Um `--blackout` acrescentado a CLI nao seria apanhado por nenhum.
+
+  3. A causa de nao ter sido corrigido antes nao e esquecimento simples: `main.rs`
+     NAO PODE ser acrescentado como esta. A linha 319 e
+
+         for proibido in ["blackout", "--auth", "--cors", "0.0.0.0"] {
+
+     dentro do proprio `mod tests` de `main.rs` — um teste que verifica que o
+     `--help` nao menciona nada disso. E `linhas_de_codigo` (surface_gate.rs:29-34)
+     so filtra comentarios: `//` e `*`. Nao conhece `#[cfg(test)]`. Acrescentar
+     `main.rs` faz o gate do ADR-0017 reprovar por causa de um teste que existe
+     precisamente para impor a mesma regra.
+
+  4. E o problema e maior que `main.rs`: os NOVE ficheiros ja nas FONTES tem TODOS
+     `mod tests` inline (verificado, 9/9). O gate le esse codigo de teste como
+     producao. Passam por SORTE — nenhum dos seus testes calha conter uma palavra
+     proibida. Nao passam por desenho.
+impact: |
+  A superficie da CLI — o unico sitio onde um operador escreve flags — nao tem
+  nenhum gate estrutural. E a proteccao dos outros nove e mais fraca do que parece:
+  depende de nenhum teste futuro nomear uma palavra proibida, que e exactamente o
+  que um teste que PROIBE essa palavra tem de fazer.
+
+  E a mesma classe que este repo ja corrigiu uma vez e nao fechou: "um gate nao pode
+  ser o sitio onde o proibido e escrito" (F1-B, 2026-08-09). A correccao de entao
+  moveu a lista de `surface.rs` para dentro do teste; o gate continuou sem saber
+  distinguir teste de producao.
+mitigation_now: |
+  Nenhuma activa. `main.rs` esta limpo hoje: grep das 16 palavras proibidas devolve
+  zero em codigo de producao (o unico acerto e a linha 319, que e o teste). Portanto
+  nao ha defeito a correr — ha uma proteccao que nao cobre o que diz cobrir.
+required_fix: |
+  DECISAO antes de codigo, porque ensinar o gate a parar em `#[cfg(test)]` muda o que
+  os NOVE ficheiros passam a ser verificados contra, e pode revelar violacoes hoje
+  invisiveis:
+
+  a) Ensinar `linhas_de_codigo` a parar no primeiro `#[cfg(test)]` de cada ficheiro,
+     e SO DEPOIS acrescentar `main.rs` as FONTES. Custo: o gate deixa de ver codigo
+     de teste — o que e correcto, mas e uma reducao de alcance que tem de ser
+     deliberada e nao acidental.
+  b) Acrescentar `main.rs` e mover a lista da linha 319 para outro sitio. Rejeitado
+     a partida: a lista esta ja no sitio que o F1-B prescreveu (dentro do teste), e
+     move-la outra vez seria repetir o ciclo em vez de o fechar.
+
+  Recomendo (a). Nao implementado: e uma decisao sobre o alcance de um gate.
+falsification_required: |
+  Depois de (a): plantar `blackout` em codigo de PRODUCAO de `main.rs` e confirmar
+  que o gate reprova. Controle negativo obrigatorio: a linha 319 (a lista dentro do
+  teste) tem de continuar a NAO reprovar — sem esse segundo controlo, a correccao
+  pode ter simplesmente desligado o gate.
+review_by: "proxima fatia que toque led-console-bin"
+```
