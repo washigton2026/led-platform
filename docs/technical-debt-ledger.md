@@ -659,7 +659,18 @@ review_by: "proxima fatia que toque led-console-bin"
 td_id:     TD-016
 title:     "DdpOutput fixa pixel_offset em 0 nos tres construtores; o daemon nao tem como enderecar o 2.o no"
 severity:  High
-status:    open
+status:    closed
+fixed_in:  "5561aa0 — `DdpOutput::with_pixel_offset`, aditivo"
+evidence_ref: docs/evidence/td-016-ddp-pixel-offset.txt
+negative_control: |
+  DOIS controlos, porque um so nao chegava:
+  A) parametro ignorado (`.pixel_offset = 0`) -> left [0] vs right [2160]: reproduz o
+     defeito com a API ja a existir.
+  B) offset em PIXELS em vez de BYTES -> left [720] vs right [2160]. Existe porque um
+     teste que so afirmasse "o offset chega" passaria com a unidade errada — o valor
+     chega na mesma, e o 2.o no escreveria EM CIMA do 1.o em vez de a seguir.
+  E dentro do teste, `assert_ne!(no1, no2)`: sem ele, olhar so para um no passaria com
+  ambos a zero, que e o defeito.
 origin:    "Investigacao do ADR-0029 (saida multi-controlador), 2026-08-14"
 context: |
   Provado por leitura de codigo, nao presumido:

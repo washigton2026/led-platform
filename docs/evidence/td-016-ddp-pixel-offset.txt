@@ -1,0 +1,34 @@
+# TD-016 — o offset de pixels do DDP passa a ser expressavel e chega ao fio
+git-hash: 5561aa0
+source_files: crates/led-player/src/lib.rs
+required_test: ddp_o_offset_de_cada_no_chega_ao_fio_e_nos_diferentes_diferem
+data: 2026-08-14T17:31:00Z
+
+## Verde
+test tests::ddp_o_offset_de_cada_no_chega_ao_fio_e_nos_diferentes_diferem ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+## Controlo A — o parametro e IGNORADO (o estado exacto do TD-016)
+  mutacao em led-player/src/lib.rs:
+    .pixel_offset = pixel_offset    ->    .pixel_offset = 0
+  left: [0]  right: [2160]
+  test result: FAILED. 0 passed; 1 failed
+  Reproduz o defeito: a API existe, o valor entra, e o fio nao o ve.
+
+## Controlo B (NEGATIVO) — offset em PIXELS em vez de BYTES
+  mutacao em led-protocols/src/ddp.rs:
+    ((self.pixel_offset as usize + sent) * channels)  ->  ((self.pixel_offset as usize + sent))
+  left: [720]  right: [2160]
+  test result: FAILED. 0 passed; 1 failed
+  Sem este controlo a unidade errada passaria, porque o valor CHEGA na mesma —
+  e um segundo no escreveria em cima do primeiro em vez de a seguir a ele.
+
+## Controlo NEGATIVO dentro do proprio teste
+  assert_ne!(no1, no2) — dois nos com offsets diferentes TEM de diferir no fio.
+  Sem ele, um teste que olhasse so para um no passaria com ambos a zero, que e
+  precisamente o defeito que o TD-016 descreve.
+
+## Workspace
+  1070 passed; 0 failed; exit 0 lido SEM pipe (KB-013)
+  clippy --all-targets -D warnings: exit 0
+  led-daemon, led-core, IPC v1 e led-protocols intocados.
