@@ -1,8 +1,21 @@
 # TD-015 — surface_gate: main.rs nas FONTES + corte no mod tests
-git-hash: 19e37d3
+git-hash: 05a76c1
 source_files: crates/led-console-bin/tests/surface_gate.rs
 required_test: nenhum_blackout_na_superficie_nem_no_codigo
-data: 2026-08-14T09:10:58Z
+data: 2026-08-14T12:00:00Z
+
+# NOTA — porque este artefacto foi REGENERADO.
+#
+# A primeira versao registou `git-hash: 19e37d3` — o commit de DOCUMENTACAO. Mas o
+# `surface_gate.rs` so mudou no commit seguinte, `05a76c1`, portanto a evidencia apontava
+# para um estado ANTERIOR aquele que dizia documentar. O `audit_gate.py` detectou-o e
+# BLOQUEOU o commit seguinte:
+#
+#     TD-015: evidence is stale — source files changed after evidence was generated
+#             (hash 19e37d3): ['crates/led-console-bin/tests/surface_gate.rs']
+#
+# Foi o gate a funcionar contra um descuido meu. Corrigir so o numero seria fabricar
+# evidencia: tudo abaixo foi RE-EXECUTADO, incluindo os tres controlos.
 
 ## Verde (main.rs JA nas FONTES)
 test o_exporter_nao_e_alcancavel_diretamente_pelo_browser ... ok
@@ -14,16 +27,27 @@ test nenhum_blackout_na_superficie_nem_no_codigo ... ok
 test nenhuma_segunda_fonte_de_verdade_no_console ... ok
 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
-## Controlo A — blackout em PRODUCAO do main.rs -> REPROVA
-  main.rs: `blackout` em codigo — o ADR-0017 esta ADIADO
-  test result: FAILED. 6 passed; 1 failed
+## Controlo A — `blackout` em PRODUCAO do main.rs -> REPROVA
+  plantado: `let _blackout = false;` em fn main() (linha 145, ANTES do `mod tests` da 210)
+  main.rs:      let _blackout = false;
+  nenhum_blackout_na_superficie_nem_no_codigo
+  test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+
+  # A PRIMEIRA tentativa deste controlo NAO reprovou, e a razao vale registar: plantei
+  # `/// blackout` como comentario de doc, e o `linhas_de_codigo` descarta comentarios —
+  # por desenho. O gate estava certo; a plantacao e que estava errada. So um `blackout`
+  # em CODIGO e um `blackout` de verdade.
 
 ## Controlo B (NEGATIVO) — a lista dentro do mod tests NAO reprova
   main.rs:319  for proibido in ["blackout", "--auth", "--cors", "0.0.0.0"] {
-  test result: ok. 7 passed; 0 failed
-  Sem este controlo, a correccao poderia ter desligado o gate em vez de o corrigir.
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  Sem este controlo, a correccao poderia ter desligado o gate em vez de o corrigir: um
+  gate que se apanha a si proprio e "corrigido" apagando a verificacao fica verde e cego.
 
-## Controlo C — o corte nao apagou o gate nos outros ficheiros
-  grand_master plantado em producao de surface.rs
+## Controlo C — o corte no `mod tests` nao apagou o gate nos OUTROS ficheiros
+  plantado: `pub const GRAND_MASTER_X: u8 = 0;` em producao de surface.rs (linha 35)
   surface.rs: `grand_master` em codigo — o ADR-0017 esta ADIADO
-  test result: FAILED. 6 passed; 1 failed
+  test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+
+## Restaurado
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
