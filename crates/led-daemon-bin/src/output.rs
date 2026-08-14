@@ -99,6 +99,33 @@ impl OutputProtocol {
     }
 }
 
+/// **Um nó físico**: onde está, e que fatia do show lhe pertence (ADR-0029).
+///
+/// É tudo — e só — o que é da **instância**. O ADR-0018 já tinha traçado esta linha ao
+/// manter `address` e `first_universe` fora do `HardwareProfile`: o profile descreve um
+/// *tipo* de hardware, e cinco nós do mesmo tipo diferem exactamente nestes campos.
+///
+/// Por isso a `Calibration` **não** está aqui: ela é do profile, e cinco nós do mesmo preset
+/// partilham-na por construção. Pô-la neste struct sugeriria que pode divergir por nó — e
+/// então o ADR-0019 teria de ser revisitado. Não tem, porque não pode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Alvo {
+    pub addr: SocketAddr,
+    /// Só Art-Net/sACN. O DDP endereça por byte e ignora universos.
+    pub first_universe: u16,
+    /// Onde começa a fatia deste nó **no show**, em pixels.
+    ///
+    /// **Derivado, nunca declarado** — o operador dá endereços, e a repartição sai do
+    /// `max_pixels` do profile. É a mesma disciplina do `pixels_per_datagram`, que deriva do
+    /// MTU em vez de viver escrito ao lado dele: a mesma verdade em dois sítios apodrece no
+    /// segundo (GS4.3).
+    ///
+    /// Com um alvo é sempre `0`, e foi isso que escondeu o TD-016 até agora.
+    pub pixel_offset: u32,
+    /// Quantos pixels **deste** nó. A soma dos alvos é o show; nenhum deles é o show.
+    pub pixel_count: usize,
+}
+
 /// Como a saída é construída. **É isto que o daemon recebe**; ele nunca vê um driver.
 ///
 /// Sem `Eq`: a calibração é `f32`, e igualdade total sobre vírgula flutuante não existe.
@@ -106,10 +133,10 @@ impl OutputProtocol {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutputConfig {
     pub protocol: OutputProtocol,
-    pub addr: SocketAddr,
+    /// Os nós, por ordem. **Nunca vazio** — uma saída sem alvo não é uma saída.
+    pub alvos: Vec<Alvo>,
+    /// Os pixels do **show**, não de um nó. É a soma das fatias.
     pub pixel_count: usize,
-    /// Só Art-Net/sACN. O DDP endereça por byte e ignora universos.
-    pub first_universe: u16,
     /// Formato e **ordem de canais** do nó. Vem do `HardwareProfile` quando há um.
     ///
     /// ⚠️ Antes do GS4.3 isto era `RgbOrder::Rgb` **fixo no código** — o que estava errado
@@ -249,9 +276,11 @@ impl OutputConfig {
         }
         Ok(Self {
             protocol: OutputProtocol::from_profile(profile.capabilities.protocol),
-            addr,
+            // Um alvo. A repartição por N nós é a fatia seguinte do ADR-0029; aqui a
+            // estrutura passa a poder exprimi-la, e o comportamento não muda: com um alvo,
+            // `pixel_offset` é 0 e a fatia é o show inteiro.
+            alvos: vec![Alvo { addr, first_universe, pixel_offset: 0, pixel_count }],
             pixel_count,
-            first_universe,
             color: profile.capabilities.color,
             pixels_per_universe: profile.limits.pixels_per_universe,
             transport: profile.transport,
@@ -286,6 +315,25 @@ impl OutputConfig {
         .warnings()
         .map(|f| format!("{f:?}"))
         .collect()
+    }
+
+    /// O **primeiro** alvo. Para os caminhos que ainda só sabem falar com um nó.
+    ///
+    /// Não é um atalho permanente: existe para que a separação tipo/instância possa entrar
+    /// sem reescrever tudo de uma vez. Um caminho que use isto **não** é multi-controlador.
+    pub fn primeiro(&self) -> &Alvo {
+        self.alvos.first().expect("uma saida tem sempre pelo menos um alvo")
+    }
+
+    /// **Todos os alvos são loopback?** (ADR-0029 §6)
+    ///
+    /// `all`, e não `any`. A excepção do ADR-0005 vale porque um datagrama de loopback não
+    /// atravessa interface nenhuma — e basta **um** alvo de rede para haver fio a proteger.
+    /// Um `any` desligaria o gate do WiFi para o rig inteiro por causa dos nós que não
+    /// contam, que é exactamente a mutação que o controlo negativo
+    /// `num_alvo_de_rede_o_wifi_ativo_reprova_mesmo` já apanhou uma vez.
+    pub fn todos_loopback(&self) -> bool {
+        self.alvos.iter().all(|a| a.addr.ip().is_loopback())
     }
 
     /// A ordem de canais, seja qual for o formato.
@@ -412,7 +460,7 @@ impl OutputManager {
             // `with_limits`, não `with_format`: é aqui que o MTU declarado deixa de ser
             // decorativo e passa a decidir onde o frame se parte.
             OutputProtocol::Ddp => Box::new(led_player::DdpOutput::with_limits(
-                cfg.addr,
+                cfg.primeiro().addr,
                 cfg.pixel_count,
                 cfg.color,
                 cfg.pixels_per_datagram(),
@@ -420,19 +468,19 @@ impl OutputManager {
             )?),
             OutputProtocol::ArtNet => {
                 let assigns =
-                    linear_assignments(cfg.pixel_count, 1, cfg.first_universe, cfg.rgb_order());
+                    linear_assignments(cfg.pixel_count, 1, cfg.primeiro().first_universe, cfg.rgb_order());
                 let layout = CompiledLayout::compile(&assigns);
-                let dev = led_protocols::ArtNetDevice::unicast(1, cfg.addr)?;
+                let dev = led_protocols::ArtNetDevice::unicast(1, cfg.primeiro().addr)?;
                 Box::new(Hal::new(layout, vec![dev]))
             }
             OutputProtocol::Sacn => {
                 let assigns =
-                    linear_assignments(cfg.pixel_count, 1, cfg.first_universe, cfg.rgb_order());
+                    linear_assignments(cfg.pixel_count, 1, cfg.primeiro().first_universe, cfg.rgb_order());
                 let layout = CompiledLayout::compile(&assigns);
                 // CID fixo e nome próprio: um receptor E1.31 distingue fontes por CID, e dois
                 // senders com o mesmo CID seriam indistinguíveis no diagnóstico.
                 let cid = *b"LUMYX-DAEMON-001";
-                let dev = led_protocols::SacnDevice::unicast(1, cfg.addr, cid, "lumyx-daemon")?;
+                let dev = led_protocols::SacnDevice::unicast(1, cfg.primeiro().addr, cid, "lumyx-daemon")?;
                 Box::new(Hal::new(layout, vec![dev]))
             }
         };
@@ -554,15 +602,15 @@ mod tests {
     fn parse_de_configuracao() {
         let c = cfg_de("esp32-poe-wled-ddp", "127.0.0.1", 720);
         assert_eq!(c.protocol, OutputProtocol::Ddp);
-        assert_eq!(c.addr.port(), DDP_PORT, "porta omitida cai no padrão do protocolo");
+        assert_eq!(c.primeiro().addr.port(), DDP_PORT, "porta omitida cai no padrão do protocolo");
 
         assert_eq!(
-            cfg_de("esp32-devkit-wled-artnet", "127.0.0.1", 10).addr.port(),
+            cfg_de("esp32-devkit-wled-artnet", "127.0.0.1", 10).primeiro().addr.port(),
             ARTNET_PORT
         );
-        assert_eq!(cfg_de("falcon-f16v3-sacn", "127.0.0.1", 10).addr.port(), SACN_PORT);
+        assert_eq!(cfg_de("falcon-f16v3-sacn", "127.0.0.1", 10).primeiro().addr.port(), SACN_PORT);
         assert_eq!(
-            cfg_de("esp32-poe-wled-ddp", "127.0.0.1:9999", 10).addr.port(),
+            cfg_de("esp32-poe-wled-ddp", "127.0.0.1:9999", 10).primeiro().addr.port(),
             9999,
             "porta explícita vence o padrão"
         );

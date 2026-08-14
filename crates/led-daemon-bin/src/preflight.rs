@@ -114,10 +114,17 @@ pub fn preflight(
     // corromper — é o mesmo raciocínio da vacuidade do GS2, aplicado a um caso concreto e
     // não à ausência de saída. **Não é um bypass**: um show apontado ao loopback não chega a
     // rig nenhum, e por isso não há nada que a regra pudesse salvar.
-    if cfg.addr.ip().is_loopback() {
+    // `todos_loopback`, nunca `any`: basta UM alvo de rede para haver fio a proteger, e um
+    // `any` desligaria o gate do ADR-0005 para o rig inteiro por causa dos nos que nao contam
+    // (ADR-0029 §6).
+    if cfg.todos_loopback() {
+        let quais: Vec<String> = cfg.alvos.iter().map(|a| a.addr.ip().to_string()).collect();
         notices.push((
             "network_local",
-            format!("{} e loopback: nao atravessa interface, ADR-0005 nao se aplica", cfg.addr.ip()),
+            format!(
+                "{} e loopback: nao atravessa interface, ADR-0005 nao se aplica",
+                quais.join(", ")
+            ),
         ));
         notices.push((
             "devices_unverified",
@@ -168,9 +175,35 @@ pub fn preflight(
             notices,
         };
     }
-    let devices_present = match presence.probe(cfg.addr.ip()) {
+    // Sondar TODOS os alvos: sondar so o primeiro deixaria os outros por verificar, e o
+    // RT-003 existe contra o palco escuro por controlador ausente. A resposta de um no nunca
+    // mascara o silencio de outro (ADR-0029 §6).
+    let mut ausentes_totais: Vec<String> = Vec::new();
+    let mut respondeu: Vec<String> = Vec::new();
+    // `Unavailable` de QUALQUER alvo torna o conjunto indeterminado: "nao consegui sondar
+    // um" nao pode ser arredondado para "os outros responderam". E a mesma regra das tres
+    // categorias do `Inventory` — presente, ausente e NAO SONDADO nunca colapsam em duas.
+    let mut indeterminado: Option<String> = None;
+    for alvo in &cfg.alvos {
+        match presence.probe(alvo.addr.ip()) {
+            Presence::AllPresent => respondeu.push(alvo.addr.ip().to_string()),
+            Presence::Missing(a) => ausentes_totais.extend(a),
+            Presence::Unavailable(porque) => {
+                indeterminado.get_or_insert(porque);
+            }
+        }
+    }
+    // A ordem é deliberada: **ausente vence indeterminado, que vence presente**. Um nó
+    // calado é facto sobre o rig; não conseguir sondar outro não o apaga. É a mesma
+    // hierarquia do `Veredito` do `lumyx-hwcheck` — reprovar > não medir > aprovar.
+    let agregado = match (ausentes_totais.is_empty(), indeterminado) {
+        (false, _) => Presence::Missing(ausentes_totais),
+        (true, Some(porque)) => Presence::Unavailable(porque),
+        (true, None) => Presence::AllPresent,
+    };
+    let devices_present = match agregado {
         Presence::AllPresent => {
-            notices.push(("devices_checked", format!("{} respondeu", cfg.addr.ip())));
+            notices.push(("devices_checked", format!("{} respondeu", respondeu.join(", "))));
             true
         }
         Presence::Missing(ausentes) => {
@@ -219,6 +252,31 @@ mod tests {
         }
     }
 
+    /// Uma sonda que **responde por endereço**, e conta quem foi sondado.
+    ///
+    /// A `SondaFalsa` acima devolve o mesmo para qualquer alvo — e isso torna-a incapaz de
+    /// distinguir *"sondei todos"* de *"sondei o primeiro"*. Descobri-o ao falsificar:
+    /// trocar o laço por `.take(1)` **não reprovava nada**, porque com uma resposta
+    /// uniforme os dois casos são idênticos. Um teste que não distingue não prova.
+    struct SondaPorEndereco {
+        calados: Vec<&'static str>,
+        sondados: std::cell::RefCell<Vec<String>>,
+    }
+    impl DevicePresence for SondaPorEndereco {
+        fn probe(&self, ip: IpAddr) -> Presence {
+            let s = ip.to_string();
+            self.sondados.borrow_mut().push(s.clone());
+            if self.calados.contains(&s.as_str()) {
+                Presence::Missing(vec![s])
+            } else {
+                Presence::AllPresent
+            }
+        }
+        fn name(&self) -> &'static str {
+            "por-endereco"
+        }
+    }
+
     fn saida() -> OutputConfig {
         OutputConfig::resolve(
             &crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap(),
@@ -238,6 +296,138 @@ mod tests {
     }
     fn tem(pf: &Preflight, n: &str) -> bool {
         pf.notices.iter().any(|(k, _)| *k == n)
+    }
+
+    /// **ADR-0029 §6 — um rig MISTO continua a invocar o gate do ADR-0005.**
+    ///
+    /// Este teste existe porque a falsificação mostrou que ele faltava: trocar o `all` por
+    /// `any` em `todos_loopback()` **não reprovava nada**, e com razão — todos os outros
+    /// testes de pré-voo usam **um** alvo, e com um alvo `all` e `any` são indistinguíveis.
+    ///
+    /// O defeito que isto apanha é silencioso e caro: quatro nós em loopback e um em
+    /// `192.168.2.156` atravessam o fio, e um `any` desligaria a proibição de WiFi para o
+    /// rig inteiro por causa dos quatro que não contam. Seria a mutação que o
+    /// `num_alvo_de_rede_o_wifi_ativo_reprova_mesmo` já apanhou uma vez, reintroduzida pela
+    /// porta do lado.
+    #[test]
+    fn rig_misto_um_alvo_de_rede_basta_para_o_gate_do_wifi_valer() {
+        let mut cfg = saida();
+        cfg.alvos = vec![
+            crate::output::Alvo {
+                addr: "127.0.0.1:4048".parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: 0,
+                pixel_count: 360,
+            },
+            crate::output::Alvo {
+                addr: "192.168.2.156:4048".parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: 360,
+                pixel_count: 360,
+            },
+        ];
+        assert!(!cfg.todos_loopback(), "um alvo de rede basta para NAO ser tudo loopback");
+
+        let pf = preflight(
+            Integrity::AssumedByOperator,
+            Some(&cfg),
+            &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
+            &SondaFalsa(Presence::AllPresent),
+        );
+
+        assert!(
+            !pf.report.network_ok,
+            "ha um alvo de REDE: o ADR-0005 aplica-se ao rig inteiro, e o WiFi ativo reprova"
+        );
+        assert!(tem(&pf, "network_refused"));
+        assert!(
+            !tem(&pf, "network_local"),
+            "um rig misto NAO pode ser anunciado como local — seria a excecao a alastrar"
+        );
+    }
+
+    /// **Controlo negativo do teste acima.** Com *todos* os alvos em loopback, a excepção
+    /// continua a valer. Sem isto, o teste anterior passaria mesmo que alguém apagasse a
+    /// excepção do loopback por completo — e aí os testes que a usam quebrariam por outra
+    /// razão, mascarando qual das duas regras se partiu.
+    #[test]
+    fn rig_todo_em_loopback_mantem_a_excecao_do_adr_0005() {
+        let mut cfg = saida();
+        cfg.alvos = vec![
+            crate::output::Alvo {
+                addr: "127.0.0.1:4048".parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: 0,
+                pixel_count: 360,
+            },
+            crate::output::Alvo {
+                addr: "127.0.0.2:4048".parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: 360,
+                pixel_count: 360,
+            },
+        ];
+        assert!(cfg.todos_loopback());
+
+        let pf = preflight(
+            Integrity::AssumedByOperator,
+            Some(&cfg),
+            &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
+            &SondaFalsa(Presence::AllPresent),
+        );
+        assert!(pf.report.network_ok, "nenhum datagrama atravessa interface: a excecao vale");
+        assert!(tem(&pf, "network_local"));
+    }
+
+    /// **ADR-0029 §6 — um nó calado reprova, mesmo que os outros respondam.**
+    ///
+    /// O RT-003 existe contra o palco escuro por controlador ausente. Sondar só o primeiro
+    /// alvo deixaria os outros por verificar, e a resposta de um nó **nunca** pode mascarar
+    /// o silêncio de outro.
+    #[test]
+    fn um_no_calado_reprova_o_preflight_mesmo_com_os_outros_a_responder() {
+        let mut cfg = saida();
+        cfg.alvos = vec![
+            crate::output::Alvo {
+                addr: "192.168.2.156:4048".parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: 0,
+                pixel_count: 360,
+            },
+            crate::output::Alvo {
+                addr: "192.168.2.157:4048".parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: 360,
+                pixel_count: 360,
+            },
+        ];
+
+        // **O primeiro RESPONDE e o segundo está calado.** É esta assimetria que discrimina:
+        // com uma sonda uniforme, sondar um ou dois alvos daria o mesmo resultado e o teste
+        // passaria mesmo que só o primeiro fosse consultado — que é o defeito.
+        let sonda = SondaPorEndereco {
+            calados: vec!["192.168.2.157"],
+            sondados: std::cell::RefCell::new(Vec::new()),
+        };
+        let pf =
+            preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaFalsa(Ok(())), &sonda);
+
+        assert_eq!(
+            sonda.sondados.borrow().len(),
+            2,
+            "TODOS os alvos tem de ser sondados; sondados={:?}",
+            sonda.sondados.borrow()
+        );
+        assert!(!pf.report.devices_present, "um no calado reprova o rig, mesmo com o outro a responder");
+        assert!(tem(&pf, "devices_missing"));
+
+        let aviso = pf.notices.iter().find(|(k, _)| *k == "devices_missing").unwrap();
+        assert!(
+            aviso.1.contains("192.168.2.157"),
+            "o aviso tem de NOMEAR quem falta — com cinco robos, 'SEM resposta' sem dizer de \
+             quem manda o operador procurar em cinco sitios: {}",
+            aviso.1
+        );
     }
 
     /// **A vacuidade acabou.** Com saída, os dois campos vêm das sondas — e o teste prova-o

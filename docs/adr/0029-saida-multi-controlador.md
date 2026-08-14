@@ -89,6 +89,30 @@ mesma: **show parcial é melhor que palco escuro.**
 O que fica **proibido** é o inverso — um nó em silêncio não pode ser indistinguível de um
 nó a funcionar. As estatísticas são **por alvo**, nunca somadas numa só.
 
+### 6 · O pré-voo com N alvos: **todos** para a excepção, **qualquer um** para a recusa
+
+Duas regras que com um alvo eram a mesma coisa, e com N deixam de o ser. Ficam escritas
+porque substituir `cfg.addr` por `cfg.alvos[0].addr` mecanicamente daria a resposta errada
+nas duas, **em silêncio**.
+
+**A excepção do loopback exige `all`.** Hoje: *"um alvo de loopback não atravessa interface
+nenhuma, logo o gate do ADR-0005 não se lhe aplica"*. Com N, isso só vale se **todos** forem
+loopback. Um rig com quatro nós em loopback e um em `192.168.2.156` atravessa o fio — e um
+`any(is_loopback)` desligaria o gate do WiFi para o rig inteiro por causa dos quatro que não
+contam. Seria a mutação que o controlo negativo `num_alvo_de_rede_o_wifi_ativo_reprova_mesmo`
+já apanhou uma vez, reintroduzida pela porta do lado.
+
+**A presença exige que se sondem todos, e um ausente reprova.** Hoje sonda-se um endereço.
+Com N, sondar só o primeiro deixaria quatro nós por verificar — e o RT-003 existe
+precisamente contra o palco escuro por controlador ausente. Um nó em silêncio reprova o
+pré-voo, mesmo que os outros quatro respondam: **a resposta de um nó nunca mascara o silêncio
+de outro**, que é a propriedade que o `presence()` do `led-protocols` já garante e que os
+testes de `discovery.rs` já afirmam.
+
+**Consequência para os avisos:** `devices_missing` passa a **nomear quais** faltam, não
+apenas que faltam. Com cinco robôs, *"SEM resposta"* sem dizer de quem manda o operador
+procurar em cinco sítios.
+
 ## Alternativas rejeitadas
 
 **A · Art-Net primeiro, DDP depois.** Rejeitada: cria a assimetria silenciosa que o achado

@@ -136,6 +136,24 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-14c — ADR-0029 passo 1: a saída passa a poder exprimir N nós (e a falsificação encontrou um teste em falta)
+
+**Done.** `OutputConfig` separa **tipo** de **instância**: nasce o `Alvo { addr, first_universe, pixel_offset, pixel_count }` e a config passa a ter `alvos: Vec<Alvo>`. **O comportamento não muda** — com um alvo, `pixel_offset` é 0 e a fatia é o show inteiro. O fan-out em si é o passo seguinte.
+
+**A `Calibration` NÃO está no `Alvo`, e a ausência é a decisão.** Ela é do profile, e cinco nós do mesmo preset partilham-na por construção. Pô-la ali sugeriria que pode divergir por nó — e aí o ADR-0019 teria de ser revisitado. Não tem, porque não pode.
+
+**Duas regras do pré-voo deixam de ser mecânicas com N alvos** (ADR-0029 §6, escrito antes do código). A excepção do loopback exige **`all`**, nunca `any`: basta um alvo de rede para haver fio a proteger, e um `any` desligaria o gate do ADR-0005 para o rig inteiro por causa dos nós que não contam. E a presença exige sondar **todos**, com um ausente a reprovar — o RT-003 existe contra o palco escuro, e a resposta de um nó nunca mascara o silêncio de outro. Os avisos passam a **nomear quem falta**: com cinco robôs, *"SEM resposta"* sem dizer de quem manda procurar em cinco sítios.
+
+**A agregação tem hierarquia, e é a que o repositório já usa:** ausente vence indeterminado, que vence presente. Um nó calado é facto sobre o rig; não conseguir sondar outro não o apaga. É o `Veredito` do `lumyx-hwcheck` outra vez — reprovar > não medir > aprovar.
+
+**O achado desta fatia veio da falsificação, e é sobre os meus próprios testes.** Mutei `all` → `any` e **nada reprovou** — porque todos os testes de pré-voo usam **um** alvo, e com um alvo as duas são indistinguíveis. A regra que eu tinha acabado de escrever **não tinha teste**. Escrevi três: rig misto (um loopback + um de rede) tem de invocar o gate do WiFi; rig todo em loopback mantém a excepção (controlo negativo, senão o primeiro passaria com a excepção apagada); e um nó calado reprova com os outros a responder.
+
+**E o segundo achado é do mesmo tipo.** A mutação *"sondar só o primeiro alvo"* também não reprovava — porque a `SondaFalsa` devolve o mesmo para qualquer endereço, e com resposta uniforme sondar um ou dois é idêntico. Um teste que não distingue não prova. Nasceu a `SondaPorEndereco`, que responde **por endereço** e **conta quem foi sondado**; agora o `.take(1)` reprova com `sondados=["192.168.2.156"]`. Ambas as falsificações apanham.
+
+**Invariants verified.** **1073 testes** (+3), exit 0 lido **sem pipe** (KB-013). Clippy `-D warnings` exit 0. A rede que guarda o caminho validado em hardware — `calibration_path`, `wled_driver`, `pipeline`, `e2e_output` — **verde sem alterações**: é essa a prova de que a separação tipo/instância não mudou um byte no fio. `led-daemon`, `led-core`, IPC v1 e `led-protocols` intocados.
+
+**Pending.** O fan-out **não existe ainda**: `OutputManager` continua com uma saída, e `OutputConfig::resolve` cria sempre um alvo. Falta a CLI aceitar N endereços, a repartição derivada do `max_pixels`, e as N saídas com estatísticas **por alvo**. Nada validado com nós físicos; o rig continua offline.
+
 ### 2026-08-14b — A1: o ADR do multi-controlador, e o defeito latente que a investigação encontrou
 
 **Nenhum código de produção mudou.** [ADR-0029](./docs/adr/0029-saida-multi-controlador.md) escrito e indexado **antes** da implementação, e um defeito registado como **TD-016**.
