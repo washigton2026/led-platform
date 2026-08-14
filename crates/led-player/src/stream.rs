@@ -312,22 +312,57 @@ mod tests {
         assert_eq!(seen[199], 199 * 25, "ordem e timestamps preservados");
     }
 
+    /// **No horário, nada pode contar como atrasado** — e o relógio é fixado para que isso
+    /// deixe de depender do escalonador.
+    ///
+    /// # O defeito que esta versão corrige (F7.2, macOS)
+    ///
+    /// A versão anterior usava `SharedClock::new()` com `epoch_ms: 0`. Mas `new()` põe
+    /// `epoch = Instant::now()`, portanto o alvo do quadro 0 é **o instante em que o
+    /// relógio nasceu** — um prazo que já passou por quanto tempo levar a entrar na função
+    /// e ler o primeiro registo. Não era um teste sobre o pacing: era uma corrida contra o
+    /// próprio arranque, que esta máquina ganhava por arredondar a 0 ms e um runner
+    /// partilhado perdia.
+    ///
+    /// Mecanismo provado por medição, com os **dois** valores que a CI produziu
+    /// reproduzidos exactamente: relógio 1 ms à frente ⇒ `frames_late = 1`; 26 ms à frente
+    /// (um período + 1) ⇒ `frames_late = 2`, porque o quadro 0 é superado e descartado e o
+    /// quadro 1 também vence.
+    ///
+    /// # Porque um offset NEGATIVO, e não uma época no futuro
+    ///
+    /// Adiar a época dá folga só ao quadro 0: a partir daí a folga volta a ser **um
+    /// período**, e uma pausa do escalonador maior que ele torna a atrasar. Qualquer
+    /// margem escolhida seria um orçamento de relógio de parede — o paliativo que o TD-006
+    /// já nomeia.
+    ///
+    /// `with_offset(-60_000)` faz `now_ms()` saturar em **0** durante 60 s
+    /// (`shared_clock.rs`: `wall.saturating_sub(60_000)`), portanto `now > target` é
+    /// **inalcançável** e o veredito deixa de depender do tempo que a máquina leva. Um run
+    /// que passasse 60 s aqui seria um teste pendurado, não um teste instável. A ordem de
+    /// grandeza é a que o teste vizinho já usa (`with_offset(60_000)`), com o sinal trocado.
+    ///
+    /// **E continua a discriminar onde interessa:** com `now == 0` e alvo `0`, é a fronteira
+    /// exacta do `>`. Trocar `now > target` por `now >= target` faz o quadro 0 contar como
+    /// atrasado e este teste reprova — que é precisamente o off-by-one que ele protege.
+    ///
+    /// O período desce de 25 ms para 10 ms porque com o relógio fixo cada espera é o alvo
+    /// inteiro (0+10+…+50), e sem isso o ficheiro triplicaria de duração sem provar mais nada.
     #[test]
     fn absolute_pacing_on_schedule_reports_no_lateness() {
-        // Relógio novo começa em ~0, então época 0 é AGORA: o playback consegue cumprir
-        // os alvos e nada pode ser reportado como atrasado.
-        let data = show(8, 6, 25);
+        let data = show(8, 6, 10);
         let reader = ShowReader::new(Cursor::new(data)).unwrap();
         let spy = Arc::new(Spy::default());
-        let rep = play_streaming_unverified(
-            reader,
-            spy.as_ref(),
-            Pacing::Absolute { epoch_ms: 0 },
-            &SharedClock::new(),
-        )
-        .unwrap();
+        let clock = SharedClock::with_offset(-60_000);
+        assert_eq!(clock.now_ms(), 0, "o relogio TEM de estar fixo em 0, senao o teste volta a ser uma corrida");
+
+        let rep =
+            play_streaming_unverified(reader, spy.as_ref(), Pacing::Absolute { epoch_ms: 0 }, &clock)
+                .unwrap();
+
         assert_eq!(rep.frames_played, 6);
         assert_eq!(rep.frames_late, 0, "no horário: nada pode contar como atrasado");
+        assert_eq!(rep.worst_late_ms, 0, "e o pior atraso tem de ser zero, nao so a contagem");
     }
 
     #[test]

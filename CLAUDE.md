@@ -136,6 +136,32 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-13c — F7.2 fatia 1 (macOS): o teste era uma corrida contra o próprio arranque
+
+**Done.** `absolute_pacing_on_schedule_reports_no_lateness` deixa de depender do escalonador. **Só `crates/led-player/src/stream.rs`, dentro de `mod tests`** — zero linhas de produção. A fatia do Ubuntu **não** foi tocada.
+
+**A causa foi medida, não deduzida — e os dois valores da CI foram reproduzidos exactamente.** `SharedClock::new()` põe `epoch = Instant::now()`; com `Pacing::Absolute { epoch_ms: 0 }`, o alvo do quadro 0 é **o instante em que o relógio nasceu**. Esse prazo já passou por construção, por quanto tempo levar a entrar na função e ler o primeiro registo. Uma sonda temporária com offsets controlados:
+
+| relógio | `frames_late` | corresponde a |
+|---|---|---|
+| `+1 ms` | **1** | run 31589767217 (`left: 1`) |
+| `+26 ms` (um período + 1) | **2** | run 31749885199 (`left: 2`) |
+| `−60 000 ms` | **0** | a correcção |
+
+Nunca foi um teste sobre pacing: era uma corrida contra o arranque, que esta máquina ganha por arredondar a 0 ms e um runner partilhado perde. **Não reproduz localmente nem com a CPU saturada** (0/30 falhas com 12 processos de espera activa num host de 4 CPUs) — por isso a prova é o mecanismo, não o flake.
+
+**A correcção não é um orçamento, e isso é a decisão.** Adiar a época dá folga só ao quadro 0 — a partir daí a folga volta a ser **um período**, e uma pausa maior que ele reprova na mesma. Qualquer margem escolhida seria o paliativo que o **TD-006** já nomeia. `SharedClock::with_offset(-60_000)` faz `now_ms()` **saturar em 0** durante 60 s (`shared_clock.rs`: `wall.saturating_sub(...)`), portanto `now > target` é **inalcançável** e o veredito deixa de depender do tempo que a máquina leva. Um run que passasse 60 s ali seria um teste pendurado, não instável. A ordem de grandeza é a que o teste vizinho já usa (`with_offset(60_000)`), com o sinal trocado.
+
+**E continua a discriminar onde interessa.** Com `now == 0` e alvo `0`, está na fronteira exacta do `>`. **Falsificado 2×:** trocar `now > target` por `now >= target` faz o quadro 0 contar como atrasado e reprova (`left: 1`) — é esse o off-by-one que o teste protege; destravar o relógio (`with_offset(1)`) faz a guarda nova disparar **primeiro** e nomear a causa, em vez de a asserção principal falhar sem explicação.
+
+O período desce de 25 ms para 10 ms porque com o relógio fixo cada espera é o alvo inteiro (0+10+…+50): sem isso o ficheiro passava de 125 ms para 390 ms sem provar mais nada. Com 10 ms fica em ~158 ms.
+
+**Invariants verified.** **1067 testes**, exit `0` lido **sem pipe** (KB-013), 0 FAILED. Clippy `-D warnings` exit 0. 30/30 execuções isoladas do teste corrigido. `led-daemon`, `led-core`, IPC v1, `console-web/` e `led-protocols` **intocados**.
+
+**Achado por caminho, nomeado e NÃO corrigido.** Numa execução do workspace, `o_daemon_recusa_a_linha_longa_por_si_proprio` (`led-console-bin/tests/ipc_contra_o_daemon.rs:177`) falhou com **BrokenPipe**; na re-execução passou, e passa 6/6 isolado. Não é desta fatia (o diff é só `stream.rs`, noutro crate). É uma corrida **inerente à decisão da F1-B**: `server.rs:226-231` escreve a recusa e **fecha sem drenar**, enquanto o cliente ainda escreve 64 KiB+ — o `writeln!` do teste apanha EPIPE. É a **primeira observação** registada: não constava do changelog, do ledger nem do KB. Corrigi-lo é fatia própria, e a correcção provável é do lado do **teste** (tolerar EPIPE na escrita, porque o fecho é o comportamento *desejado*), não do daemon.
+
+**Pending.** **Esta correcção não foi vista a passar em macOS na CI** — só localmente, e localmente o teste já passava antes. A validação real exige push, que não está autorizado. Fatia 2 (Ubuntu, as 4 alocações no caminho DDP) **não começou**.
+
 ### 2026-08-13b — F-01: o `● Streaming` mentiroso fecha — o elo a montante passa a ser observável
 
 **Done.** O achado que a Phase 2 nomeou e não corrigiu está fechado. [ADR-0026 §9-quinquies](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do código, e `GET /api/upstream` expõe o estado da subscrição console→daemon. `led-daemon`, `led-core`, `led-protocols`, `led-player` e o IPC v1 **intocados**.
