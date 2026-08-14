@@ -328,6 +328,50 @@ pub fn gerar_typescript() -> String {
          */\n\
          export interface EstadoUpstream {\n  \
          readonly upstream: boolean;\n\
+         }\n\n",
+    );
+
+    // ── Argumentos dos comandos (ADR-0027, Emenda 2) ─────────────────────────
+    //
+    // Ate aqui o contrato so descrevia o que se RECEBE. Os argumentos de um comando —
+    // o que o browser ENVIA — nao tinham tipo nenhum, e a assimetria era invisivel
+    // porque o unico comando com argumentos era o `seek` (`{to_ms}`, dois caracteres
+    // dificeis de errar). Com o `load` deixa de ser trivial.
+    //
+    // Cobre-se so o que a superficie HTTP expoe. `hello`, `subscribe`, `ping` e
+    // `shutdown` estao em `NUNCA_EXPOSTOS` (surface.rs): descrever os argumentos de
+    // comandos que o browser nao pode enviar seria alargar o contrato para la desta
+    // fronteira.
+    //
+    // Os nomes dos campos sao escritos aqui — nao ha reflexao em runtime sobre campos de
+    // um enum. E por isso que existe o caminho B: `tests/contract_gate.rs` extrai-os do
+    // TEXTO-FONTE do `enum Cmd` e reprova se algum ficar de fora. A mesma disciplina que
+    // o `EstadoDoDaemon` ja usa contra o arm `Cmd::Status`.
+    s.push_str(
+        "/**\n \
+         * Os argumentos de `POST /api/transport/load` — `Cmd::Load` do IPC v1.\n \
+         *\n \
+         * `path` e um caminho de ficheiro. NAO ha catalogo de shows: nenhuma rota os\n \
+         * lista, e inventar uma lista no console seria a segunda fonte de verdade que o\n \
+         * ADR-0026 §15 proibe. O daemon recusa o que nao existir com `load_failed`, e o\n \
+         * `detail` traz o erro real do loader.\n \
+         *\n \
+         * `assume_integrity` NAO e uma opcao de conveniencia. Faz DUAS coisas: afirma a\n \
+         * integridade (`Integrity::AssumedByOperator`) e dispara o pre-voo e o `Arm`. Sem\n \
+         * ela o show fica em `loaded` e o `play` seguinte devolve `not_armed`.\n \
+         *\n \
+         * E o daemon NUNCA verifica: `pixel_hash` exige o show inteiro em RAM e hash em\n \
+         * fluxo nao existe (GS2). Por isso `Integrity` e um enum e nao um booleano — para\n \
+         * que \"assumido\" e \"verificado\" nao fiquem indistinguiveis. A UI expoe isto\n \
+         * como DUAS accoes nomeadas, nunca como caixa (ADR-0028 D8).\n \
+         */\n\
+         export interface ArgsLoad {\n  \
+         readonly path: string;\n  \
+         readonly assume_integrity: boolean;\n\
+         }\n\n\
+         /** Os argumentos de `POST /api/transport/seek` — `Cmd::Seek` do IPC v1. */\n\
+         export interface ArgsSeek {\n  \
+         readonly to_ms: number;\n\
          }\n",
     );
 

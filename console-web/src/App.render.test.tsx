@@ -12,7 +12,7 @@
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { App, Daemon, Eventos, Indisponivel, Transporte } from "./App";
+import { App, Daemon, Eventos, Gestao, Indisponivel, Transporte } from "./App";
 import { ESPERADO } from "./marcacao.esperada";
 import type { EventoCru } from "./transport/api";
 
@@ -79,6 +79,23 @@ const CASOS: ReadonlyArray<readonly [keyof typeof ESPERADO, JSX.Element]> = [
     />,
   ],
   ["INDISPONIVEL", <Indisponivel code="console.daemon_offline" detail="/tmp/x.sock" />],
+  // A gestao do show. O caminho e ESCRITO — nenhuma rota lista shows, e uma lista
+  // fabricada seria o ADR-0028 D3 outra vez.
+  [
+    "GESTAO",
+    <Gestao
+      caminho="/shows/robot.lumyx"
+      aoMudarCaminho={NADA}
+      aoCarregar={NADA}
+      aoDescarregar={NADA}
+    />,
+  ],
+  // Sem caminho: os DOIS de carregar ficam indisponiveis e o `unload` NAO — porque a
+  // recusa do unload pertence a matriz do daemon, nao ao browser (ADR-0028 D9).
+  [
+    "GESTAO_SEM_CAMINHO",
+    <Gestao caminho="" aoMudarCaminho={NADA} aoCarregar={NADA} aoDescarregar={NADA} />,
+  ],
   // Nada medido ainda: os DOIS elos a `○ …`, e nenhum arredondado para "em baixo".
   [
     "EVENTOS_VAZIO",

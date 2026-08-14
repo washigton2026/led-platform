@@ -196,6 +196,36 @@ está dentro do `cargo test` — de propósito: pôr Node no caminho do `cargo t
 Rust falhar em máquinas sem Node, o que é um preço maior do que o problema. Integrá-lo na CI
 é a fatia seguinte, e fica registado como pendente em vez de dado como feito.
 
+## Emenda 2 (2026-08-14) — o contrato passa a cobrir o que se **envia**, não só o que se recebe
+
+A decisão 2 dizia *"o contrato cobre só o que atravessa o fio"* — e cobria, mas só numa
+direcção. `EstadoDoDaemon`, `EstadoUpstream`, `EventoPayload`, `Resposta`, `Evento`, `ROTAS`:
+tudo **resposta**. **Nada descrevia os argumentos de um comando.**
+
+**Até agora isso não custou nada, e é por isso que passou despercebido.** O único comando com
+argumentos era o `seek`, que manda `{to_ms}` — dois caracteres difíceis de errar, e um erro
+ali é imediatamente visível. A assimetria era invisível porque a superfície era trivial.
+
+**Com o `load` deixa de ser trivial.** O `Cmd::Load { path, assume_integrity }` tem dois campos
+de tipos diferentes, e o segundo **não é uma opção**: dispara o pré-voo e o `Arm`. Escrever
+essa forma à mão no frontend seria exactamente a segunda fonte de verdade que a Phase 1.1
+eliminou do lado da resposta — *"sem ele, a UI escreveria a forma à mão"* — só que na direcção
+que ninguém tinha olhado.
+
+**Decisão: os argumentos entram no contrato, pelos mesmos dois caminhos.** O **caminho A**
+emite-os dos valores Rust compilados. O **caminho B** extrai-os do **texto-fonte do `enum Cmd`**
+em `proto.rs` — o produtor real, o mesmo princípio que já se aplica ao arm `Cmd::Status`. Um
+campo novo num comando que não chegue ao TypeScript reprova.
+
+**O que NÃO entra**, para o contrato continuar a ser a fronteira e não o modelo de domínio: os
+comandos que a superfície HTTP nunca expõe (`hello`, `subscribe`, `shutdown` — a tabela
+`NUNCA_EXPOSTOS` do `surface.rs`). Descrever argumentos de comandos que o browser não pode
+enviar seria alargar o contrato para lá do que atravessa **esta** fronteira.
+
+**Consequência aceite:** o gerador passa a ler duas secções de `proto.rs` em vez de uma, e o
+gate ganha uma extracção nova. É o preço de a assimetria deixar de existir — e o momento certo
+para o pagar é agora, quando o primeiro comando que a torna perigosa está a ser construído.
+
 ## Critério de reversão
 
 Se o repo alguma vez adotar `serde` por outra razão de peso, geração por schema passa a ser

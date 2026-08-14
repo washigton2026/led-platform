@@ -82,6 +82,15 @@ export const estilos = {
     opacity: ENFASE.rotuloDeCampo,
   },
   entrada: { fontFamily: MONO, fontSize: "0.8rem", width: "6rem", padding: "0.2rem 0.3rem" },
+  // Um caminho de ficheiro nao cabe em 6rem, e um campo que corta o que o operador
+  // escreveu esconde precisamente a parte que ele precisa de conferir antes de carregar.
+  entradaCaminho: {
+    fontFamily: MONO,
+    fontSize: "0.8rem",
+    flex: 1,
+    minWidth: "18rem",
+    padding: "0.2rem 0.3rem",
+  },
   instante: { opacity: ENFASE.discreto, marginRight: "0.6rem", ...NUMERICO },
   evento: {
     fontSize: "0.75rem",

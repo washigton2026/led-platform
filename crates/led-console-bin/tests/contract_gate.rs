@@ -401,3 +401,102 @@ fn o_artefacto_diz_que_e_gerado_e_como_o_regenerar() {
 fn o_gerador_e_deterministico() {
     assert_eq!(gerar_typescript(), gerar_typescript());
 }
+
+// ── Caminho B para os ARGUMENTOS dos comandos (ADR-0027, Emenda 2) ───────────
+
+/// Extrai os campos de uma variante do `enum Cmd` a partir do **texto-fonte** de
+/// `proto.rs` — o produtor real, não uma cópia.
+fn campos_da_variante(variante: &str) -> Vec<String> {
+    let corpo = PROTO_RS
+        .split("pub enum Cmd {")
+        .nth(1)
+        .expect("o `enum Cmd` tem de existir em proto.rs")
+        .split("\n}")
+        .next()
+        .expect("corpo do enum");
+
+    let linha = corpo
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&format!("{variante} {{")))
+        .unwrap_or_else(|| panic!("a variante `{variante}` nao esta no `enum Cmd`"));
+
+    let dentro = linha
+        .split_once('{')
+        .and_then(|(_, r)| r.rsplit_once('}'))
+        .map(|(d, _)| d)
+        .expect("chavetas da variante");
+
+    dentro
+        .split(',')
+        .filter_map(|p| p.split_once(':').map(|(n, _)| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// **Todo argumento que o browser pode enviar existe no contrato.**
+///
+/// A Phase 1.1 fechou a segunda fonte de verdade do lado da **resposta**; esta fecha-a do
+/// lado do **envio**, que é a direcção que ninguém tinha olhado.
+///
+/// Cobre só o que a superfície expõe: `hello`, `subscribe`, `ping` e `shutdown` estão em
+/// `NUNCA_EXPOSTOS`, e descrever argumentos de comandos que o browser não pode enviar
+/// alargaria o contrato para lá desta fronteira.
+#[test]
+fn nenhum_argumento_de_comando_exposto_falta_no_contrato() {
+    // (variante do `enum Cmd`, comando no fio, interface no TypeScript)
+    const EXPOSTOS: &[(&str, &str, &str)] =
+        &[("Load", "load", "ArgsLoad"), ("Seek", "seek", "ArgsSeek")];
+
+    for (variante, cmd, interface) in EXPOSTOS {
+        // Premissa verificada, não assumida: o comando é mesmo servido pela superfície.
+        assert!(
+            led_console_bin::surface::ROTAS.iter().any(|r| r.cmd_ipc == Some(*cmd)),
+            "`{cmd}` nao esta em ROTAS — este gate estaria a exigir o contrato de um \
+             comando que o browser nao pode enviar"
+        );
+
+        let campos =
+            nao_vazio(campos_da_variante(variante), &format!("campos de Cmd::{variante}"));
+        assert!(
+            TS_VERSIONADO.contains(&format!("export interface {interface} {{")),
+            "o comando `{cmd}` leva argumentos e o contrato nao tem `{interface}`. Sem ele \
+             a UI escreve a forma do pedido a mao — a segunda fonte de verdade do §15."
+        );
+
+        // O bloco da interface, para um campo homónimo noutra interface não a satisfazer.
+        let bloco = TS_VERSIONADO
+            .split(&format!("export interface {interface} {{"))
+            .nth(1)
+            .expect("bloco da interface")
+            .split('}')
+            .next()
+            .expect("fim do bloco");
+
+        for c in &campos {
+            assert!(
+                bloco.contains(&format!("readonly {c}:")),
+                "`Cmd::{variante}` leva o argumento `{c}` e ele NAO esta em `{interface}`. \
+                 Um argumento que o daemon exige e o contrato desconhece chega ao fio em \
+                 falta, e o daemon recusa com `invalid_args` sem a UI saber porque."
+            );
+        }
+    }
+}
+
+/// **Controlo negativo: o que NÃO é exposto não ganha tipo.**
+///
+/// Sem isto, o gate acima ficaria satisfeito com um contrato que descrevesse *tudo* — e o
+/// contrato deixaria de ser a **fronteira** para passar a ser o modelo de domínio, que é
+/// precisamente o que a decisão 2 do ADR-0027 recusa.
+#[test]
+fn os_comandos_nunca_expostos_nao_ganham_tipo_de_argumentos() {
+    for (cmd, _) in led_console_bin::surface::NUNCA_EXPOSTOS {
+        let nome = format!("Args{}{}", cmd[..1].to_uppercase(), &cmd[1..]);
+        assert!(
+            !TS_VERSIONADO.contains(&format!("export interface {nome} {{")),
+            "`{cmd}` esta em NUNCA_EXPOSTOS e o contrato descreve `{nome}`. O contrato e a \
+             fronteira, nao o modelo de dominio (ADR-0027 decisao 2)."
+        );
+    }
+}

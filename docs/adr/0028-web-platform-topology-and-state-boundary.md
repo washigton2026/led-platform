@@ -132,6 +132,49 @@ O `ClientRegistry` continua vazio, e é isso que mantém o console loopback-only
 Isto é a **condição actual**, não uma promessa de autenticação futura. Qualquer decisão adicional
 pertence à fase apropriada.
 
+### D8 · `load` — duas acções nomeadas, nunca uma caixa
+
+**A regra.** A afirmação de integridade é uma **acção com nome próprio**, e a acção que a faz
+tem de **nomear a consequência operacional**. Nunca uma caixa de verificação.
+
+- **"Carregar sem armar"** → `assume_integrity: false`
+- **"Assumir integridade e armar"** → `assume_integrity: true`, **com confirmação explícita
+  antes do envio**
+
+**Porque uma caixa está errada aqui.** Lido no aplicador (`run.rs:360-399`), `assume_integrity`
+faz **duas** coisas, não uma: afirma a integridade (`Integrity::AssumedByOperator`) **e**
+dispara o pré-voo e o `Arm`. E o daemon **nunca verifica** — o GS2 decidiu-o por
+impossibilidade técnica (*"`pixel_hash` exige o show inteiro em RAM; hash em fluxo não
+existe"*), e `Integrity` é um `enum` e não um `bool` precisamente para que *"assumido"* e
+*"verificado"* não fiquem indistinguíveis.
+
+Uma caixa **pré-marcada** faria o operador afirmar integridade sem saber que a afirmou —
+o colapso exacto que o `enum` existe para impedir, reintroduzido na última camada. Uma caixa
+**desmarcada** produz um `load` que parece funcionar e um `play` seguinte que recusa com
+`not_armed` sem nada no ecrã a explicar porquê. As duas falham, por razões opostas.
+
+Duas acções distintas removem a ambiguidade **por construção**: não há estado intermédio onde o
+operador possa ter afirmado algo sem reparar. É a mesma disciplina do `shutdown` em duas fases
+do GS3 — *"não é segredo criptográfico; existe contra o engano"*.
+
+### D9 · A matriz de estados **não** é replicada no browser
+
+`load` só é aceite em `idle`; `unload` em tudo menos `idle` e `playing` (tabela dos 80 pares,
+ADR-0023). A UI **não antecipa** nenhuma destas regras: envia o comando e mostra a **recusa
+real** — `show_already_loaded`, `no_show_loaded`, `not_applicable`, `in_error_state` — com o
+código do daemon verbatim.
+
+Desactivar botões consoante o estado seria reimplementar 80 pares no frontend, e eles
+divergiriam no dia em que a matriz mudasse: a segunda fonte de verdade que o ADR-0026 §15
+proíbe. É a decisão que a superfície de transporte já tomou, estendida a `load`/`unload` sem
+excepção — e o custo aceite é o mesmo: um clique que não se aplica devolve uma recusa em vez
+de um botão cinzento.
+
+**Não há catálogo de shows, e não se inventa um.** Zero rotas os listam. A entrada é o
+**caminho**, e o daemon recusa o que não existir com `load_failed` — código que já está no
+contrato gerado, com o `detail` a trazer o erro real do loader. Uma lista fabricada no console
+seria a D3 outra vez, noutro campo.
+
 ## Operational Truth Boundary — regra normativa
 
 A Web Platform **MUST NOT** inferir, derivar ou apresentar como facto:

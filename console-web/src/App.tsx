@@ -12,10 +12,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
+import { caminhoMudou, caminhoUtilizavel, cliqueArmar, LIMPA } from "./confirmacao";
 import { descreveEvento, ehProgresso } from "./eventos";
 import { marcaDeEstado, rotulosDeFluxo } from "./ligacoes";
 import { Campo, estilos, Indicador, Seccao } from "./ui";
 import {
+  carregar,
   comandar,
   lerEstado,
   lerUpstream,
@@ -53,6 +55,7 @@ export function App() {
   const [upstream, setUpstream] = useState<boolean | null>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [seekMs, setSeekMs] = useState("0");
+  const [caminho, setCaminho] = useState("");
 
   useEffect(() => {
     let vivo = true;
@@ -114,6 +117,14 @@ export function App() {
       ) : null}
 
       <hr style={estilos.regua} />
+      <Gestao
+        caminho={caminho}
+        aoMudarCaminho={setCaminho}
+        aoCarregar={(assumir) => void carregar(caminho.trim(), assumir).then(setResultado)}
+        aoDescarregar={() => void comandar("unload").then(setResultado)}
+      />
+
+      <hr style={estilos.regua} />
       <Transporte
         seekMs={seekMs}
         aoMudarSeek={setSeekMs}
@@ -138,8 +149,8 @@ export function App() {
  * mudasse. Quem decide se um comando se aplica é o daemon; o que a UI faz é **mostrar a
  * resposta dele** — incluindo a recusa, com o código verbatim.
  *
- * `load` e `unload` não estão aqui: mudam o show carregado, não a posição no tempo, e
- * pertencem à gestão de shows.
+ * `load` e `unload` não estão aqui: mudam **o que está carregado**, não a posição no tempo.
+ * Vivem em `Gestao`, e a separação é a mesma que o ADR-0023 faz.
  */
 export function Transporte({
   seekMs,
@@ -188,6 +199,102 @@ export function Transporte({
       )}
       {resultado?.tipo === "recusado" ? (
         <p style={estilos.detalhe}>{resultado.detail}</p>
+      ) : null}
+    </Seccao>
+  );
+}
+
+
+/**
+ * A gestão do show — **o que está carregado**, não a posição no tempo.
+ *
+ * # Duas acções, e nunca uma caixa (ADR-0028 D8)
+ *
+ * `assume_integrity` faz duas coisas: afirma a integridade e **arma** o show. Uma caixa
+ * pré-marcada faria o operador afirmar sem saber que afirmou — o colapso que o `enum`
+ * `Integrity` existe para impedir. Uma desmarcada dá um `load` que parece funcionar e um
+ * `play` que recusa com `not_armed` sem explicação no ecrã. As duas falham, ao contrário.
+ *
+ * Por isso são **duas acções com nome próprio**, e a que afirma integridade **nomeia a
+ * consequência** e exige confirmação: o operador tem de dizer duas vezes que assume algo
+ * que o daemon não verifica.
+ *
+ * # A matriz de estados NÃO é replicada aqui (ADR-0028 D9)
+ *
+ * `load` só é aceite em `idle`; `unload` em tudo menos `idle` e `playing`. Os botões ficam
+ * activos, e o que se mostra é a **recusa real** — `show_already_loaded`, `not_applicable`.
+ */
+export function Gestao({
+  caminho,
+  aoMudarCaminho,
+  aoCarregar,
+  aoDescarregar,
+}: {
+  caminho: string;
+  aoMudarCaminho: (v: string) => void;
+  aoCarregar: (assumirIntegridade: boolean) => void;
+  aoDescarregar: () => void;
+}) {
+  // A decisao vive em `confirmacao.ts` — puro, testado sem montar nada. Aqui so o estado.
+  const [confirmacao, setConfirmacao] = useState(LIMPA);
+  const utilizavel = caminhoUtilizavel(caminho);
+
+  return (
+    <Seccao id="h-gestao" titulo="SHOW">
+      {/* Caminho escrito, nao escolhido de uma lista: nenhuma rota lista shows, e
+          inventar uma seria o ADR-0028 D3. O daemon recusa o que nao existir. */}
+      <label style={estilos.rotuloSeek}>
+        path
+        <input
+          type="text"
+          value={caminho}
+          placeholder="/caminho/para/show.lumyx"
+          onChange={(e) => {
+            aoMudarCaminho(e.target.value);
+            // Mudar o caminho invalida uma confirmacao pendente: senao o operador
+            // confirmaria um ficheiro e carregaria outro.
+            setConfirmacao(caminhoMudou());
+          }}
+          style={estilos.entradaCaminho}
+        />
+      </label>
+
+      <div style={estilos.botoes}>
+        <button
+          type="button"
+          style={estilos.botao}
+          disabled={!utilizavel}
+          onClick={() => aoCarregar(false)}
+        >
+          carregar sem armar
+        </button>
+
+        <button
+          type="button"
+          style={estilos.botao}
+          disabled={!utilizavel}
+          onClick={() => {
+            const r = cliqueArmar(confirmacao);
+            setConfirmacao(r.proximo);
+            if (r.envia) aoCarregar(true);
+          }}
+        >
+          {confirmacao.aConfirmar ? "confirmar: assumo a integridade" : "assumir integridade e armar"}
+        </button>
+
+        <button type="button" style={estilos.botao} onClick={aoDescarregar}>
+          unload
+        </button>
+      </div>
+
+      {confirmacao.aConfirmar ? (
+        // A consequencia, escrita. O daemon NAO verifica integridade — `pixel_hash` exige
+        // o show inteiro em RAM (GS2) — portanto quem a afirma e o operador, e tem de o
+        // ler antes de o fazer.
+        <p style={estilos.detalhe}>
+          O daemon <strong>não verifica</strong> a integridade deste ficheiro. Confirmar
+          significa que <strong>o operador a afirma</strong>, e o show fica armado.
+        </p>
       ) : null}
     </Seccao>
   );

@@ -136,6 +136,30 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-14 — `load`/`unload` na UI: o browser deixa de ser um telecomando
+
+**Done.** O operador podia comandar `play`/`pause`/`stop`/`seek` no browser mas **tinha de ir ao `ledctl` para arrancar um show**. O que existia não era uma consola — era um telecomando para algo que outra pessoa tinha arrancado. Fecha-se o elo. Três decisões registadas em ADR **antes** do código: [ADR-0027 Emenda 2](./docs/adr/0027-contrato-tipos-rust-typescript.md) e [ADR-0028 D8/D9](./docs/adr/0028-web-platform-topology-and-state-boundary.md).
+
+**A lacuna que a investigação encontrou, e que ninguém tinha visto: o contrato só cobria uma direcção.** `EstadoDoDaemon`, `EstadoUpstream`, `EventoPayload`, `ROTAS` — tudo **resposta**. Nada descrevia os **argumentos** de um comando. Não custava nada porque o único comando com argumentos era o `seek` (`{to_ms}`, dois caracteres difíceis de errar): a assimetria era invisível porque a superfície era trivial. Com o `load` deixa de ser. **Emenda 2 do ADR-0027**: os argumentos entram, pelos mesmos dois caminhos — o gerador emite `ArgsLoad`/`ArgsSeek`, e o caminho B extrai-os do **texto-fonte do `enum Cmd`** de `proto.rs`. Só o que a superfície expõe: `hello`, `subscribe`, `ping` e `shutdown` estão em `NUNCA_EXPOSTOS`, e descrever argumentos que o browser não pode enviar alargaria o contrato para lá desta fronteira.
+
+**`assume_integrity` não é uma opção, e é isso que decide o desenho.** Lido no aplicador (`run.rs:360-399`), faz **duas** coisas: afirma a integridade (`Integrity::AssumedByOperator`) **e** dispara o pré-voo e o `Arm`. E o daemon **nunca verifica** — `pixel_hash` exige o show inteiro em RAM e hash em fluxo não existe (GS2), razão pela qual `Integrity` é um `enum` e não um `bool`.
+
+Uma caixa **pré-marcada** faria o operador afirmar integridade sem saber que afirmou — o colapso que o `enum` existe para impedir, reintroduzido na última camada. Uma **desmarcada** dá um `load` que parece funcionar e um `play` que recusa com `not_armed` sem nada no ecrã. **As duas falham, ao contrário.** Daí a **D8**: duas acções com nome próprio, e a que afirma integridade nomeia a consequência e **exige confirmação**.
+
+**A regra dos dois gestos vive em lógica pura**, e isso foi uma correcção a mim próprio. A primeira versão testava-a renderizando marcação e afirmando que uma espia não fora chamada — mas `renderToStaticMarkup` **não clica**, portanto a espia nunca poderia ter sido chamada e o teste passava **sem exercitar nada**. Teatro do pior tipo: verde por não olhar. Passou para `confirmacao.ts`, onde *"são precisos dois cliques"* é uma propriedade verificável — incluindo que uma sequência de 8 cliques envia exactamente no 2.º, 4.º, 6.º e 8.º, e que **mudar o caminho derruba a confirmação** (senão confirmava-se um ficheiro e carregava-se outro).
+
+**A matriz de estados NÃO é replicada no browser (D9).** `load` só é aceite em `idle`; `unload` em tudo menos `idle` e `playing`. Os botões ficam activos e mostra-se a **recusa real**. A única coisa desactivada é carregar **sem caminho** — e isso não é antecipar a matriz: é a ausência do único argumento obrigatório de `ArgsLoad`. O `unload` **nunca** é desactivado, e há um teste que o afirma nos dois cenários.
+
+**Não há catálogo de shows, e não se inventou um.** Zero rotas os listam. O caminho é **escrito**; uma lista fabricada seria o ADR-0028 D3 outra vez, noutro campo.
+
+**Falsificado 5×, em três camadas.** Contrato: (M1) o gerador esquece `assume_integrity` → *"`Cmd::Load` leva o argumento `assume_integrity` e ele NAO esta em `ArgsLoad`"*; (M3) o contrato descreve `ArgsShutdown` → *"`shutdown` esta em NUNCA_EXPOSTOS… o contrato e a fronteira, nao o modelo de dominio"*. UI: confirmação removida → 3 testes reprovam; uma **caixa** acrescentada → 4, incluindo a marcação congelada; `unload` desactivado → 4. **M2 não conta como prova do gate**, e digo-o: acrescentar um campo ao `Cmd::Load` quebra a exaustividade dos `match` e o crate **não compila** — o compilador apanha-o uma camada antes. A ameaça real é o campo estar cablado e o **gerador** ficar para trás, que é M1.
+
+**Verificado contra o daemon REAL, sem mocks — os seis casos que a UI pode produzir:** `load` com show carregado → `show_already_loaded`; `unload` → `idle`; **variante 1** (`false`) → `loaded` e `play` → **`not_armed`**; **variante 2** (`true`) → **`ready`** e `play` → `playing`; `unload` a tocar → `not_applicable`; caminho inexistente → `load_failed` com o erro real do SO. A variante 1 reproduz exactamente o defeito que a caixa desmarcada causaria — e é por isso que a acção se chama *"carregar sem armar"*.
+
+**Invariants verified.** `./scripts/tsc_gate.sh` exit 0 nos três passos. **40 testes** no console-web (+14). **17** no `contract_gate` (+2). Clippy `-D warnings` exit 0. O `.ts` versionado mudou **só por regeneração**. `led-daemon`, `led-core`, IPC v1 e `led-daemon-bin` **intocados** — esta fatia não acrescentou um único comando ao protocolo.
+
+**Pending.** A confirmação é um segundo clique no mesmo botão; num teclado sem foco visível isso é menos óbvio do que devia — não medido com leitor de ecrã. O `path` não tem histórico nem completação: o operador escreve o caminho inteiro de cada vez. `/api/profiles` continua 501, e a F7.2 do Ubuntu continua à espera de uma falha.
+
 ### 2026-08-13d — F7.2 fatia 2 (Ubuntu): não consigo reproduzir, e por isso entrego o instrumento — não o veredito
 
 **A causa NÃO foi encontrada, e não a vou inventar.** O que esta fatia entrega é o que faltava para a poder encontrar: o gate passa a **nomear** o que apanhou. Só `crates/led-protocols/tests/no_alloc.rs` — **zero linhas de produção**, e a asserção continua a exigir zero.

@@ -210,3 +210,30 @@ export interface EstadoDoDaemon {
 export interface EstadoUpstream {
   readonly upstream: boolean;
 }
+
+/**
+ * Os argumentos de `POST /api/transport/load` — `Cmd::Load` do IPC v1.
+ *
+ * `path` e um caminho de ficheiro. NAO ha catalogo de shows: nenhuma rota os
+ * lista, e inventar uma lista no console seria a segunda fonte de verdade que o
+ * ADR-0026 §15 proibe. O daemon recusa o que nao existir com `load_failed`, e o
+ * `detail` traz o erro real do loader.
+ *
+ * `assume_integrity` NAO e uma opcao de conveniencia. Faz DUAS coisas: afirma a
+ * integridade (`Integrity::AssumedByOperator`) e dispara o pre-voo e o `Arm`. Sem
+ * ela o show fica em `loaded` e o `play` seguinte devolve `not_armed`.
+ *
+ * E o daemon NUNCA verifica: `pixel_hash` exige o show inteiro em RAM e hash em
+ * fluxo nao existe (GS2). Por isso `Integrity` e um enum e nao um booleano — para
+ * que "assumido" e "verificado" nao fiquem indistinguiveis. A UI expoe isto
+ * como DUAS accoes nomeadas, nunca como caixa (ADR-0028 D8).
+ */
+export interface ArgsLoad {
+  readonly path: string;
+  readonly assume_integrity: boolean;
+}
+
+/** Os argumentos de `POST /api/transport/seek` — `Cmd::Seek` do IPC v1. */
+export interface ArgsSeek {
+  readonly to_ms: number;
+}

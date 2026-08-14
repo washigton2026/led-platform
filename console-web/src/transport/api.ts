@@ -12,6 +12,7 @@ import {
   ROTAS,
   type CodigoErro,
   type EstadoDoDaemon,
+  type ArgsLoad,
   type EstadoUpstream,
   type EventoPayload,
   type EventoTipado,
@@ -204,20 +205,34 @@ export async function lerUpstream(): Promise<boolean | null> {
  * `paused`/`stopped` o heartbeat continua a reenviar o último quadro válido. Por isso
  * `stop` é transporte, não destruição.
  *
- * `load` e `unload` mudam o show carregado, e `load` precisa de um caminho de ficheiro —
- * uma superfície de entrada que pertence à gestão de shows, não a esta fatia.
+ * `load` e `unload` mudam **o que está carregado**, não a posição no tempo. Vivem em
+ * `GESTAO`, abaixo — a separação é a mesma que o ADR-0023 faz, e mantê-la aqui impede que
+ * um botão de gestão apareça um dia no meio da barra de transporte.
  */
 export const TRANSPORTE = ["play", "pause", "stop", "seek"] as const;
 export type ComandoTransporte = (typeof TRANSPORTE)[number];
 
 /**
+ * Os comandos que mudam **o show carregado**.
+ *
+ * A UI **não antecipa** a matriz de estados (ADR-0028 D9): `load` só é aceite em `idle` e
+ * `unload` em tudo menos `idle` e `playing`, mas quem decide é o daemon. Desactivar botões
+ * consoante o estado seria reimplementar os 80 pares do ADR-0023 no browser — a segunda
+ * fonte de verdade do ADR-0026 §15, que divergiria no dia em que a matriz mudasse.
+ */
+export const GESTAO = ["load", "unload"] as const;
+export type ComandoGestao = (typeof GESTAO)[number];
+
+export type Comando = ComandoTransporte | ComandoGestao;
+
+/**
  * O caminho de um comando, **derivado do contrato**.
  *
  * Não há string de rota escrita à mão aqui: se o console mudar um caminho, o contrato é
- * regenerado e isto acompanha. Um comando sem rota correspondente é um erro de programação,
- * e rebenta no arranque em vez de dar 404 em produção.
+ * regenerado e isto acompanha. Um comando sem rota correspondente é um erro de programação
+ * — e rebenta com mensagem em vez de dar 404 silencioso.
  */
-function caminhoDe(cmd: ComandoTransporte): string {
+function caminhoDe(cmd: Comando): string {
   const sufixo = `/api/transport/${cmd}`;
   const rota = ROTAS.find((r) => r.caminho === sufixo && r.verbo === "POST");
   if (!rota) throw new Error(`sem rota POST para \`${cmd}\` no contrato`);
@@ -226,10 +241,10 @@ function caminhoDe(cmd: ComandoTransporte): string {
 
 /** O que aconteceu a um comando. O `code` de uma recusa é o do daemon, verbatim. */
 export type Resultado =
-  | { readonly tipo: "aceite"; readonly cmd: ComandoTransporte; readonly corpo: string }
+  | { readonly tipo: "aceite"; readonly cmd: Comando; readonly corpo: string }
   | {
       readonly tipo: "recusado";
-      readonly cmd: ComandoTransporte;
+      readonly cmd: Comando;
       readonly code: string;
       readonly detail: string;
     };
@@ -243,9 +258,10 @@ export type Resultado =
  * proíbe, e que divergiria no dia em que a matriz mudasse.
  *
  * Por isso os botões estão **sempre activos**, e o que se mostra é a resposta REAL: um
- * `play` sem show devolve `no_show_loaded`, e é isso que o operador vê.
+ * `play` sem show devolve `no_show_loaded`, um `load` com um show já carregado devolve
+ * `show_already_loaded`, e é isso que o operador vê.
  */
-export async function comandar(cmd: ComandoTransporte, args?: object): Promise<Resultado> {
+export async function comandar(cmd: Comando, args?: object): Promise<Resultado> {
   const corpo = args === undefined ? "" : JSON.stringify(args);
   let r: Response;
   try {
@@ -268,4 +284,30 @@ export async function comandar(cmd: ComandoTransporte, args?: object): Promise<R
 
   const { code, detail } = interpretarErro(r.status, texto);
   return { tipo: "recusado", cmd, code, detail };
+}
+
+/**
+ * `POST /api/transport/load` — **carrega um show a partir de um caminho**.
+ *
+ * A forma do pedido é `ArgsLoad`, **do contrato gerado** (ADR-0027, Emenda 2). Escrevê-la
+ * aqui à mão seria a segunda fonte de verdade do §15, na direcção do envio — a mesma que a
+ * Phase 1.1 fechou do lado da resposta.
+ *
+ * # `assumirIntegridade` não é uma opção de conveniência
+ *
+ * Faz **duas** coisas: afirma a integridade (`Integrity::AssumedByOperator`) **e** dispara o
+ * pré-voo e o `Arm`. Sem ela o show fica em `loaded` e o `play` seguinte devolve
+ * `not_armed`.
+ *
+ * E o daemon **nunca verifica** — `pixel_hash` exige o show inteiro em RAM, e hash em fluxo
+ * não existe (GS2). É por isso que a UI expõe isto como **duas acções nomeadas** e nunca
+ * como caixa (ADR-0028 D8): uma caixa pré-marcada faria o operador afirmar integridade sem
+ * saber que a afirmou.
+ *
+ * **Não há catálogo de shows** — nenhuma rota os lista, e inventar uma seria o ADR-0028 D3
+ * outra vez. O caminho é escrito, e o daemon recusa o que não existir com `load_failed`.
+ */
+export async function carregar(caminho: string, assumirIntegridade: boolean): Promise<Resultado> {
+  const args: ArgsLoad = { path: caminho, assume_integrity: assumirIntegridade };
+  return comandar("load", args);
 }
