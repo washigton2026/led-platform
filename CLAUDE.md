@@ -136,6 +136,26 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-14b — A1: o ADR do multi-controlador, e o defeito latente que a investigação encontrou
+
+**Nenhum código de produção mudou.** [ADR-0029](./docs/adr/0029-saida-multi-controlador.md) escrito e indexado **antes** da implementação, e um defeito registado como **TD-016**.
+
+**O enunciado estava errado, e a inspecção corrigiu-o.** *"Multi-controlador não existe"* — existe, mas só num dos dois caminhos, e não é o que o hardware validou. Art-Net/sACN vão por `Hal::new(layout, vec![dev])`, e o `Hal` guarda `Vec<Arc<dyn DeviceDriver>>`: **o fan-out já lá está, e o daemon passa um vector de um**. O DDP contorna o `Hal` por decisão de 2026-07-09d, logo não tem fan-out nenhum. E o `RigBuilder` já constrói N instâncias sem conflito, testado a 86 strips × 5 robôs.
+
+**A decisão que custa mais e é a certa: DDP primeiro, e os três protocolos na mesma fatia.** Ligar o `Hal` a N devices dava cinco nós em Art-Net hoje, com peças já testadas — e produziria **cinco nós num protocolo e um noutro**, sem nada no ecrã a dizê-lo. É literalmente o achado de 2026-08-07f: *"pior que a ausência uniforme, porque pareceria feito"*. O DDP é o caminho do GS4.5.
+
+**A `Calibration` NÃO força emenda ao ADR-0019 — verificado, não assumido.** A Emenda 1 avisava que o multi-controlador a obrigaria a revisitar *"se as calibrações divergirem por nó"*. A premissa não se cumpre: `calibration` vive no `HardwareProfile` (o **tipo**), e `address`/`first_universe` **não estão lá** porque são da instância (ADR-0018, confirmado por `grep`). Cinco nós do mesmo preset partilham a LUT por construção. A consequência vira regra: **perfis mistos são recusados**, não mal calibrados em silêncio.
+
+**O ADR-0012 mantém-se adiado.** O gatilho dele era o **2.º nó físico**, e o rig continua offline. Cinco `sendto` sequenciais de ~910 bytes não são obviamente um problema — e afirmar que são, ou que não são, sem medir contra nós reais seria inventar o número que o TD-011 e o TD-012 ensinaram a não inventar.
+
+**TD-016 — o defeito latente, encontrado ao investigar e não ao implementar.** `DdpOutput` fixa `pixel_offset` em **0 nos três construtores** (`led-player/src/lib.rs:172, 186, 204`), e não é um argumento que o daemon se esqueceu de passar: **é um parâmetro que a API não expõe**. `grep pixel_offset crates/led-daemon-bin/` devolve zero.
+
+A assimetria foi **medida**: o campo de instância do Art-Net/sACN (`first_universe`) é honrado *e* afirmado no fio (`wled_driver.rs:345`); o equivalente do DDP não tem nem API nem teste. É a mesma classe do `RgbOrder` do GS4.3 e do MTU do GS4.4 — campo que o fio suporta e que ninguém honra, **invisível com um só nó porque aí o offset correcto é zero**. Com cinco, os robôs 2 a 5 acenderiam o mesmo que o robô 1. Não é palco escuro: é pior de diagnosticar, porque parece funcionar.
+
+**A rede já existia, e por isso não construí uma segunda.** Antes de propor uma baseline de bytes, verifiquei o que havia: `calibration_path.rs` cobre os três protocolos com bytes lidos de socket, e `wled_driver.rs` congela ordem de canais, fragmentação por MTU e universos consecutivos. Duplicá-la seria o segundo caminho que este repositório recusa. O que faltava não era uma baseline — era **um campo**, e é o TD-016.
+
+**Pending.** A implementação do ADR-0029 toca **19 sítios em 10 ficheiros**, cinco dos quais guardam o caminho DDP validado em hardware. Não é edição cirúrgica, e o TD-016 é **pré-requisito** dela, não consequência. Rig continua offline; nada aqui foi validado com nós físicos.
+
 ### 2026-08-14 — `load`/`unload` na UI: o browser deixa de ser um telecomando
 
 **Done.** O operador podia comandar `play`/`pause`/`stop`/`seek` no browser mas **tinha de ir ao `ledctl` para arrancar um show**. O que existia não era uma consola — era um telecomando para algo que outra pessoa tinha arrancado. Fecha-se o elo. Três decisões registadas em ADR **antes** do código: [ADR-0027 Emenda 2](./docs/adr/0027-contrato-tipos-rust-typescript.md) e [ADR-0028 D8/D9](./docs/adr/0028-web-platform-topology-and-state-boundary.md).

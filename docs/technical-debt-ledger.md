@@ -650,3 +650,58 @@ falsification_required: |
   pode ter simplesmente desligado o gate.
 review_by: "proxima fatia que toque led-console-bin"
 ```
+
+---
+
+## TD-016 — O DDP não tem como expressar um offset de pixels, e é o campo de instância do multi-controlador
+
+```yaml
+td_id:     TD-016
+title:     "DdpOutput fixa pixel_offset em 0 nos tres construtores; o daemon nao tem como enderecar o 2.o no"
+severity:  High
+status:    open
+origin:    "Investigacao do ADR-0029 (saida multi-controlador), 2026-08-14"
+context: |
+  Provado por leitura de codigo, nao presumido:
+
+  1. led-player/src/lib.rs:172, 186, 204 — os TRES construtores do `DdpOutput` chamam
+     `DdpDevice::new(addr, 0)` / `with_format(addr, 0, format)`. O `0` esta escrito a mao.
+     Nao e um parametro que o daemon se esqueceu de passar: e um parametro que a API do
+     `DdpOutput` NAO EXPOE. Nao ha por onde passar outro valor.
+
+  2. `grep pixel_offset crates/led-daemon-bin/` devolve ZERO. O daemon nunca o menciona,
+     nem em producao nem em teste.
+
+  3. O protocolo suporta-o: `DdpDevice.pixel_offset` (ddp.rs:262) e `offset_bytes` viaja no
+     cabecalho, big-endian (ddp.rs:104), com testes de unidade a afirma-lo
+     (`p2.offset_bytes == 365 * 4`).
+
+  4. ASSIMETRIA MEDIDA. O campo de instancia do Art-Net/sACN — `first_universe` — E honrado
+     e E afirmado no fio (`wled_driver.rs:345`, universos consecutivos para 0/1/7/100).
+     O equivalente do DDP nao tem nem API nem teste.
+impact: |
+  E exactamente a classe de defeito que o GS4.3 apanhou no `RgbOrder` e o GS4.4 no MTU:
+  um campo que o fio suporta e que ninguem no daemon honra — invisivel enquanto houver um
+  so no, porque com um alvo o offset correcto E zero.
+
+  Com N nos deixa de ser invisivel: os cinco WLED do rig receberiam todos o mesmo intervalo
+  de pixels a partir do offset 0. O robo 1 acenderia; os robos 2 a 5 acenderiam a MESMA
+  coisa que o 1, em vez da sua parte do show. Nao e palco escuro — e pior de diagnosticar,
+  porque parece funcionar.
+mitigation_now: |
+  Nenhuma necessaria hoje: com um unico alvo, offset 0 e o valor correcto, e o caminho DDP
+  esta validado em hardware nessa configuracao (94/94 frames, 2026-07-20). O defeito e
+  latente, nao activo.
+required_fix: |
+  Pertence a fatia do ADR-0029 e e PRE-REQUISITO dela, nao consequencia:
+
+  a) `DdpOutput` ganha o offset na API (`with_offset` ou parametro nos construtores),
+     propagando-o ao `DdpDevice` que ja o aceita. ZERO logica nova de protocolo.
+  b) Um teste discriminante que leia os datagramas de um socket e afirme o `offset_bytes`
+     de CADA alvo — o equivalente DDP do que o `wled_driver.rs:345` ja faz para o
+     `first_universe`. Sem ele, a correccao nao seria falsificavel.
+  c) Controlo negativo obrigatorio: dois alvos com offsets diferentes tem de produzir
+     `offset_bytes` DIFERENTES no fio. Um teste que so verificasse "o offset chega" passaria
+     com os dois a zero.
+review_by: "fatia do ADR-0029 (saida multi-controlador)"
+```
