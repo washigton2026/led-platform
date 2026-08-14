@@ -136,6 +136,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-13d — F7.2 fatia 2 (Ubuntu): não consigo reproduzir, e por isso entrego o instrumento — não o veredito
+
+**A causa NÃO foi encontrada, e não a vou inventar.** O que esta fatia entrega é o que faltava para a poder encontrar: o gate passa a **nomear** o que apanhou. Só `crates/led-protocols/tests/no_alloc.rs` — **zero linhas de produção**, e a asserção continua a exigir zero.
+
+**Porque parei antes da correcção.** O caminho de envio foi lido e está limpo: `router.rs:131-161` usa buffer pré-alocado (`st.buf`), `build_ddp_packet_bytes` escreve nele, e `socket.send` leva uma fatia. A **única** alocação possível é `OutputError::Transport(e.to_string())` — e está descartada por raciocínio verificável: se `send` falhasse, o `?` devolvia `Err` e o `.unwrap()` do teste entrava em pânico com o erro de transporte. A CI mostra a **asserção** a falhar, não um `unwrap`. Logo os 4 não vêm dali.
+
+**E não há como reproduzir aqui.** Verificado, não presumido: sem `docker`, `colima`, `podman`, `lima`, `vagrant` nem `multipass`; targets Rust instalados são `wasm32-unknown-unknown` e `x86_64-apple-darwin`. **Não há Linux nesta máquina.** Ao contrário da fatia do macOS — onde o offset do relógio era um botão que reproduzia o mecanismo — aqui a grandeza que falha (4 alocações) não tem nenhum botão local. Mexer num orçamento a partir de um número que não consigo observar seria exactamente o que este repositório proíbe.
+
+**Uma hipótese testada e MEDIDA a zero, que fica registada em vez de esquecida.** O alocador é global ao processo, portanto a janela mede tudo o que lá acontece — incluindo a thread do harness do `libtest`. Testei-o com uma janela de controlo em que o teste não chama nada do caminho DDP: **delta = 0 em 5 janelas de 60 ms**. Mas é uma medição de **macOS**, e é o Linux que falha — por isso a hipótese não está morta, está por testar onde importa.
+
+**O instrumento.** O contador passa a registar, sem nunca alocar (só atómicos e um `thread_local` de inicialização `const`, senão entraria em recursão dentro de si próprio):
+- o **tamanho** das primeiras 8 alocações da janela — 48 bytes e 1 KiB apontam para culpados diferentes;
+- se cada uma veio da **thread do teste** ou de outra — o discriminador directo da hipótese acima.
+
+`MEDINDO` só abre depois do aquecimento, para o arranque poder alocar à vontade.
+
+**Falsificado 2×, e cada mutação prova um discriminador diferente.** (A) `vec![7u8; 900]` plantado no laço → *"allocated 4 time(s) — tamanhos=[900, 900, 900, 900] bytes · fora da thread do teste=0 de 4"* — reproduz a **forma exacta** da falha da CI e nomeia o tamanho. (B) uma thread intrusa a alocar durante a janela → *"fora da thread do teste=4 de 9"* — a atribuição por thread funciona, e apanhou também as alocações do próprio `spawn`. Produção restaurada e verde nas duas.
+
+**Invariants verified.** Clippy `-D warnings` exit 0 (uma correcção minha: `needless_range_loop` no formatador do diagnóstico). O gate continua a passar localmente. `led-daemon`, `led-core`, IPC v1, `console-web/` e `led-player` **intocados nesta fatia**.
+
+**Pending — e é o que bloqueia fechar a F7.2.** O instrumento **só dá dados depois de um push e de um run na CI do Ubuntu**, que não estão autorizados. Até lá, *"eliminar as 4 alocações"* não é executável: não há o que eliminar que eu consiga ver. A próxima falha no Ubuntu passa a trazer `tamanhos=[…]` e `fora da thread do teste=N`, e é isso que decide entre **contaminação do processo** (se `N > 0`) e **alocação real no caminho DDP** (se `N == 0`, e aí o tamanho nomeia o culpado).
+
 ### 2026-08-13c — F7.2 fatia 1 (macOS): o teste era uma corrida contra o próprio arranque
 
 **Done.** `absolute_pacing_on_schedule_reports_no_lateness` deixa de depender do escalonador. **Só `crates/led-player/src/stream.rs`, dentro de `mod tests`** — zero linhas de produção. A fatia do Ubuntu **não** foi tocada.
