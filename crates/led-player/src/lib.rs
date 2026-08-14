@@ -208,6 +208,34 @@ impl DdpOutput {
             universes_equiv: pixel_count.div_ceil(pixels_per_universe.max(1) as usize) as u16,
         })
     }
+
+    /// **Onde começa o segmento deste nó** no buffer de pixels do destino (TD-016).
+    ///
+    /// # O defeito que isto corrige
+    ///
+    /// Os três construtores acima passam `0` ao `DdpDevice`, e esse `0` estava **escrito à
+    /// mão**: não era um argumento que alguém se esquecesse de passar — era um parâmetro que
+    /// esta API **não expunha**. Com um só alvo isso é invisível, porque aí zero é o valor
+    /// correcto; foi assim que atravessou o GS4.1 até à primeira luz sem incomodar ninguém.
+    ///
+    /// Com N nós deixa de ser invisível. Cinco WLED a receber todos o intervalo a partir de
+    /// zero acendem **os cinco a mesma coisa** em vez de cada um a sua parte do show. Não é
+    /// palco escuro — é pior de diagnosticar, porque parece funcionar.
+    ///
+    /// É a mesma classe do `RgbOrder` do GS4.3 e do MTU do GS4.4: um campo que o fio suporta
+    /// e que ninguém acima dele honrava. O `DdpDevice` já o aceita desde sempre
+    /// (`offset_bytes` viaja no cabeçalho, big-endian) — **nenhuma lógica nova de protocolo
+    /// entra aqui**, só deixa de haver um número fixo no caminho.
+    ///
+    /// Aditivo de propósito: nenhuma assinatura existente muda, e um alvo único continua a
+    /// não escrever offset nenhum.
+    #[must_use]
+    pub fn with_pixel_offset(mut self, pixel_offset: u32) -> Self {
+        // `get_mut` em vez de `lock`: em `&mut self` não há concorrência a arbitrar, e pedir
+        // um lock aqui sugeriria que há.
+        self.dev.get_mut().expect("mutex do DdpDevice").pixel_offset = pixel_offset;
+        self
+    }
 }
 
 impl ProtocolOutput for DdpOutput {
@@ -347,6 +375,62 @@ mod tests {
             fragments += 1;
         }
         assert_eq!(fragments, 6, "3 frames × 2 fragments (600px @ 487/packet)");
+    }
+
+    /// **TD-016 — o offset de cada nó chega ao fio, e nós diferentes escrevem offsets
+    /// diferentes.**
+    ///
+    /// O equivalente DDP do que o `wled_driver.rs` já faz para o `first_universe` do
+    /// Art-Net. Sem isto, o campo de instância do protocolo validado em hardware era o único
+    /// sem prova no fio.
+    ///
+    /// **O controlo negativo é a segunda metade, e sem ela o teste não valeria nada:** um
+    /// teste que só afirmasse *"o offset chega"* passaria com os dois nós a zero — que é
+    /// exactamente o defeito. É a diferença **entre** os dois que prova que cada nó recebe o
+    /// seu segmento.
+    #[test]
+    fn ddp_o_offset_de_cada_no_chega_ao_fio_e_nos_diferentes_diferem() {
+        use led_protocols::parse_ddp_packet;
+        use std::net::UdpSocket;
+
+        // Um só quadro e poucos pixels: o que se mede aqui é o ENDEREÇO, não a fragmentação
+        // (essa já tem os seus testes). 4 px cabem num datagrama, portanto cada nó escreve
+        // exactamente um — e o offset dele é o do segmento.
+        let offsets_no_fio = |px_offset: u32| -> Vec<u32> {
+            let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+            rx.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+            let out =
+                DdpOutput::new(rx.local_addr().unwrap(), 4).unwrap().with_pixel_offset(px_offset);
+            play(&records(1, 4), &out, Speed::Max).unwrap();
+
+            let mut buf = [0u8; 2048];
+            let mut vistos = Vec::new();
+            while let Ok((n, _)) = rx.recv_from(&mut buf) {
+                let p = parse_ddp_packet(&buf[..n]).expect("datagrama DDP válido");
+                vistos.push(p.offset_bytes);
+            }
+            vistos
+        };
+
+        // Nó 1 começa no pixel 0; nó 2 começa no pixel 720 (o tamanho de uma fita do rig).
+        let no1 = offsets_no_fio(0);
+        let no2 = offsets_no_fio(720);
+
+        assert_eq!(no1, vec![0], "o primeiro nó começa no início do buffer");
+        assert_eq!(
+            no2,
+            vec![720 * 3],
+            "o offset viaja em BYTES: 720 px × 3 canais. Se aparecer 720 aqui, alguém \
+             confundiu pixels com bytes e o segundo nó escreveria em cima do primeiro"
+        );
+
+        // **O controlo negativo.** Sem esta asserção, a implementação podia ignorar o
+        // parâmetro e as duas listas acima seriam ambas `[0]` — o defeito do TD-016 intacto.
+        assert_ne!(
+            no1, no2,
+            "dois nós com offsets diferentes TÊM de escrever offsets diferentes no fio; \
+             iguais significa que os cinco robôs receberiam todos o mesmo segmento"
+        );
     }
 
     #[test]
