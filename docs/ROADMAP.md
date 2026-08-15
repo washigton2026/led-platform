@@ -66,8 +66,8 @@ existe um **caminho contínuo** — e hoje não existe. Estado elo a elo:
 | Elo | Estado | Onde quebra |
 |---|---|---|
 | Criar / importar show | ✅ | import xLights com gate de conflito (2.701 achados no projeto real), `RigBuilder`, `ShowIntent` |
-| Editar na timeline | 🔴 | o motor existe (`led-sequencer`); **a interface não** — FASE D, bloqueada por **B2** |
-| Pré-visualizar | 🔴 | só GIF offline no `led-demo`; o preview do console é **D4**, também atrás de B2 |
+| Editar na timeline | 🔴 | o motor existe (`led-sequencer`); **a interface não** — é o **D5**, e a FASE D já arrancou |
+| Pré-visualizar | 🔴 | só GIF offline no `led-demo`; o preview do console é o **D4**, e será WebGPU (ver anexo do ADR-0016) |
 | Configurar controladores | 🟡 | `led-hardware-profile` compila o layout, mas o WLED é configurado **à mão** (E6) e o profile tem **porta física única** (FASE C) |
 | Enviar via **Ethernet** | 🔴 | os protocolos estão prontos e validados; o **meio** não — toda validação de hardware foi sobre **WiFi**, que o ADR-0005 proíbe ao vivo |
 | Executar em hardware real | 🟡 | **1 nó de 5** (720 px de 6.200), e sobre WiFi |
@@ -206,10 +206,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 | 0001–0010 | replay, ArcSwap, DDP, Ed25519, WiFi, ShowIntent, seams, triple buffer, chaos, cluster | ✅ aceitos e implementados |
 | 0011 | `ColorFormat` RGBW no mapper | ✅ |
 | 0012 | fan-out paralelo | ✅ aceito, **implementação adiada** até 2º nó físico |
-| 0013 | engine em daemon separado | ✅ aceito, ⬜ **não implementado** |
-| 0014 | IPC e segurança UI↔engine | ✅ aceito, ⬜ **não implementado** |
+| 0013 | engine em daemon separado | ✅ aceito e **implementado** (`led-daemon-bin`, GS2) |
+| 0014 | IPC e segurança UI↔engine | ✅ aceito, **UDS implementado** (GS3); auth de LAN continua vazia |
 | 0015 | preview lossy fora do hot-path | ✅ aceito, ⬜ **não implementado** |
-| 0016 | stack do console | 🔴 **provisório** — depende de medição humana |
+| 0016 | stack do console | ✅ **aceito (2026-08-09)** — **React + TypeScript**, com os tipos GERADOS do Rust |
 | 0017 | blackout × heartbeat | 🔴 **adiado — decisão pendente** |
 | 0018 | HardwareProfile | ✅ implementado (5 slices) |
 | 0019 | calibração por-output no HAL | ✅ |
@@ -240,18 +240,20 @@ e o heartbeat **empurra** (`send_frame`), não puxa.
 
 **Desbloqueia:** botão/atalho de blackout no console (D6) — hoje **proibido** por ADR.
 
-### B2 — ADR-0016: fechar a stack do console 🔴 *medição humana*
+### B2 — ADR-0016: stack do console ✅ *FECHADO em 2026-08-09*
 
-O agente já mediu tudo que era mensurável sem humano. Faltam **3 eixos** que exigem sua máquina:
+**Decisão: React + TypeScript** ([ADR-0016](adr/0016-stack-console-provisorio.md)), com uma
+obrigação inseparável: **o frontend não contém nenhum enum escrito à mão** que espelhe
+`EstadoUi` ou `Elo` — os tipos são **gerados** do Rust e um gate reprova a CI se divergirem
+([ADR-0027](adr/0027-contrato-tipos-rust-typescript.md)).
 
-1. **Leitor de tela real** — VoiceOver/NVDA: a live-region anuncia a mudança de status?
-2. **Teclado interativo** — navegar a tela inteira, foco visível, sem trap?
-3. **DX subjetiva** — qual ecossistema você quer manter pelos próximos anos?
+A evidência que fundamentou a decisão, e as medições posteriores que a confirmam sem a
+reabrir, estão no [anexo de evidência](adr/0016-anexo-evidencia-e-matriz.md).
 
-**O que a medição já decidiu por si:** o preview **será WebGPU** (3 fps em Canvas2D).
-**O que falta decidir:** Leptos (Rust puro) × React/TS (a11y provada, 27× mais rápido de buildar).
+**O que a medição decidiu à parte da stack:** o preview **será WebGPU**. Os 3 fps são de um
+Canvas2D com 10k `fillRect` — propriedade do **desenho do preview**, não de nenhuma stack.
 
-**Desbloqueia:** toda a FASE D.
+**Desbloqueou:** a FASE D, que arrancou e está na Web Platform Phase 2 (ver abaixo).
 
 ---
 
@@ -272,26 +274,42 @@ diferentes. Quem achata é apenas o **descritor de design-time**.
 
 ---
 
-## FASE D — Console do operador ⬜ *bloqueado por B2*
+## FASE D — Console do operador 🟡 *em curso — Web Platform fechada até `load`/`unload`*
 
-A maior peça faltante. Hoje o LUMYX é **CLI + biblioteca**; xLights e Vixen são
-**aplicativos**. Sem console, a plataforma não é usável por quem não escreve Rust.
+Hoje o LUMYX é **CLI + biblioteca + um console web em construção**; xLights e Vixen são
+**aplicativos**. O console é o que torna a plataforma usável por quem não escreve Rust, e
+**já não está bloqueado**: B2 fechou a 2026-08-09.
 
-| PR | Conteúdo | Depende de |
+**Último ponto fechado:** `load`/`unload` na UI (`1876d52`, 2026-08-14) — o browser deixou
+de ser um telecomando e passou a gerir shows. A arquitetura está em
+[ADR-0028](adr/0028-web-platform-topology-and-state-boundary.md) (topologia e fronteira de
+verdade) e o contrato de tipos em [ADR-0027](adr/0027-contrato-tipos-rust-typescript.md).
+
+| PR | Conteúdo | Estado · depende de |
 |---|---|---|
-| D1 | **Daemon**: engine headless, processo separado (ADR-0013) | — |
-| D2 | **IPC**: UDS owner-only, comandos tipados e versionados, nunca `0.0.0.0` (ADR-0014) | D1 |
-| D3 | **Shell do console**: polling do `led-readmodel`, saúde por controlador | B2, D2 |
-| D4 | **Preview WebGPU**: cópia downsampled, rate-limited, **lossy por contrato** (ADR-0015) | B2 |
-| D5 | **Timeline visual**: waveform de áudio, clips, keyframes — o `led-sequencer` já tem o modelo | D3 |
-| D6 | **Blackout**: botão + atalho + confirmação + log auditável | **B1** |
-| D7 | **Editor de layout**: desenhar modelos, posicionar no palco | D3 |
-| D8 | **Empacotamento**: app desktop com webview do SO | D3, D4 |
+| D1 | **Daemon**: engine headless, processo separado (ADR-0013) | ✅ **feito** (GS2) |
+| D2 | **IPC**: UDS owner-only, comandos tipados e versionados, nunca `0.0.0.0` (ADR-0014) | ✅ **feito** (GS3) |
+| D3 | **Shell do console**: HTTP + SSE + AppShell + design system + transporte + `load`/`unload` | ✅ **feito** |
+| D4 | **Preview WebGPU**: cópia downsampled, rate-limited, **lossy por contrato** (ADR-0015) | ⬜ depende de D3 |
+| D5 | **Timeline visual**: waveform de áudio, clips, keyframes — o `led-sequencer` já tem o modelo | ⬜ depende de D3 |
+| D6 | **Blackout**: botão + atalho + confirmação + log auditável | ⛔ bloqueado por **B1** |
+| D7 | **Editor de layout**: desenhar modelos, posicionar no palco | ⬜ depende de D3 |
+| D8 | **Empacotamento**: app desktop com webview do SO | ⬜ depende de D3, D4 |
 
-> **Onde o control-plane ainda está vazio.** A especificação existe
-> (`docs/architecture/control-protocol.md`) e expôs a lacuna honestamente: hoje **não há o
-> que comandar** — o engine não tem um estado de show controlável em runtime. D1 é onde
-> isso nasce.
+> **O control-plane deixou de estar vazio.** A lacuna que a especificação
+> (`docs/architecture/control-protocol.md`) nomeava — *"não há o que comandar"* — fechou:
+> o `ShowRuntime` (ADR-0023) dá o estado controlável, o IPC v1 dá o comando, e a UI já o
+> exercita. O que resta abaixo são pendentes concretos, não ausência de fundação.
+
+### Pendentes actuais da FASE D (Faixa A)
+
+| # | Pendente | Onde está registado |
+|---|---|---|
+| 1 | **TD-014** — `console.dropped` tem contador e o [ADR-0026](adr/0026-console-daemon-boundary.md) §13 exige que a perda seja **reportada**; não há rota até ao operador | `docs/technical-debt-ledger.md` (aberto, Medium) |
+| 2 | **`/api/profiles` devolve 501** — à espera de uma de duas decisões de arquitectura | changelog 2026-08-10 (F7) |
+| 3 | **F7.2 Ubuntu não fecha** — falta a próxima falha para o instrumento produzir o `N` de alocações; o log da CI devolve HTTP 403 sem autenticação | changelog 2026-08-13d |
+| 4 | **Confirmação de `load` não medida com leitor de ecrã** — é um segundo clique no mesmo botão, e num teclado sem foco visível é menos óbvio do que devia | changelog 2026-08-14 |
+| 5 | **`path` sem histórico nem completação** — o operador escreve o caminho inteiro de cada vez | changelog 2026-08-14 |
 
 ---
 
@@ -425,9 +443,9 @@ HOJE ───┤                          D6 blackout no console
 3. **F3/F4** — player embarcado e sync multi-traje. **Atenção:** F3 é *decisão de
    plataforma* (firmware próprio × preset WLED), explicitamente fora do escopo do ADR-0022
 
-**Duas frentes continuam paradas esperando você:** B1 (uma resposta) e B2 (três medições).
-Enquanto B2 não fechar, **toda a FASE D — o console — não começa**, e é o console que
-converte este motor em produto.
+**Uma frente continua parada esperando você:** B1 (uma resposta sobre o blackout, ADR-0017).
+**B2 fechou em 2026-08-09** e a FASE D arrancou: o console tem processo, HTTP, SSE e uma
+Application Shell que comanda o daemon a sério.
 
 ---
 
