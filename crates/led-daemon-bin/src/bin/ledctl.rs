@@ -18,7 +18,8 @@ USO:
 COMANDOS:
     ping                       Vivo?
     version                    Versão do protocolo e do motor
-    status                     Estado, posição, duração, ticks
+    status                     Estado, posição, duração, ticks e a contabilidade
+                               de CADA nó da saída (`outputs`: addr/frames/errors)
     load <FICHEIRO> [--assume-integrity]
                                Carrega um .lumyx. Com --assume-integrity ARMA
                                também; sem ela fica em `loaded` e o `play` recusa

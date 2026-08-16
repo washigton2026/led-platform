@@ -62,7 +62,8 @@ fn socket() -> UdpSocket {
 #[test]
 fn um_profile_valido_continua_a_abrir_saida() {
     let sock = socket();
-    let cfg = OutputConfig::resolve(&valido(), &sock.local_addr().unwrap().to_string(), 8, 1);
+    // `valido()` é um preset DDP, que endereça por byte: sem `@` (ADR-0029 §7).
+    let cfg = OutputConfig::resolve(&valido(), &sock.local_addr().unwrap().to_string(), 8);
     assert!(cfg.is_ok(), "o catálogo curado não pode ser recusado: {cfg:?}");
 }
 
@@ -77,7 +78,16 @@ fn todos_os_presets_do_catalogo_passam_na_validacao() {
     for nome in reg.names() {
         let p = reg.profile(nome).unwrap();
         let px = (p.limits.max_pixels as usize).clamp(1, 64);
-        let r = OutputConfig::resolve(&p, &addr, px, 1);
+        // O universo é **declarado por alvo** e obrigatório nos protocolos que o usam
+        // (ADR-0029 §7). Este teste percorre o catálogo inteiro, logo tem de escrever a
+        // especificação que cada preset exige — e é isso que o faz continuar a provar que
+        // **todos** os presets abrem saída, em vez de só os de DDP.
+        let protocolo = led_daemon_bin::OutputProtocol::from_profile(p.capabilities.protocol);
+        let spec = match protocolo.faixa_de_universos() {
+            Some((min, _)) => format!("{addr}@{min}"),
+            None => addr.clone(),
+        };
+        let r = OutputConfig::resolve(&p, &spec, px);
         assert!(r.is_ok(), "preset `{nome}` do catálogo é inválido: {:?}", r.err());
     }
 }
@@ -120,7 +130,18 @@ fn cada_classe_de_erro_do_profile_impede_a_saida() {
     casos.push(("Calibration inválida", p));
 
     for (porque, perfil) in casos {
-        let r = OutputConfig::resolve(&perfil, &addr, 8, 1);
+        // **A especificação tem de ser válida para o protocolo de CADA caso.** A verificação
+        // de sintaxe (`@UNIVERSO`, ADR-0029 §7) corre **antes** do validador do profile; com
+        // um endereço nu num preset Art-Net, a recusa vinha da sintaxe e este teste passava
+        // por uma razão que não é a que afirma. É a classe de 2026-08-07i — um teste que
+        // afirma mais do que exercita — e a correcção é dar-lhe a entrada certa, não afrouxar
+        // a asserção.
+        let protocolo = led_daemon_bin::OutputProtocol::from_profile(perfil.capabilities.protocol);
+        let spec = match protocolo.faixa_de_universos() {
+            Some((min, _)) => format!("{addr}@{min}"),
+            None => addr.clone(),
+        };
+        let r = OutputConfig::resolve(&perfil, &spec, 8);
         assert!(r.is_err(), "`{porque}` devia impedir a saída, mas passou");
         let e = r.unwrap_err();
         assert!(
@@ -139,7 +160,7 @@ fn um_aviso_nao_impede_a_saida() {
     let p = profile_by_name("esp32-poe-wled-rgbw-ddp").unwrap();
     assert!(matches!(p.capabilities.color, ColorFormat::Rgbw(..)));
     assert_eq!(p.capabilities.protocol, Protocol::Ddp, "é o caso que gera RgbwOverDdpDataType");
-    let r = OutputConfig::resolve(&p, &sock.local_addr().unwrap().to_string(), 8, 1);
+    let r = OutputConfig::resolve(&p, &sock.local_addr().unwrap().to_string(), 8);
     assert!(r.is_ok(), "um Warning não pode recusar: {:?}", r.err());
 }
 
@@ -150,7 +171,9 @@ fn wifi_declarado_avisa_mas_nao_recusa_na_validacao_estatica() {
     let sock = socket();
     let p = profile_by_name("esp32-devkit-wled-artnet").unwrap();
     assert_eq!(p.capabilities.output_interface, led_hardware_profile::OutputInterface::WiFi);
-    let r = OutputConfig::resolve(&p, &sock.local_addr().unwrap().to_string(), 8, 1);
+    // Art-Net exige o universo declarado (ADR-0029 §7); sem ele a recusa viria da sintaxe e
+    // este teste deixaria de medir o que afirma — que o WiFi **avisa** em vez de recusar.
+    let r = OutputConfig::resolve(&p, &format!("{}@0", sock.local_addr().unwrap()), 8);
     assert!(r.is_ok(), "o gate do ADR-0005 é do pré-voo, não da validação estática");
 }
 
@@ -185,7 +208,7 @@ fn um_preset_que_nao_resolve_nunca_chega_a_ready() {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
-        output: Some(sock.local_addr().unwrap().to_string()),
+        output: vec![sock.local_addr().unwrap().to_string()],
         // O `custom` é o único preset que o operador edita — aqui é usado como veículo de um
         // erro. O erro em si vem da schema desconhecida, injetada abaixo pelo `--profile`.
         profile: Some("preset-que-nao-existe".to_string()),
@@ -256,15 +279,17 @@ fn nenhuma_lista_de_disponiveis_torna_valido_um_profile_quebrado() {
 #[test]
 fn o_formato_de_cor_entra_na_conta_do_universo() {
     let sock = socket();
-    let addr = sock.local_addr().unwrap().to_string();
+    // Art-Net: o universo é declarado (ADR-0029 §7). O que este teste isola é o **formato de
+    // cor** na conta do universo, e uma recusa por sintaxe mediria outra coisa.
+    let addr = format!("{}@0", sock.local_addr().unwrap());
     let base = profile_by_name("esp32-devkit-wled-artnet").unwrap();
     assert_eq!(base.limits.pixels_per_universe, 170);
-    assert!(OutputConfig::resolve(&base, &addr, 8, 1).is_ok(), "em RGB, 170 × 3 = 510 ≤ 512");
+    assert!(OutputConfig::resolve(&base, &addr, 8).is_ok(), "em RGB, 170 × 3 = 510 ≤ 512");
 
     let mut rgbw = base.clone();
     rgbw.capabilities.color = ColorFormat::Rgbw(RgbOrder::Grb, WhiteMode::MinSubtract);
     assert!(
-        OutputConfig::resolve(&rgbw, &addr, 8, 1).is_err(),
+        OutputConfig::resolve(&rgbw, &addr, 8).is_err(),
         "em RGBW, 170 × 4 = 680 > 512 — a mesma linha de preset deixa de ser válida"
     );
 }

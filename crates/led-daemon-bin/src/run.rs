@@ -29,8 +29,11 @@ pub struct Config {
     pub exit_on_finish: bool,
     /// O que se sabe sobre a integridade do artefato.
     pub integrity: Integrity,
-    /// `host[:porta]` (ou `proto://host[:porta]`). `None` = **nenhum frame deixa o processo**.
-    pub output: Option<String>,
+    /// Os endereços dos nós, **por ordem** — `host[:porta]` ou `proto://host[:porta]`.
+    ///
+    /// Vazio = **nenhum frame deixa o processo**. A ordem é significativa: é ela que decide
+    /// que fatia do show vai para que nó (ADR-0029 §2).
+    pub output: Vec<String>,
     /// Nome do preset do `HardwareProfile`. **Obrigatório sempre que há `output`**: é dele que
     /// vêm protocolo, ordem de canais, universos, MTU e heartbeat.
     pub profile: Option<String>,
@@ -44,7 +47,7 @@ impl Default for Config {
             autoplay: true,
             exit_on_finish: true,
             integrity: Integrity::NotVerified,
-            output: None,
+            output: Vec::new(),
             profile: None,
         }
     }
@@ -75,7 +78,7 @@ pub struct Outcome {
 /// Sem saída não há fio para o WiFi corromper, e a permissiva é a escolha correta (é a mesma
 /// regra que o repo já aplica ao `SimulatorDevice`).
 fn guarda_para(cfg: &Config) -> Box<dyn NetworkGuard> {
-    if cfg.output.is_some() {
+    if !cfg.output.is_empty() {
         Box::new(WifiBlockGuard)
     } else {
         Box::new(PermissiveGuard)
@@ -107,7 +110,9 @@ fn abrir_palco<P: Pacer, W: Write>(
     pacer: &P,
     journal: &mut Journal<W>,
 ) -> Result<Option<Stage>, ()> {
-    let Some(spec) = &cfg.output else { return Ok(None) };
+    if cfg.output.is_empty() {
+        return Ok(None);
+    }
     let Some(nome) = &cfg.profile else {
         journal.line(&notice_to_json(
             pacer.now_ms(),
@@ -141,9 +146,9 @@ fn abrir_palco<P: Pacer, W: Write>(
             perfil.transport.heartbeat_ms
         ),
     ));
-    match Stage::open(path, spec, &perfil) {
+    match Stage::open(path, &cfg.output, &perfil) {
         Ok(s) => {
-            journal.line(&notice_to_json(pacer.now_ms(), "output_open", spec));
+            journal.line(&notice_to_json(pacer.now_ms(), "output_open", &cfg.output.join(",")));
             Ok(Some(s))
         }
         Err(e) => {
@@ -157,19 +162,24 @@ fn abrir_palco<P: Pacer, W: Write>(
 /// na resposta, que é o canal certo quando quem pediu foi ele.
 #[cfg(unix)]
 fn abrir_palco_ipc(cfg: &Config, path: &str) -> Result<Option<Stage>, String> {
-    let Some(spec) = &cfg.output else { return Ok(None) };
+    if cfg.output.is_empty() {
+        return Ok(None);
+    }
     let nome = cfg.profile.as_ref().ok_or("--output exige --profile")?;
     let perfil = crate::output::profile_by_name(nome)?;
     crate::output::cadencia_cabe_no_profile(&perfil, cfg.tick_ms)?;
-    Stage::open(path, spec, &perfil).map(Some)
+    Stage::open(path, &cfg.output, &perfil).map(Some)
 }
 
 /// A frase do modo. **Tem de deixar de mentir** quando a saída existe.
 fn modo(cfg: &Config, com_ipc: bool) -> String {
     let ipc = if com_ipc { " + ipc" } else { "" };
-    match &cfg.output {
-        Some(spec) => format!("output={spec}{ipc} — os frames saem deste processo"),
-        None => format!("no-output{ipc} — nenhum frame deixa este processo (sem --output)"),
+    if cfg.output.is_empty() {
+        format!("no-output{ipc} — nenhum frame deixa este processo (sem --output)")
+    } else {
+        // Os N endereços, por ordem: o journal tem de dizer **quais** e **em que ordem**,
+        // porque é a ordem que decide que fatia vai para que nó.
+        format!("output={}{ipc} — os frames saem deste processo", cfg.output.join(","))
     }
 }
 
@@ -370,7 +380,7 @@ fn apply_ipc(
         };
         // O palco é **do show**: um `load` novo dimensiona a saída pelo artefato que chegou.
         // Reabrir aqui é o que impede um show de 720 px de sair por uma saída de 300.
-        if cfg.output.is_some() {
+        if !cfg.output.is_empty() {
             match abrir_palco_ipc(cfg, path) {
                 Ok(s) => *stage = s,
                 Err(e) => return (Err(load_error(e)), eventos),
@@ -509,6 +519,9 @@ pub fn run_with_control<P: Pacer, W: Write>(
             show_id: rt.show().map(|s| s.id.0),
             duration_ms,
             ticks,
+            // ADR-0029 §8. Sem palco aberto a lista é **vazia**, nunca uma entrada com zeros:
+            // "não há saída" e "a saída não enviou nada" são factos diferentes.
+            outputs: stage.as_ref().map(|s| s.output().por_alvo()).unwrap_or_default(),
         };
 
         deadline += period;
@@ -543,7 +556,7 @@ mod tests {
             autoplay: true,
             exit_on_finish: true,
             integrity: Integrity::AssumedByOperator,
-            output: None,
+            output: Vec::new(),
             profile: None,
         }
     }

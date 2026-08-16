@@ -23,6 +23,7 @@ import {
   type Instantaneo,
   type Resposta,
   type Rota,
+  type SaidaPorAlvo,
   aprova,
   DAEMON_STATES,
   ELOS_POR_FORCA,
@@ -140,6 +141,7 @@ const estadoReal: EstadoDoDaemon = {
   duration_ms: 0,
   ticks: 0,
   show_id: null, // sem show carregado
+  outputs: [], // SEM SAÍDA — e não uma saída parada (ADR-0029 §8)
 };
 
 const comShow: EstadoDoDaemon = {
@@ -151,11 +153,34 @@ const comShow: EstadoDoDaemon = {
   duration_ms: 8100,
   ticks: 50,
   show_id: 7,
+  outputs: [
+    { addr: "192.168.2.156:4048", frames: 50, errors: 0 },
+    // O nó que falhou. É esta linha que o agregado apagaria.
+    { addr: "192.168.2.157:4048", frames: 0, errors: 50 },
+  ],
 };
 
 // @ts-expect-error — `state` é a união fechada dos oito estados do ADR-0023. Um valor
 // inventado não compila, e é isso que impede o frontend de exibir um nono estado.
 const estadoImpossivel: EstadoDoDaemon = { ...estadoReal, state: "conectado" };
+
+// ── 4-ter. A contabilidade por nó (ADR-0029 §8) ──────────────────────────────
+
+// @ts-expect-error — um nó SEM endereço é o defeito que o §8 existe para impedir:
+// "houve erros" sem dizer de quem manda procurar em cinco sítios.
+const semEndereco: SaidaPorAlvo = { frames: 1, errors: 0 };
+
+// @ts-expect-error — `addr` é o endereço como o fio o leva, uma string. Um número aqui
+// significaria que alguém decidiu indexar os nós por posição, e a posição não é diagnóstico.
+const enderecoNumerico: SaidaPorAlvo = { addr: 5, frames: 1, errors: 0 };
+
+// @ts-expect-error — a lista é `readonly`: o frontend LÊ a contabilidade do daemon, nunca a
+// edita. Um `push` aqui seria a UI a inventar um nó que o backend não reportou.
+comShow.outputs.push({ addr: "10.0.0.1:4048", frames: 0, errors: 0 });
+
+// Isto TEM de compilar: `errors > 0` num nó e `errors === 0` noutro é precisamente a
+// distinção que um agregado apagaria, e o frontend tem de a poder exprimir.
+const noEmFalha: SaidaPorAlvo | undefined = comShow.outputs.find((o) => o.errors > 0);
 
 // @ts-expect-error — `show_id` é `number | null`. `undefined` não é `null`: "sem show" é
 // uma afirmação, "não sei" é outra, e o Rust distingue-as com `Option<u64>`.

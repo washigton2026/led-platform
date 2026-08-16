@@ -15,6 +15,11 @@ use std::net::UdpSocket;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+#[cfg(unix)]
+use led_daemon_bin::{run::run_with_control, ControlPlane};
+#[cfg(unix)]
+use std::sync::Arc;
+
 /// Pacer virtual: o laço não dorme, e o teste não depende do relógio da máquina.
 struct VPacer {
     now: u64,
@@ -63,7 +68,9 @@ fn cfg(output: Option<&str>, profile: Option<&str>) -> Config {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
-        output: output.map(String::from),
+        // `Vec` desde o ADR-0029: a saída passou a poder ter N nós. Este helper
+        // continua a exprimir um só — as asserções deste ficheiro não mudaram.
+        output: output.map(String::from).into_iter().collect(),
         profile: profile.map(String::from),
     }
 }
@@ -99,7 +106,14 @@ fn o_daemon_envia_frames_reais_em_ddp_artnet_e_sacn() {
     for proto in ["ddp", "artnet", "sacn"] {
         let path = escrever(&format!("e2e_{proto}.lumyx"), 8, 25, 6);
         let sock = socket();
-        let spec = sock.local_addr().unwrap().to_string();
+        // Art-Net e sACN exigem `@UNIVERSO` desde o ADR-0029 §7; o DDP recusa-o. Sem isto o
+        // palco não abre — e foi assim que este teste apanhou a mudança, o que é o seu papel.
+        let spec = match proto {
+            "ddp" => sock.local_addr().unwrap().to_string(),
+            // O E1.31 não define o universo 0 — Art-Net define (ADR-0029 §7.1).
+            "sacn" => format!("{}@1", sock.local_addr().unwrap()),
+            _ => format!("{}@0", sock.local_addr().unwrap()),
+        };
         let (n, log, reason, estado) =
             correr(&path, cfg(Some(&spec), Some(preset_de(proto))), &sock);
 
@@ -184,4 +198,63 @@ fn saida_impossivel_impede_o_arranque() {
     assert_eq!(out.reason, ExitReason::NeverStarted);
     assert!(log.contains(r#""notice":"output_failed""#), "{log}");
     let _ = std::fs::remove_file(path);
+}
+
+/// **O laço liga o produtor ao instantâneo** (ADR-0029 §8).
+///
+/// O `estado_por_alvo.rs` prova que a atribuição por nó sobrevive até ao fio — mas constrói o
+/// `Snapshot` à mão. Se o laço nunca chamasse `por_alvo()`, aquele ficheiro passaria na mesma:
+/// o campo existiria, tipado e vazio para sempre, que é a forma mais silenciosa de um produtor
+/// não ter consumidor. **Este teste não existia, e a falsificação foi quem o pediu**: mutar a
+/// linha de `run.rs` para `Vec::new()` não punha nada vermelho no repositório inteiro.
+///
+/// Dois nós, porque um só não distingue "a lista veio do produtor" de "a lista tem uma entrada".
+#[cfg(unix)]
+#[test]
+fn o_laco_publica_a_contabilidade_de_cada_no() {
+    // **3000 px, e o número não é decorativo.** A repartição é DERIVADA do `max_pixels` do
+    // preset (1500 aqui): com um show pequeno, `repartir` **recusa** dois endereços porque o
+    // segundo nó ficaria com zero píxeis — e a primeira versão deste teste apanhou exactamente
+    // essa recusa, com o daemon a não arrancar. Dois nós só existem quando o show os exige.
+    let path = escrever("e2e_por_alvo.lumyx", 4, 25, 3000);
+    let n1 = socket();
+    let n2 = socket();
+    let enderecos =
+        vec![n1.local_addr().unwrap().to_string(), n2.local_addr().unwrap().to_string()];
+
+    let desc = descriptor_from_path(&path, ShowId(1)).expect("carregar");
+    let mut c = cfg(None, Some(preset_de("ddp")));
+    c.output = enderecos.clone();
+
+    let mut rt = ShowRuntime::new();
+    let mut p = VPacer { now: 0 };
+    let mut buf = Vec::new();
+    let flag = Arc::new(AtomicBool::new(false));
+    let cp = ControlPlane::new(Arc::clone(&flag));
+    {
+        let mut j = Journal::new(&mut buf);
+        run_with_control(&mut rt, Some((path, desc)), &c, &mut p, &mut j, &flag, &cp);
+    }
+
+    let snap = cp.snapshot.lock().expect("snapshot").clone();
+    assert_eq!(
+        snap.outputs.len(),
+        2,
+        "dois nós configurados, duas contabilidades no instantâneo.\
+         \n  Vazio significa que o laço NAO chama `por_alvo()` — o campo existe e nunca é\
+         \n  preenchido, e o operador continua sem saber qual nó falhou.\
+         \n  journal: {}",
+        String::from_utf8_lossy(&buf)
+    );
+
+    for (i, esperado) in enderecos.iter().enumerate() {
+        let (addr, frames, erros) = snap.outputs[i];
+        assert_eq!(&addr.to_string(), esperado, "a entrada {i} tem de nomear o seu nó");
+        assert!(
+            frames > 0,
+            "o nó {i} ({addr}) tem de ter enviado: um loopback nao falha, portanto \
+             frames=0 aqui significa que a contabilidade nao veio do OutputManager"
+        );
+        assert_eq!(erros, 0, "loopback nao pode ter erros: {:?}", snap.outputs);
+    }
 }

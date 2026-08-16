@@ -101,12 +101,25 @@ fn main() {
         }
     };
     let px = pixels.unwrap_or(perfil.limits.max_pixels as usize);
-    let alvo_v4: Ipv4Addr = match ip.parse() {
+    // `IP[@UNIVERSO]` — a **mesma** sintaxe do `--output` (ADR-0029 §7). O harness tem de
+    // conseguir exprimir o universo, senão não pode medir Art-Net/sACN; e usar uma sintaxe
+    // própria daria ao operador duas maneiras de dizer a mesma coisa.
+    let (so_ip, universo) = match ip.rsplit_once('@') {
+        Some((i, u)) => (i.to_string(), Some(u.to_string())),
+        None => (ip.clone(), None),
+    };
+    let alvo_v4: Ipv4Addr = match so_ip.parse() {
         Ok(v) => v,
         Err(_) => {
-            eprintln!("erro: `{ip}` não é um IPv4");
+            eprintln!("erro: `{so_ip}` não é um IPv4");
             std::process::exit(2);
         }
+    };
+    // A especificação que o `OutputConfig` recebe. **Sem omissão**: se o preset usa universos
+    // e o operador não escreveu `@N`, o `resolve` recusa e diz porquê.
+    let spec = match &universo {
+        Some(u) => format!("{so_ip}@{u}"),
+        None => so_ip.clone(),
     };
 
     let mut r = Relatorio { alvo: ip.clone(), preset: preset.clone(), ..Default::default() };
@@ -181,7 +194,7 @@ fn main() {
             );
             continue;
         }
-        let v = medir_aceitacao(&perfil, alvo_v4, px, proto);
+        let v = medir_aceitacao(&perfil, &spec, alvo_v4, px, proto);
         r.add(
             nome_estatico(proto),
             "o no aceita este protocolo",
@@ -201,9 +214,9 @@ fn main() {
         "o palco nunca fica mais de 2400 ms sem frame",
         "maior intervalo entre envios < 2400 ms, COM o controlador confirmado",
         match &info {
-            Ok(_) => medir_heartbeat(&perfil, alvo_v4, px),
+            Ok(_) => medir_heartbeat(&perfil, &spec, px),
             Err(e) => {
-                let local = medir_heartbeat(&perfil, alvo_v4, px);
+                let local = medir_heartbeat(&perfil, &spec, px);
                 Veredito::NaoMedido(format!(
                     "cadencia local: {} — mas o controlador nao responde ({e}); \
                      isto mede o remetente, NAO o palco",
@@ -219,7 +232,7 @@ fn main() {
         "o sistema recupera de uma falha do meio fisico",
         "o envio volta a ter sucesso, e o no NAO reinicia (uptime monotonico)",
         if cabo {
-            medir_queda_de_cabo(&perfil, alvo_v4, px, info.as_ref().ok())
+            medir_queda_de_cabo(&perfil, &spec, alvo_v4, px, info.as_ref().ok())
         } else {
             Veredito::NaoMedido(
                 "etapa interativa: correr com --cabo, com o operador presente".into(),
@@ -331,11 +344,12 @@ fn resumo_info(json: &str) -> String {
 /// Envia frames reais e confirma **no próprio controlador** que foram aceites.
 fn medir_aceitacao(
     perfil: &led_hardware_profile::HardwareProfile,
+    spec: &str,
     alvo: Ipv4Addr,
     px: usize,
     proto: &str,
 ) -> Veredito {
-    let cfg = match OutputConfig::resolve(perfil, &alvo.to_string(), px, 1) {
+    let cfg = match OutputConfig::resolve(perfil, spec, px) {
         Ok(c) => c,
         Err(e) => return Veredito::NaoMedido(format!("configuracao: {e}")),
     };
@@ -379,10 +393,10 @@ fn medir_aceitacao(
 /// Mede o **maior intervalo real** entre envios consecutivos ao longo de 6 s.
 fn medir_heartbeat(
     perfil: &led_hardware_profile::HardwareProfile,
-    alvo: Ipv4Addr,
+    spec: &str,
     px: usize,
 ) -> Veredito {
-    let cfg = match OutputConfig::resolve(perfil, &alvo.to_string(), px, 1) {
+    let cfg = match OutputConfig::resolve(perfil, spec, px) {
         Ok(c) => c,
         Err(e) => return Veredito::NaoMedido(format!("configuracao: {e}")),
     };
@@ -421,11 +435,12 @@ fn medir_heartbeat(
 /// Etapa interativa: o operador puxa o cabo, e o harness cronometra a recuperação.
 fn medir_queda_de_cabo(
     perfil: &led_hardware_profile::HardwareProfile,
+    spec: &str,
     alvo: Ipv4Addr,
     px: usize,
     info_antes: Option<&String>,
 ) -> Veredito {
-    let cfg = match OutputConfig::resolve(perfil, &alvo.to_string(), px, 1) {
+    let cfg = match OutputConfig::resolve(perfil, spec, px) {
         Ok(c) => c,
         Err(e) => return Veredito::NaoMedido(format!("configuracao: {e}")),
     };

@@ -188,6 +188,27 @@ export interface EstadoDoDaemon {
   readonly duration_ms: number;
   readonly ticks: number;
   readonly show_id: number | null;
+  readonly outputs: readonly SaidaPorAlvo[];
+}
+
+/**
+ * A contabilidade de UM no da saida (ADR-0029 §8).
+ *
+ * `addr` e o endereco do no, e existe para que a perda seja ATRIBUIVEL: com cinco
+ * robos, "houve erros" sem dizer de quem manda procurar em cinco sitios.
+ *
+ * `frames` e `errors` sao deste no e so deste no. Um `sendto` com sucesso NAO
+ * prova que o controlador recebeu, e menos ainda que o LED acendeu — a cadeia de
+ * evidencia do ADR-0026 §8 continua intacta: isto e OBSERVABILIDADE, nao
+ * EVIDENCIA FISICA.
+ *
+ * Lista `outputs` VAZIA significa SEM SAIDA CONFIGURADA. Nao e o mesmo que uma
+ * saida parada, e por isso nao se fabrica uma entrada com zeros.
+ */
+export interface SaidaPorAlvo {
+  readonly addr: string;
+  readonly frames: number;
+  readonly errors: number;
 }
 
 /**

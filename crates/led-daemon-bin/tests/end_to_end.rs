@@ -60,7 +60,7 @@ fn do_ficheiro_ao_fim_do_show() {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
-        output: None,
+        output: Vec::new(),
         profile: None,
     };
     let mut rt = ShowRuntime::new();

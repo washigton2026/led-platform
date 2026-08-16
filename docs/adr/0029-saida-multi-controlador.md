@@ -113,6 +113,130 @@ testes de `discovery.rs` já afirmam.
 apenas que faltam. Com cinco robôs, *"SEM resposta"* sem dizer de quem manda o operador
 procurar em cinco sítios.
 
+### 7 · O universo viaja **com o endereço**, e não há omissão silenciosa
+
+*(Emenda de 2026-08-15, escrita antes do código.)*
+
+**O achado que forçou esta decisão.** O daemon **nunca expôs** `first_universe`: está escrito
+`1` em `stage.rs`, sem flag. E a única validação de hardware que existe diz o contrário —
+2026-07-23, Art-Net contra o WLED do rig: *"`--first-universe 0` (universo 0 alinha com
+`dmx.uni:0`; **`1` desloca ~170 px**)"*. O daemon está fixo no valor que a bancada contradiz,
+e nenhum teste o apanha porque todos chamam `from_profile` **directamente** com o parâmetro,
+sem atravessar o `Stage::open` que fixa o `1`. É a classe do `RgbOrder` do GS4.3, e é
+**anterior ao multi-controlador**: existe hoje, com um nó.
+
+**A sintaxe.** O universo é dado da **instância**, tal como o endereço — o `HardwareProfile`
+tem `pixels_per_universe` mas não tem `first_universe`, e o ADR-0018 fixou porquê. Por isso
+viajam juntos, num só token por nó:
+
+```
+--output IP[:PORTA][@UNIVERSO]
+--output 192.168.2.156@0 --output 192.168.2.157@0
+--output [::1]:6454@0                      # IPv6 entre colchetes
+```
+
+**Porque não duas listas paralelas.** `--output` × N e `--first-universe` × N podem divergir
+em comprimento e em ordem, e o operador só descobre no palco. Com um token por nó a
+divergência **não é representável** — o mesmo tipo de garantia que escolheu SSE em vez de
+WebSocket (ADR-0026 §5). `@` não colide com a sintaxe de IPv6 nem com `proto://`.
+
+**Não há omissão silenciosa.** O protocolo vem do profile, logo o daemon sabe se ele usa
+universos, e **recusa em vez de adivinhar**:
+
+| Protocolo | `@` ausente | `@` presente |
+|---|---|---|
+| Art-Net / sACN | **erro** — o preset usa universos, declare `@N` | honrado, **se couber na faixa** |
+| DDP | aceite — endereça por byte | **erro** — o DDP ignora universos |
+
+Escrever `@5` num alvo DDP significa que o operador julga que aquilo tem efeito; aceitar em
+silêncio confirmaria a crença errada. É a decisão do GS4.4 outra vez: *"um valor errado por
+omissão é pior que a ausência de valor, porque parece configuração"*.
+
+#### 7.1 · A sintaxe é comum; a **semântica não é**. A faixa é do protocolo.
+
+*(Emenda de 2026-08-15, escrita antes do código, a corrigir a própria §7.)*
+
+A primeira versão desta secção tratou *"usa universos"* como um **booleano**, e isso colapsou
+Art-Net e sACN como se partilhassem a mesma faixa. **Não partilham** — e o defeito que isso
+produziu não foi teórico: o teste da matriz passou a **afirmar que `@0` é válido para sACN**,
+fixando como esperado um valor que a E1.31 não define. É a classe de 2026-08-07f, e desta vez
+estava dentro do teste escrito para provar a regra.
+
+**Medido no código deste repositório, não presumido:**
+
+| Protocolo | Faixa | Onde se lê | Zero é válido? |
+|---|---|---|---|
+| **Art-Net** | `0 … 32767` | `artnet.rs:277` — `((universe >> 8) & 0x7F)`, port-address de **15 bits** | **sim** |
+| **sACN (E1.31)** | `1 … 63999` | `packet.rs:145` — *"universe field round-trips 1..=63999"*, teste percorre `[1, 512, 1024, 32768, 63999]` | **não** |
+| **DDP** | — | endereça por byte | não se aplica |
+
+O `1` do sACN não é convenção nossa: é a E1.31, e o repositório **já o sabia** — o comentário
+e o vector de teste começam em 1 desde que o `packet.rs` existe. Nunca virou validação. Há um
+segundo sintoma independente: `device.rs:42` deriva `239.255.hi.lo`, e o universo 0 daria
+**239.255.0.0**, que não é um grupo E1.31 válido.
+
+**Uma fonte, não duas.** `faixa_de_universos() -> Option<(u16, u16)>` é a autoridade;
+`usa_universos()` passa a ser `faixa_de_universos().is_some()`. Um booleano ao lado de uma
+faixa seriam duas verdades sobre a mesma coisa, e a segunda apodreceria — a regra do GS4.3.
+
+**Matriz normativa**, a testar por protocolo e nas duas fronteiras:
+
+| Protocolo | Aceita | Recusa |
+|---|---|---|
+| Art-Net | `0`, `32767` | `32768` |
+| sACN | `1`, `63999` | `0`, `64000` |
+| DDP | — | **qualquer** `@` |
+
+**Registado e deliberadamente FORA desta fatia:** `build_art_dmx` **mascara** um universo
+acima de 32767 em vez de o recusar — `40000` vira `7232` sem uma palavra. É *fail-closed*
+violado, vive em `led-protocols`, e afecta qualquer chamador. A faixa acima apanha-o **na
+fronteira do daemon**; corrigi-lo na origem é fatia própria e ADR próprio.
+
+**O que isto NÃO decide.** Se dois nós devem usar o mesmo universo (modelo WLED, um espaço
+por controlador) ou universos contíguos (modelo xLights, 1–149 pelos cinco robôs). Com esta
+sintaxe **o operador declara**, e as duas convenções são exprimíveis sem que o daemon
+escolha por ele. Continua sem verificação em hardware: o rig está offline.
+
+### 8 · O estado por alvo chega ao operador pelo `status`, **sem segunda superfície**
+
+*(Emenda de 2026-08-15.)*
+
+A decisão 5 exige que a perda por nó seja observável. `por_alvo()` existe e **não tem
+consumidor** — é a forma do TD-014 outra vez: contador com ADR a exigir reporte e nenhum
+caminho até ao operador.
+
+**`Snapshot` ganha `outputs: Vec<{addr, frames, errors}>`**, campo **aditivo** na resposta do
+`status` que o IPC v1 já produz e que o `/api/state` já repassa verbatim. Lista **vazia**
+significa ausência de saída — nunca zeros fabricados, nunca um total somado (a decisão D das
+alternativas rejeitadas).
+
+**As duas saídas rejeitadas, e porquê.** Ligar o `led-readmodel` criaria uma **segunda
+superfície de métricas** para o mesmo facto. Uma rota `/api/outputs` no console obrigá-lo-ia
+a inventar o dado, porque o IPC não o transporta — a mesma parede que mantém o
+`/api/profiles` em 501 (ADR-0026 §15). **Não se abre IPC v2**: isto é um campo numa resposta
+existente, não um comando novo, e a política está no ADR-0027 §6.
+
+O gate de contrato que já existe apanha o esquecimento: o **caminho B** extrai os campos do
+arm `Cmd::Status` do produtor e confronta-os com o TypeScript gerado.
+
+### 9 · O custo do fan-out é **medido antes** de ser optimizado
+
+*(Emenda de 2026-08-15.)*
+
+`OutputManager::send` faz `buf.clone()` e toma um `Mutex` **por alvo, por frame**. A
+alocação **não é nova** — o `send()` da calibração já a fazia em código commitado — e
+**nenhum gate de `no_alloc` cobre o caminho de saída do daemon**, o que explica que nem uma
+nem outra tenham sido apanhadas.
+
+**Não se promete `no_alloc` e não se optimiza agora.** Mede-se o caminho real com 1 e com 5
+alvos, com e sem calibração, e regista-se alocações/frame e ns/frame — a disciplina do
+TD-011 e do TD-012, que mediram e mandaram **não** optimizar. A asserção do benchmark é
+relativa (5 alvos não custam mais que ~5× um), para apanhar desvio superlinear sem inventar
+um orçamento.
+
+Qualquer optimização que toque `led-core` — por exemplo `send_frame` a aceitar
+`&[PixelColor]` em vez de `LogicalFrame` — é **seam congelado e exige ADR próprio**.
+
 ## Alternativas rejeitadas
 
 **A · Art-Net primeiro, DDP depois.** Rejeitada: cria a assimetria silenciosa que o achado

@@ -49,6 +49,14 @@ const NADA = () => {};
 const ENVELOPE = { v: 1, id: 1, ok: true } as const;
 
 /**
+ * A contabilidade por nó (ADR-0029 §8). Está aqui porque o tipo a exige, e **a marcação
+ * esperada não muda por causa dela** — é essa a prova de que esta fatia levou o dado até ao
+ * contrato sem tocar num pixel do ecrã. Quando a UI passar a mostrá-la, é a marcação que
+ * denuncia a mudança, e é para isso que ela está congelada.
+ */
+const SEM_SAIDA = { outputs: [] } as const;
+
+/**
  * Um cenário por linha. A chave é a do registo em `marcacao.esperada.ts`, e o
  * `satisfies` garante que não se escreve aqui um nome que lá não exista — nem se
  * esquece um que exista (ver a contagem no fim).
@@ -62,6 +70,7 @@ const CASOS: ReadonlyArray<readonly [keyof typeof ESPERADO, JSX.Element]> = [
     <Daemon
       estado={{
         ...ENVELOPE,
+        ...SEM_SAIDA,
         state: "playing",
         position_ms: 4000,
         duration_ms: 8000,
@@ -75,7 +84,15 @@ const CASOS: ReadonlyArray<readonly [keyof typeof ESPERADO, JSX.Element]> = [
   [
     "DAEMON_SEM_SHOW",
     <Daemon
-      estado={{ ...ENVELOPE, state: "idle", position_ms: 0, duration_ms: 0, ticks: 0, show_id: null }}
+      estado={{
+        ...ENVELOPE,
+        ...SEM_SAIDA,
+        state: "idle",
+        position_ms: 0,
+        duration_ms: 0,
+        ticks: 0,
+        show_id: null,
+      }}
     />,
   ],
   ["INDISPONIVEL", <Indisponivel code="console.daemon_offline" detail="/tmp/x.sock" />],

@@ -225,11 +225,14 @@ fn um_heartbeat_inseguro_impede_a_saida() {
 fn resolver_um_endereco_nao_e_um_segundo_caminho() {
     let p = perfil("esp32-poe-wled-ddp");
     let addr = "127.0.0.1:4048".parse().unwrap();
-    let direto = OutputConfig::from_profile(&p, addr, 720, 1).unwrap();
+    // `0` e não `1`: este preset é DDP, que endereça por byte e ignora universos — o
+    // `resolve` devolve 0 para eles desde o ADR-0029 §7, e comparar contra 1 mediria a
+    // diferença de universo em vez da equivalência das três escritas do endereço.
+    let direto = OutputConfig::from_profile(&p, addr, 720, 0).unwrap();
 
     // As três formas de escrever o mesmo endereço têm de dar exatamente a mesma configuração.
     for spec in ["127.0.0.1", "127.0.0.1:4048", "ddp://127.0.0.1:4048"] {
-        let resolvido = OutputConfig::resolve(&p, spec, 720, 1).unwrap();
+        let resolvido = OutputConfig::resolve(&p, spec, 720).unwrap();
         assert_eq!(direto, resolvido, "`{spec}` divergiu — `resolve` deixou de delegar");
     }
 }
@@ -240,13 +243,13 @@ fn resolver_um_endereco_nao_e_um_segundo_caminho() {
 #[test]
 fn o_esquema_escrito_tem_de_concordar_com_o_profile() {
     let ddp = perfil("esp32-poe-wled-ddp");
-    let erro = OutputConfig::resolve(&ddp, "artnet://127.0.0.1", 720, 1).unwrap_err();
+    let erro = OutputConfig::resolve(&ddp, "artnet://127.0.0.1", 720).unwrap_err();
     assert!(erro.contains("contradiz o profile"), "{erro}");
-    assert!(OutputConfig::resolve(&ddp, "ddp://127.0.0.1", 720, 1).is_ok(), "concordar é aceite");
+    assert!(OutputConfig::resolve(&ddp, "ddp://127.0.0.1", 720).is_ok(), "concordar é aceite");
 
     let artnet = perfil("esp32-devkit-wled-artnet");
     assert!(
-        OutputConfig::resolve(&artnet, "ddp://127.0.0.1", 720, 1).is_err(),
+        OutputConfig::resolve(&artnet, "ddp://127.0.0.1@0", 720).is_err(),
         "e a recusa vale nos dois sentidos"
     );
 }
@@ -268,7 +271,7 @@ fn rgbw_poe_quatro_canais_no_fio_com_o_branco_subtraido() {
     let sock = socket();
     let addr = sock.local_addr().unwrap();
     let px = 6usize;
-    let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+    let cfg = OutputConfig::resolve(&p, &addr.to_string(), px).unwrap();
     // Cor com neutro embutido: min = 50.
     let dg = um_frame(cfg, &sock, vec![PixelColor { r: 200, g: 100, b: 50 }; px]);
 
@@ -310,7 +313,7 @@ fn mtus_diferentes_produzem_fragmentacoes_diferentes_e_nenhum_datagrama_excede_o
 
         let sock = socket();
         let addr = sock.local_addr().unwrap();
-        let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), px).unwrap();
         let dg = um_frame(cfg, &sock, branco(px));
 
         assert_eq!(dg.len() as u32, previsto, "MTU {mtu}: previsto {previsto}, no fio {}", dg.len());
@@ -327,13 +330,16 @@ fn mtus_diferentes_produzem_fragmentacoes_diferentes_e_nenhum_datagrama_excede_o
 }
 
 /// **O primeiro universo é da instância, não do tipo** (ADR-0018) — e o fio obedece.
+///
+/// Desde o ADR-0029 §7 ele é **declarado na própria especificação** (`IP@N`), e este teste
+/// passou a exercitar esse caminho: antes chegava por um parâmetro que a CLI nunca expunha.
 #[test]
 fn o_primeiro_universo_e_respeitado_seja_qual_for() {
     let p = perfil("esp32-devkit-wled-artnet");
     for primeiro in [0u16, 1, 7, 100] {
         let sock = socket();
         let addr = sock.local_addr().unwrap();
-        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 400, primeiro).unwrap();
+        let cfg = OutputConfig::resolve(&p, &format!("{addr}@{primeiro}"), 400).unwrap();
         let dg = um_frame(cfg, &sock, branco(400));
 
         let mut universos: Vec<u16> = dg
@@ -358,7 +364,7 @@ fn cada_ordem_de_canais_produz_bytes_proprios() {
         p.capabilities.color = ColorFormat::Rgb(ordem);
         let sock = socket();
         let addr = sock.local_addr().unwrap();
-        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 4, 1).unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 4).unwrap();
         let dg = um_frame(cfg, &sock, vec![cor; 4]);
         let b: [u8; 3] = dg[0][DDP_HEADER..DDP_HEADER + 3].try_into().unwrap();
         vistos.push((ordem, b));
@@ -398,7 +404,16 @@ fn nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida() {
         &["RgbOrder::Rgb)", "RgbOrder::Grb)", "RgbOrder::Bgr)", "170", "487", "1462", "1500"];
 
     for (nome, fonte) in FONTES {
-        for linha in fonte.lines() {
+        // **Só produção.** O `mod tests` e tudo o que vem depois ficam de fora, pela mesma
+        // razão que o TD-015 fixou no `surface_gate` do `led-console-bin`: um gate não pode
+        // reprovar por causa de um teste que usa o número **para provar a regra**. O
+        // `repartir` do ADR-0029 é exercitado com `max_pixels` literais — são entradas de uma
+        // função pura, não valores físicos a escapar ao profile no caminho da saída.
+        //
+        // O corte é por `mod tests`, o mesmo que o `main.rs` já faz contra si próprio — e
+        // não por `#[cfg(test)]`, que não apanharia um `#[cfg(all(test, unix))]`.
+        let producao = fonte.split("mod tests").next().unwrap_or(fonte);
+        for linha in producao.lines() {
             let t = linha.trim_start();
             // Comentários e doc-comments podem (e devem) citar os números ao explicá-los.
             if t.starts_with("//") {

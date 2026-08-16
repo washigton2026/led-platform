@@ -103,7 +103,7 @@ fn refresh_zero_nunca_e_capacidade_infinita() {
     let addr = sock.local_addr().unwrap().to_string();
     let p = com_refresh(0);
     assert!(
-        led_daemon_bin::OutputConfig::resolve(&p, &addr, 4, 1).is_err(),
+        led_daemon_bin::OutputConfig::resolve(&p, &addr, 4).is_err(),
         "refresh_hz=0 tem de impedir a saída (ZeroLimit + ADR-0024)"
     );
     // E a política de cadência também não o lê como ilimitado.
@@ -123,7 +123,7 @@ fn o_daemon_recusa_arrancar_acima_do_teto_e_nao_clampa() {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
-        output: Some(sock.local_addr().unwrap().to_string()),
+        output: vec![sock.local_addr().unwrap().to_string()],
         profile: Some("esp32-poe-wled-ddp".to_string()),
     };
     let mut rt = ShowRuntime::new();
@@ -157,7 +157,7 @@ fn dentro_do_teto_o_mesmo_caminho_toca_ate_ao_fim() {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
-        output: Some(sock.local_addr().unwrap().to_string()),
+        output: vec![sock.local_addr().unwrap().to_string()],
         profile: Some("esp32-poe-wled-ddp".to_string()),
     };
     let mut rt = ShowRuntime::new();
@@ -186,7 +186,7 @@ fn sem_saida_a_cadencia_nao_e_limitada() {
         autoplay: true,
         exit_on_finish: true,
         integrity: Integrity::AssumedByOperator,
-        output: None,
+        output: Vec::new(),
         profile: None,
     };
     let mut rt = ShowRuntime::new();

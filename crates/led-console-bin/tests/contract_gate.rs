@@ -500,3 +500,52 @@ fn os_comandos_nunca_expostos_nao_ganham_tipo_de_argumentos() {
         );
     }
 }
+
+/// **Os campos ANINHADOS de `outputs` também têm caminho B** (ADR-0029 §8).
+///
+/// O gate acima extrai só os nomes de **topo** do arm `Cmd::Status`, e ali `outputs` é um
+/// tuplo como qualquer outro — passa. Mas os nomes de **dentro** de cada entrada (`addr`,
+/// `frames`, `errors`) nascem noutro sítio, `outputs_json`, e ficariam sem guarda nenhuma:
+/// renomear `frames` para `sent` no produtor divergiria do TypeScript em silêncio, e o
+/// frontend leria `undefined` num campo que o backend envia.
+///
+/// É a mesma lacuna que o `EstadoDoDaemon` tinha antes do caminho B existir — um nível abaixo.
+#[test]
+fn os_campos_de_cada_saida_existem_no_contrato() {
+    let corpo = SERVER_RS
+        .split("pub fn outputs_json")
+        .nth(1)
+        .expect("`outputs_json` tem de existir em server.rs — é o produtor destes nomes")
+        .split("\npub fn ")
+        .next()
+        .expect("corpo da funcao");
+    // Só código: um comentário pode citar um nome legitimamente ao explicá-lo.
+    let corpo: String = codigo(corpo).collect::<Vec<_>>().join("\n");
+
+    // Cada chave aparece como `"nome":` dentro do literal de formato.
+    let mut campos: Vec<String> = Vec::new();
+    let mut resto = corpo.as_str();
+    while let Some(i) = resto.find("\":") {
+        if let Some(j) = resto[..i].rfind('"') {
+            let nome = &resto[j + 1..i];
+            if !nome.is_empty() && nome.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                campos.push(nome.to_string());
+            }
+        }
+        resto = &resto[i + 2..];
+    }
+
+    let campos = nao_vazio(campos, "campos de `outputs_json`");
+    for c in &campos {
+        assert!(
+            TS_VERSIONADO.contains(&format!("readonly {c}:")),
+            "o campo `{c}` de cada saida e escrito no fio por `outputs_json` e NAO esta no \
+             contrato TypeScript. O gate de topo nao o apanha: ali `outputs` e um campo so."
+        );
+    }
+    assert!(
+        campos.len() >= 3,
+        "esperava pelo menos `addr`, `frames` e `errors`, extrai {}: {campos:?}",
+        campos.len()
+    );
+}

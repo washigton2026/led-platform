@@ -298,7 +298,35 @@ pub fn gerar_typescript() -> String {
          readonly position_ms: number;\n  \
          readonly duration_ms: number;\n  \
          readonly ticks: number;\n  \
-         readonly show_id: number | null;\n\
+         readonly show_id: number | null;\n  \
+         readonly outputs: readonly SaidaPorAlvo[];\n\
+         }\n\n",
+    );
+
+    // ── A contabilidade por no (ADR-0029 §8) ────────────────────────────────
+    //
+    // O daemon envia N nos porque o rig tem N nos. Um AGREGADO nao distingue cinco a
+    // funcionar de quatro a funcionar e um morto — e e essa distincao que o §5 obriga a
+    // manter observavel ate ao operador.
+    s.push_str(
+        "/**\n \
+         * A contabilidade de UM no da saida (ADR-0029 §8).\n \
+         *\n \
+         * `addr` e o endereco do no, e existe para que a perda seja ATRIBUIVEL: com cinco\n \
+         * robos, \"houve erros\" sem dizer de quem manda procurar em cinco sitios.\n \
+         *\n \
+         * `frames` e `errors` sao deste no e so deste no. Um `sendto` com sucesso NAO\n \
+         * prova que o controlador recebeu, e menos ainda que o LED acendeu — a cadeia de\n \
+         * evidencia do ADR-0026 §8 continua intacta: isto e OBSERVABILIDADE, nao\n \
+         * EVIDENCIA FISICA.\n \
+         *\n \
+         * Lista `outputs` VAZIA significa SEM SAIDA CONFIGURADA. Nao e o mesmo que uma\n \
+         * saida parada, e por isso nao se fabrica uma entrada com zeros.\n \
+         */\n\
+         export interface SaidaPorAlvo {\n  \
+         readonly addr: string;\n  \
+         readonly frames: number;\n  \
+         readonly errors: number;\n\
          }\n\n",
     );
 

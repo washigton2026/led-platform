@@ -42,7 +42,8 @@ fn subir_daemon(nome: &str) -> Daemon {
             autoplay: false,
             exit_on_finish: false,
             integrity: Integrity::AssumedByOperator,
-            output: None,
+            // Sem saida: estes testes exercitam o IPC, nao o fio (ADR-0029 tornou-a uma lista).
+            output: Vec::new(),
             profile: None,
         };
         let mut rt = ShowRuntime::new();

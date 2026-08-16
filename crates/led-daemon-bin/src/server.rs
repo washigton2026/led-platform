@@ -23,6 +23,7 @@
 use crate::proto::{code, err_line, event_line, jstr, ok_line, Cmd, ProtoError, Request};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,6 +60,16 @@ pub struct Snapshot {
     pub show_id: Option<u64>,
     pub duration_ms: u64,
     pub ticks: u64,
+    /// **A contabilidade de cada nó, com o endereço** (ADR-0029 §8).
+    ///
+    /// É a forma exacta que o [`crate::output::OutputManager::por_alvo`] devolve — tuplo e não
+    /// struct **de propósito**: uma struct aqui seria uma segunda representação do mesmo facto,
+    /// e o dia em que divergisse da do produtor seria invisível. Os nomes dos campos nascem
+    /// uma só vez, na fronteira do fio ([`outputs_json`]).
+    ///
+    /// Lista **vazia** significa ausência de saída — nunca zeros fabricados para nós que não
+    /// existem, e nunca um total somado (a alternativa D que o ADR-0029 §8 rejeita).
+    pub outputs: Vec<(SocketAddr, u64, u64)>,
 }
 
 /// O instantâneo inicial é **`Idle`** — o estado com que `ShowRuntime::new()` realmente
@@ -74,8 +85,35 @@ impl Default for Snapshot {
             show_id: None,
             duration_ms: 0,
             ticks: 0,
+            outputs: Vec::new(),
         }
     }
+}
+
+/// Serializa a contabilidade por alvo para o corpo do `status` (ADR-0029 §8).
+///
+/// **Este é o único sítio onde os nomes `addr`/`frames`/`errors` são escritos.** O `Snapshot`
+/// guarda tuplos precisamente para que a nomeação aconteça uma vez só, aqui, na fronteira do
+/// fio — e é daqui que o caminho B do gate de contrato os extrai.
+///
+/// `snake_case` porque é o que o fio leva: o console traduz transporte, não vocabulário
+/// (ADR-0026 §15).
+pub fn outputs_json(outputs: &[(SocketAddr, u64, u64)]) -> String {
+    let mut s = String::from("[");
+    for (i, (addr, frames, errors)) in outputs.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        // O `addr` vai por `escape` como qualquer string: um `SocketAddr` só produz dígitos,
+        // pontos, dois-pontos e parênteses rectos, mas escrever a excepção seria assumir que
+        // a origem deste valor nunca muda.
+        s.push_str(&format!(
+            r#"{{"addr":"{}","frames":{frames},"errors":{errors}}}"#,
+            crate::json::escape(&addr.to_string())
+        ));
+    }
+    s.push(']');
+    s
 }
 
 /// Um comando à espera de ser aplicado pelo laço principal.
@@ -284,6 +322,9 @@ fn handle_connection(stream: UnixStream, cp: Arc<ControlPlane>) -> std::io::Resu
                         "show_id",
                         s.show_id.map(|i| i.to_string()).unwrap_or_else(|| "null".into()),
                     ),
+                    // ADR-0029 §8: a contabilidade por nó. Aditivo — o IPC v1 não ganha
+                    // comando nenhum, é um campo numa resposta que já existia.
+                    ("outputs", outputs_json(&s.outputs)),
                 ])
             }
             Cmd::Subscribe => {

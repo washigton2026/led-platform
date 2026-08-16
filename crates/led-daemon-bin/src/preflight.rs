@@ -282,7 +282,6 @@ mod tests {
             &crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap(),
             "192.168.2.156",
             720,
-            1,
         )
         .unwrap()
     }
@@ -500,7 +499,6 @@ mod tests {
             &crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap(),
             "127.0.0.1:9999",
             4,
-            1,
         )
         .unwrap();
         let pf = preflight(

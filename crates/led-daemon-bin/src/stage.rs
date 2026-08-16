@@ -67,11 +67,12 @@ impl Stage {
     /// universos e MTU — e adivinhar errado acende a cor errada na fita.
     pub fn open(
         show_path: &str,
-        output: &str,
+        outputs: &[String],
         profile: &led_hardware_profile::HardwareProfile,
     ) -> Result<Self, String> {
         let source = FrameSource::open(show_path).map_err(|e: LoadError| e.to_string())?;
-        let cfg = OutputConfig::resolve(profile, output, source.pixel_count as usize, 1)?;
+        let cfg =
+            OutputConfig::resolve_muitos(profile, outputs, source.pixel_count as usize)?;
         let output = OutputManager::open(cfg).map_err(|e| format!("saída: {e}"))?;
         Ok(Self { source, output, heartbeat: Heartbeat::new(), last_sent_ms: None })
     }
@@ -150,7 +151,7 @@ mod tests {
         sock.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
         let perfil = crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap();
         let st =
-            Stage::open(&path, &sock.local_addr().unwrap().to_string(), &perfil).unwrap();
+            Stage::open(&path, &[sock.local_addr().unwrap().to_string()], &perfil).unwrap();
         (st, sock, path)
     }
 
@@ -274,7 +275,7 @@ mod tests {
         let path = escrever("stage_f.lumyx", &[(0, 3)], 4);
         // Porta 1 em loopback: `sendto` falha de forma reprodutível em macOS/Linux.
         let perfil = crate::output::profile_by_name("esp32-poe-wled-ddp").unwrap();
-        let mut st = Stage::open(&path, "127.0.0.1:1", &perfil).unwrap();
+        let mut st = Stage::open(&path, &["127.0.0.1:1".to_string()], &perfil).unwrap();
         let r = st.on_tick(State::Playing, 0, 0);
         assert!(matches!(r, StageTick::Failed(_)) || matches!(r, StageTick::Sent { .. }));
         // Seja qual for o veredito do SO, a contabilidade fecha: nada desaparece.

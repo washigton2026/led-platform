@@ -61,8 +61,17 @@ fn do_lumyx_ate_ao_fio_nos_tres_protocolos() {
         sock.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
         let addr = sock.local_addr().unwrap();
 
+        // Art-Net e sACN exigem `@UNIVERSO`; o DDP recusa-o (ADR-0029 §7). O `0` é o valor
+        // que a bancada de 2026-07-23 confirmou alinhado com o `dmx.uni` do WLED.
+        let perfil = perfil_de(proto);
+        // Art-Net aceita `0`; o sACN **não** — o E1.31 começa em 1 (ADR-0029 §7.1).
+        let spec = match proto {
+            "ddp" => addr.to_string(),
+            "sacn" => format!("{addr}@1"),
+            _ => format!("{addr}@0"),
+        };
         let om = OutputManager::open(
-            OutputConfig::resolve(&perfil_de(proto), &addr.to_string(), px as usize, 1).unwrap(),
+            OutputConfig::resolve(&perfil, &spec, px as usize).unwrap(),
         )
         .unwrap();
         let mut src = FrameSource::open(&path).unwrap();
@@ -95,7 +104,6 @@ fn seek_para_tras_atravessa_o_pipeline() {
             &perfil_de("ddp"),
             &sock.local_addr().unwrap().to_string(),
             px as usize,
-            1,
         )
         .unwrap(),
     )
