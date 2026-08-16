@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (1067 tests)
+cargo test --workspace                  # all suites (1091 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -89,10 +89,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (1067 tests)
+cargo test --workspace                  # all suites (1091 tests)
 ```
 
-16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1067 tests green** · zero warnings.
+16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1091 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
@@ -135,6 +135,53 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-08-16 — ADR-0029 §8 e §9: a contabilidade de cada nó chega ao operador, e o custo do fan-out passa a ser um número
+
+**Done.** `por_alvo()` existia desde o passo 2 e **não tinha consumidor** — a forma exacta do TD-014: contador com ADR a exigir reporte e nenhum caminho até fora do processo. O elo fecha: `OutputManager::por_alvo()` → `Snapshot.outputs` (`run.rs`) → `outputs_json` no arm `Cmd::Status` (`server.rs`) → fio → `/api/state` → contrato TypeScript.
+
+**O IPC v1 não foi tocado, e isso é a decisão.** É um campo numa resposta que já existia, não um comando novo — a política do ADR-0027 §6. E o console não ganhou uma linha: verifiquei em vez de assumir que `/api/state` é literalmente `daemon(cfg, "status", "")`, a linha do daemon repassada **verbatim**. O `ledctl status` imprime a linha crua, portanto também já o mostra; só o `--help`, que enumerava os campos, estava a mentir por omissão.
+
+**`Snapshot.outputs` guarda tuplos, não uma struct — de propósito.** Uma struct aqui seria uma segunda representação da forma que `por_alvo()` já devolve, e o dia em que divergisse do produtor seria invisível. Os nomes `addr`/`frames`/`errors` nascem **uma só vez**, em `outputs_json`, na fronteira do fio.
+
+**Lista vazia é ausência de saída, nunca zeros fabricados.** É a irmã da alternativa D que o §8 rejeita (o total somado): inventar uma entrada com `frames: 0` para um nó que não existe confundiria "não há saída" com "a saída não enviou nada".
+
+**Falsificado 3×, e a segunda é a que ensina.** (A) Repetir o **agregado** em cada nó → reprova nomeando o defeito: somado, os três nós diriam `(2, 1)` e o nó morto desaparecia. (C) O produtor renomeia `frames` → o gate **novo** reprova. (B) O laço nunca chama `por_alvo()` → **não foi apanhada por nada**. Nenhum teste do repositório cobria essa linha: o `estado_por_alvo.rs` constrói o `Snapshot` à mão, e os dois ficheiros que correm `run_with_control` correm **sem saída**. O campo podia existir, tipado e vazio para sempre — a forma mais silenciosa de um produtor não ter consumidor, que é literalmente o defeito que esta fatia veio corrigir. Nasceu `o_laco_publica_a_contabilidade_de_cada_no`, e agora a mutação reprova.
+
+**Três alvos nos testes, e o número não é decorativo.** Com **um** alvo, "por nó" e "agregado" são indistinguíveis — foi assim que duas mutações do passo 1 (`all`→`any` e "sondar só o primeiro") não apanharam nada. O nó do meio falha (`255.255.255.255:1`, onde o `connect` passa e o `send` devolve EACCES) e os outros dois não.
+
+**O gate de contrato apanhou o campo de topo sozinho**, sem eu escrever nada — o caminho B a extrair os campos do arm `Cmd::Status`. Mas os nomes **de dentro** de cada entrada ficavam sem guarda nenhuma: ali `outputs` é um campo só. Nasceu `os_campos_de_cada_saida_existem_no_contrato`, que extrai as chaves do texto-fonte de `outputs_json`.
+
+**E o `tsc` voltou a apanhar o que o `vitest` não apanha.** Acrescentar um campo obrigatório a `EstadoDoDaemon` reprovou 4 fixtures (2 em `verifica.ts`, 2 em `App.render.test.tsx`) enquanto os **40 testes do vitest passavam** — o esbuild remove tipos sem os verificar. O `verifica.ts` ganhou 3 asserções invertidas: um nó **sem `addr`** não compila (é o defeito de atribuição que o §8 existe para impedir), `addr` numérico não compila, e a lista é `readonly` — um `push` seria a UI a inventar um nó que o backend não reportou.
+
+**Um achado por caminho: a repartição derivada recusou o meu primeiro teste, e recusou certo.** Com 16 px e dois endereços, `repartir` viu que tudo cabia num nó de 1500 e recusou deixar o segundo com zero píxeis. Não era defeito — era a regra do §2 a funcionar. O show passou a 3000 px, que é o que exige dois nós.
+
+**Erro meu, apanhado por verificar em vez de presumir.** A execução da falsificação B expirou aos 2 min com `outputs: Vec::new()` **ainda no ficheiro** — o restauro estava depois do `cargo test` e nunca correu. É a mesma classe do `git stash` que expirou com a stash aplicada: o restauro tem de ser **confirmado**, nunca assumido.
+
+**§9 — o custo do fan-out deixou de ser opinião.** `tests/custo_do_fanout.rs` mede o caminho real com 1 e 5 alvos, com e sem calibração. A afirmação do ADR foi **verificada antes de construir**: nenhum dos cinco gates de `no_alloc` do repositório cobre o `OutputManager`, e o do `led-hal` não vale porque o caminho DDP **contorna o `Hal`** (decisão de 2026-07-09d).
+
+**7500 px, não 6200 — e o número é a decisão.** Com o tamanho do rig real (6200 px) a repartição derivada dá 1500 aos quatro primeiros nós e **200 ao quinto**: a comparação mediria *fatias diferentes* em vez de *número de alvos*. Com 7500 os cinco levam exactamente 1500, que é o que o alvo único leva, e a única variável passa a ser quantos são.
+
+| configuração | aloc/frame | ns/frame (debug, mínimo de 5 rondas) |
+|---|---|---|
+| 1 alvo, sem calibração | **0** | ~149 000 |
+| 1 alvo, γ 2.2 | 1 | ~197 000 |
+| 5 alvos, sem calibração | 5 | ~754 000 |
+| 5 alvos, γ 2.2 | 6 | ~1 065 000 |
+
+**O caminho rápido é livre de alocação, e agora está fixado por teste** — um alvo com offset 0 entrega o frame ao driver sem fatiar nem clonar. É a única configuração do daemon que hoje cumpre a regra do hot-path do `CLAUDE.md`, e valia a pena descobri-lo em vez de o supor.
+
+**O gate mais valioso não estava no enunciado: a calibração é aplicada UMA vez, antes do fan-out.** O delta de alocações que ela custa é **1 com um alvo e 1 com cinco**. Se alguém a mover para dentro do laço por nó, o segundo delta passa a 5 e o teste reprova — é a primeira asserção executável do ADR-0019 Emenda 1, que até aqui só existia como prosa.
+
+**O "~5×" do ADR é ultrapassado, e não é defeito.** Medido: **5.05×** sem calibração e **5.41×** com. A causa é estrutural — o alvo único usa o caminho rápido, portanto o denominador é mais barato que um quinto do numerador. Duas execuções seguidas deram (5.20 / 4.40) e (5.05 / 5.41): o tempo **é** ruidoso, e um limite colado aos 5× teria reprovado na segunda por carga da máquina, que é o erro do TD-006. Daí a divisão: **gate exacto** nas alocações (a propriedade é exacta e não tem ruído) e **gate generoso** no tempo (8×, com a mutação quadrática a dar **22.88×** — folga real dos dois lados).
+
+**Veredito: não optimizar.** 5 alvos com calibração custam ~1,07 ms/frame **em debug**, contra um tick de 25 ms a 40 Hz — ~4% do orçamento, e o release é substancialmente menor. É a mesma conclusão do TD-011 e do TD-012: mediu-se, e a medição mandou não mexer. O ADR-0012 continua adiado, agora **com o número na mão**.
+
+**Falsificado 3× no §9**, cada mutação apanhada pela asserção que lhe corresponde: uma alocação extra por alvo → o gate do caminho rápido reprova; a calibração a correr por nó → `left: 5.0, right: 1.0`; envio O(n²) → 22.88× contra o limite de 8×.
+
+**Invariants verified.** **1091 testes** (+5), exit 0 lido **sem pipe** (KB-013), 0 FAILED. Clippy `--workspace --all-targets --all-features -D warnings` exit 0. `./scripts/tsc_gate.sh` exit 0 nos três passos. O `.ts` versionado mudou **só por regeneração**, e o diff é **puramente aditivo** (21 inserções, 0 remoções). As **13 marcações congeladas inalteradas** — é essa a prova de que o dado chegou ao contrato sem mudar um pixel do ecrã. `led-daemon`, `led-core`, `led-protocols` e o IPC v1 **intocados**.
+
+**Pending.** **A UI não mostra `outputs`** — é barato em código, mas obriga a reescrever à mão a marcação congelada de dois cenários (regenerar com `-u` aprovaria o que quer que acontecesse), e misturá-lo aqui juntaria duas preocupações no mesmo diff. É a fatia seguinte, nomeada e não implícita. **Limite nomeado:** a resposta do `status` partilha o tecto de 64 KiB do IPC v1 (`MAX_BODY == MAX_LINE`), o que dá ~700 nós antes de o console a recusar; o rig tem cinco. Nada validado com nós físicos: o §9 mede o que **sai** do daemon, nunca que cinco nós acendem sincronizados — o runbook do GS4.5 continua a ser quem fecha essa distinção. E os números do §9 são de **debug**, nesta máquina; release não foi medido.
 
 ### 2026-08-14c — ADR-0029 passo 1: a saída passa a poder exprimir N nós (e a falsificação encontrou um teste em falta)
 
