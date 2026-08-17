@@ -1,145 +1,106 @@
-//! C0.3 — sonda de portabilidade da indução de "nó morto".
+//! C0.3b — validar a premissa da técnica escolhida: `127.0.0.1:1` como nó morto.
 //!
 //! **Branch descartável. Não faz parte do produto.**
 //!
-//! A pergunta, exactamente: existe um alvo UDP para o qual
+//! O C0.3 encontrou o mecanismo portátil: porta local fechada → ICMP port-unreachable → o
+//! `send` seguinte falha. Ubuntu e macOS, sem privilégios, sem rota, sem multicast.
 //!
-//!     bind("0.0.0.0:0")  →  connect(alvo)   PASSA
-//!                        →  send(payload)   FALHA
+//! Esta versão responde às perguntas que faltam para escrever o teste **correctamente**:
 //!
-//! de forma determinística, sem privilégios e sem depender de rota multicast, **nos dois
-//! sistemas**? É esse par que os testes do ADR-0029 §5 precisam para matar um nó e deixar
-//! os outros vivos.
+//!   1. A porta 1 está mesmo sem ouvinte nos runners? Se algum dia tiver um serviço, a
+//!      premissa cai — e o teste tem de reprovar a dizer isso, nunca passar em silêncio.
+//!   2. **Quantos envios** são precisos até o erro aparecer? Se for sempre 2, o laço é
+//!      trivial; se variar, o prazo tem de o cobrir.
+//!   3. **Quanto tempo** demora? É esse número que dimensiona o prazo — e escolhê-lo por
+//!      medição é o ponto todo, porque um prazo inventado é um `sleep` disfarçado.
 //!
-//! No macOS (medido localmente) existe exactamente UM: `255.255.255.255:1`, que falha no
-//! `send` com EACCES por o `SO_BROADCAST` não estar posto. Em Ubuntu esse mesmo alvo falha
-//! no **connect**, o que rebenta o `open()` e é a causa das 2 falhas da CI.
-//!
-//! O segundo `send` é feito **depois de uma pausa**: no Linux um socket UDP ligado devolve
-//! ECONNREFUSED no envio seguinte à chegada do ICMP port-unreachable. Sem a pausa esse
-//! mecanismo não teria tempo de se manifestar e seria registado como "não falha" — um
-//! falso negativo dentro da própria sonda.
+//! Nada aqui afirma um errno. O contrato é "o transporte falhou", e a própria sonda já
+//! mostrou o mesmo alvo a dar `PermissionDenied` numa máquina e `BrokenPipe` noutra.
 
 use std::net::UdpSocket;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-struct Resultado {
-    alvo: &'static str,
-    connect: String,
-    send1: String,
-    send2: String,
-    serve: bool,
-}
+const ALVO: &str = "127.0.0.1:1";
+const PRAZO: Duration = Duration::from_secs(2);
 
-fn sondar(alvo: &'static str, bytes: usize) -> Resultado {
-    let mut r = Resultado {
-        alvo,
-        connect: "—".into(),
-        send1: "—".into(),
-        send2: "—".into(),
-        serve: false,
-    };
-    let sock = match UdpSocket::bind("0.0.0.0:0") {
-        Ok(s) => s,
-        Err(e) => {
-            r.connect = format!("bind falhou: {:?}", e.kind());
-            return r;
+/// Envia em laço até o transporte acusar erro. Devolve `(envios, tempo)` ou `None` se o
+/// prazo esgotar — que é o caso em que a **premissa não se estabeleceu**.
+fn ate_falhar(alvo: &str) -> Option<(u32, Duration)> {
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect(alvo.parse::<std::net::SocketAddr>().ok()?).ok()?;
+    let payload = vec![7u8; 910];
+    let t0 = Instant::now();
+    let mut envios = 0u32;
+    while t0.elapsed() < PRAZO {
+        envios += 1;
+        if sock.send(&payload).is_err() {
+            return Some((envios, t0.elapsed()));
         }
-    };
-    let addr: std::net::SocketAddr = match alvo.parse() {
-        Ok(a) => a,
-        Err(_) => {
-            r.connect = "parse falhou".into();
-            return r;
-        }
-    };
-    match sock.connect(addr) {
-        Ok(()) => r.connect = "ok".into(),
-        Err(e) => {
-            r.connect = format!("FALHA {:?}", e.kind());
-            return r; // rebenta o open(): inútil para o nosso fim
-        }
+        // Sem `sleep`: cede a vez ao escalonador para o ICMP poder ser processado, e
+        // continua a perguntar. É espera CAUSAL — a condição é observada, não cronometrada.
+        std::thread::yield_now();
     }
-    let p = vec![7u8; bytes];
-    r.send1 = match sock.send(&p) {
-        Ok(_) => "ok".into(),
-        Err(e) => format!("FALHA {:?}", e.kind()),
-    };
-    // A pausa é o que dá ao ICMP tempo de voltar. Ver doc do módulo.
-    std::thread::sleep(Duration::from_millis(200));
-    r.send2 = match sock.send(&p) {
-        Ok(_) => "ok".into(),
-        Err(e) => format!("FALHA {:?}", e.kind()),
-    };
-    // Serve se o connect passou E algum send falhou.
-    r.serve = r.connect == "ok" && (r.send1.starts_with("FALHA") || r.send2.starts_with("FALHA"));
-    r
+    None
 }
 
 fn main() {
     println!("### PLATAFORMA: {}", std::env::consts::OS);
-    println!("### payload 910 B (o do rig real, ADR-0029)\n");
 
-    let candidatos: &[&'static str] = &[
-        "255.255.255.255:1",   // broadcast limitado — o que os testes usam hoje
-        "255.255.255.255:0",   // idem, porta 0
-        "240.0.0.1:1",         // classe E reservada
-        "192.0.2.1:1",         // TEST-NET-1
-        "198.51.100.1:1",      // TEST-NET-2
-        "203.0.113.1:1",       // TEST-NET-3
-        "127.0.0.1:1",         // porta local fechada → ICMP
-        "127.0.0.2:1",         // outra loopback, porta fechada
-        "127.255.255.255:1",   // broadcast dirigido da loopback
-        "10.255.255.255:1",    // broadcast dirigido privado
-        "192.168.255.255:1",   // idem
-        "169.254.1.1:1",       // link-local
-        "224.0.0.1:1",         // multicast all-hosts
-        "239.255.255.250:1",   // multicast administrativo
-        "0.0.0.0:1",           // `any` como destino
-        "1.2.3.4:1",           // encaminhável mas inalcançável
-        "127.0.0.1:0",         // porta 0
-        "[::1]:1",             // IPv6 a partir de socket AF_INET
-    ];
+    // ── 1 · A premissa: a porta está livre? ──────────────────────────────────
+    //
+    // Não se testa com `bind`: portas < 1024 exigem privilégios, portanto um `bind` falhado
+    // não distingue "ocupada" de "não autorizada". O que se mede é o COMPORTAMENTO de que a
+    // técnica depende — que é a única coisa que importa.
+    println!("\n### 1 · a premissa (porta 1 sem ouvinte) e o custo do laço");
 
-    println!("{:<22} {:<16} {:<18} {:<18} {}", "ALVO", "CONNECT", "SEND#1", "SEND#2 (+200ms)", "SERVE?");
-    println!("{}", "-".repeat(96));
-    let mut uteis = Vec::new();
-    for a in candidatos {
-        let r = sondar(a, 910);
-        println!(
-            "{:<22} {:<16} {:<18} {:<18} {}",
-            r.alvo,
-            r.connect,
-            r.send1,
-            r.send2,
-            if r.serve { "*** SIM ***" } else { "nao" }
-        );
-        if r.serve {
-            uteis.push(r.alvo);
+    const TENTATIVAS: u32 = 30;
+    let mut envios_min = u32::MAX;
+    let mut envios_max = 0u32;
+    let mut tempo_max = Duration::ZERO;
+    let mut falhas_de_premissa = 0u32;
+
+    for _ in 0..TENTATIVAS {
+        match ate_falhar(ALVO) {
+            Some((n, t)) => {
+                envios_min = envios_min.min(n);
+                envios_max = envios_max.max(n);
+                tempo_max = tempo_max.max(t);
+            }
+            None => falhas_de_premissa += 1,
         }
     }
 
-    println!("\n### CANDIDATOS QUE SERVEM NESTA PLATAFORMA: {}", uteis.len());
-    for u in &uteis {
-        println!("###   {u}");
-    }
-    if uteis.is_empty() {
-        println!("###   NENHUM — a inducao por socket nao e viavel aqui");
+    if falhas_de_premissa > 0 {
+        println!("###   PREMISSA FALHOU em {falhas_de_premissa}/{TENTATIVAS} — ha ouvinte em {ALVO}");
+        println!("###   ou o stack nao devolve o erro. A tecnica NAO e utilizavel aqui.");
+    } else {
+        println!("###   premissa OK em {TENTATIVAS}/{TENTATIVAS} tentativas");
+        println!("###   envios ate falhar: min={envios_min} max={envios_max}");
+        println!("###   tempo maximo ate falhar: {:?}", tempo_max);
     }
 
-    // Eixo do tamanho: portátil, mas NÃO selectivo por alvo (afecta todos os nós ao mesmo
-    // tempo). Medido para o registo ficar completo, não como candidato.
-    println!("\n### EIXO DO TAMANHO (nao selectivo — so para o registo)");
+    // ── 2 · Controlo negativo: um alvo VIVO nunca pode falhar ────────────────
+    //
+    // Sem isto, um laço que falhasse por qualquer razão (socket partido, prazo curto)
+    // seria indistinguivel de "o no morreu". O controlo prova que o laço distingue os dois.
+    println!("\n### 2 · controlo negativo (alvo vivo NAO pode falhar)");
     let rx = UdpSocket::bind("127.0.0.1:0").expect("rx");
-    let valido: &'static str = Box::leak(rx.local_addr().unwrap().to_string().into_boxed_str());
-    let mut maior_ok = 0usize;
-    for bytes in [910usize, 8_000, 9_216, 9_217, 16_000, 65_507, 65_508] {
-        let r = sondar(valido, bytes);
-        let estado = if r.send1 == "ok" { "passa" } else { &r.send1 };
-        if r.send1 == "ok" {
-            maior_ok = bytes;
-        }
-        println!("###   {bytes:>6} B -> {estado}");
+    let vivo = rx.local_addr().unwrap().to_string();
+    match ate_falhar(&vivo) {
+        Some((n, t)) => println!("###   ERRO GRAVE: um alvo vivo falhou ao {n}o envio ({t:?})"),
+        None => println!("###   correcto: alvo vivo nunca falhou dentro do prazo de {PRAZO:?}"),
     }
-    println!("###   maior que passou: {maior_ok} B");
+
+    // ── 3 · O erro concreto, so para o REGISTO — nunca para asserção ─────────
+    println!("\n### 3 · que erro o SO devolve (REGISTO, nao contrato)");
+    let sock = UdpSocket::bind("0.0.0.0:0").unwrap();
+    sock.connect(ALVO.parse::<std::net::SocketAddr>().unwrap()).unwrap();
+    let p = vec![7u8; 910];
+    for i in 1..=3 {
+        match sock.send(&p) {
+            Ok(_) => println!("###   envio {i}: ok"),
+            Err(e) => println!("###   envio {i}: {:?} / {}", e.kind(), e),
+        }
+        std::thread::yield_now();
+    }
 }
