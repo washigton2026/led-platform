@@ -1,0 +1,32 @@
+# C0.3 — sonda de portabilidade da indução de "nó morto" (ADR-0029 §5).
+#
+# BRANCH DESCARTÁVEL. Este workflow existe para responder a UMA pergunta com evidência em
+# vez de hipótese: existe um alvo UDP em que o `connect` passa e o `send` falha, nos DOIS
+# sistemas? O macOS já foi medido localmente; falta o Ubuntu, e não há Linux na máquina de
+# desenvolvimento (sem docker/colima/podman/lima/qemu — reconfirmado).
+#
+# Corre em `probe/**`, que está FORA do `branches: [main, "baseline/**"]` do `ci.yml` — por
+# isso a suíte completa NÃO é disparada e o sinal fica limpo.
+#
+# O macOS é incluído como CONTROLO: se a tabela do runner divergir da medida localmente, é
+# a minha medição local que está em causa, e sabê-lo antes de decidir vale o minuto extra.
+name: probe-no-morto
+
+on:
+  push:
+    branches: ["probe/**"]
+
+jobs:
+  sonda:
+    name: sonda (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: compilar a sonda
+        run: rustc -O probe/src/main.rs -o sonda
+      - name: correr a sonda
+        run: ./sonda
