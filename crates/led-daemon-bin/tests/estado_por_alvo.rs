@@ -50,6 +50,37 @@ fn status_no_fio(cp: &Arc<ControlPlane>, nome: &str) -> String {
     linha.trim().to_string()
 }
 
+/// **O nó morto portátil** — ver a doc de `um_no_em_falha_…` em `output.rs`.
+///
+/// Duplicado aqui, e não extraído: este é um teste de **integração**, logo não alcança os
+/// ajudantes de `#[cfg(test)]` do `output.rs`. Extraí-lo obrigaria a pôr o laço na superfície
+/// pública do crate — infraestrutura de teste a vazar para produção, que é pior troca.
+const ALVO_MORTO: &str = "127.0.0.1:1";
+
+/// Envia até o alvo `indice` acusar erro; devolve quantos envios foram precisos.
+///
+/// Espera **causal**, nunca `sleep` (TD-003): o erro chega com o ICMP, e o número de envios
+/// até lá não é fixo — medido, 2 em Ubuntu e até 9 no runner macOS. Entra em pânico se a
+/// premissa não se estabelecer, porque um nó que não morre não pode virar um verde calado.
+fn enviar_ate_o_no_morrer(mgr: &OutputManager, pixels: &[PixelColor], indice: usize) -> u32 {
+    let prazo = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut enviados = 0u32;
+    while std::time::Instant::now() < prazo {
+        enviados += 1;
+        let _ = mgr.send(&LogicalFrame::new(pixels.to_vec(), 0));
+        if mgr.por_alvo()[indice].2 > 0 {
+            return enviados;
+        }
+        std::thread::yield_now();
+    }
+    panic!(
+        "a condição de nó morto NÃO foi estabelecida em {enviados} envios: {ALVO_MORTO} nunca \
+         acusou erro. Ou há um ouvinte nessa porta, ou o stack deixou de devolver o erro — nos \
+         dois casos este teste deixou de exercitar o ADR-0029 §5.\n  estado: {:?}",
+        mgr.por_alvo()
+    )
+}
+
 /// **A perda é atribuída ao nó certo, e sobrevive até ao fio.**
 #[test]
 fn o_status_distingue_o_no_morto_dos_que_acenderam() {
@@ -65,10 +96,9 @@ fn o_status_distingue_o_no_morto_dos_que_acenderam() {
             pixel_offset: 0,
             pixel_count: 8,
         },
-        // Porta 1 num endereço de broadcast: o `connect` passa e o `send` devolve EACCES.
-        // É a mesma técnica que o `output.rs` já usa para produzir uma falha real de nó.
+        // O nó morto: porta local sem ouvinte. Ver [`ALVO_MORTO`].
         Alvo {
-            addr: "255.255.255.255:1".parse().unwrap(),
+            addr: ALVO_MORTO.parse().unwrap(),
             first_universe: 1,
             pixel_offset: 8,
             pixel_count: 8,
@@ -81,11 +111,12 @@ fn o_status_distingue_o_no_morto_dos_que_acenderam() {
         },
     ];
 
-    let mgr = OutputManager::open(cfg).expect(
-        "a abertura tem de passar: o connect a um destino de broadcast nao falha, so o send. \
-         Se falhou, este teste deixou de exercitar o que afirma",
-    );
-    let _ = mgr.send(&LogicalFrame::new(vec![PixelColor { r: 9, g: 0, b: 0 }; 24], 0));
+    let mgr = OutputManager::open(cfg)
+        .expect("o `connect` a 127.0.0.1:1 passa em Ubuntu e macOS (medido, C0.3); se a \
+                 abertura falhou, este teste deixou de exercitar o que afirma");
+
+    let pixels = vec![PixelColor { r: 9, g: 0, b: 0 }; 24];
+    let enviados = enviar_ate_o_no_morrer(&mgr, &pixels, 1);
 
     let por_alvo = mgr.por_alvo();
     assert_eq!(por_alvo.len(), 3, "tres alvos, tres contabilidades: {por_alvo:?}");
@@ -102,29 +133,33 @@ fn o_status_distingue_o_no_morto_dos_que_acenderam() {
     };
     assert_eq!(saidas.len(), 3, "tres nos, tres entradas: {linha}");
 
-    // **A asserção que mata o agregado repetido.** Somado, daria (2, 1) nos três.
-    for (i, esperado) in [(0usize, (1u64, 0u64)), (1, (0, 1)), (2, (1, 0))] {
-        let e = &saidas[i];
-        let addr = e.get("addr").and_then(Json::as_str).unwrap_or("<sem addr>");
-        let frames = e.get("frames").and_then(Json::as_u64);
-        let errors = e.get("errors").and_then(Json::as_u64);
+    // Cada entrada nomeia o SEU endereço — sem nome, cinco robôs mandam procurar em cinco
+    // sítios, que é o que o §8 existe para impedir.
+    for i in 0..3 {
+        let addr = saidas[i].get("addr").and_then(Json::as_str).unwrap_or("<sem addr>");
+        assert_eq!(addr, por_alvo[i].0.to_string(), "a entrada {i} nomeia o no errado\n{linha}");
+    }
+
+    let campo = |i: usize, k: &str| saidas[i].get(k).and_then(Json::as_u64);
+
+    // **A asserção que mata o agregado repetido.** Se o relatório somasse, os três nós
+    // diriam o mesmo par — e o nó morto tornar-se-ia indistinguível dos vivos.
+    for i in [0usize, 2] {
         assert_eq!(
-            addr,
-            por_alvo[i].0.to_string(),
-            "a entrada {i} tem de nomear o SEU endereço — sem nome, cinco robôs mandam \
-             procurar em cinco sítios.\n{linha}"
-        );
-        assert_eq!(
-            (frames, errors),
-            (Some(esperado.0), Some(esperado.1)),
-            "no {i} ({addr}): esperava (frames, errors)={esperado:?}.\
-             \n  Se vierem (2, 1) nos três, o relatório está a repetir o AGREGADO por nó — \
-             que é exactamente o que o §8 existe para impedir.\
-             \n  Se o do meio contou um frame, este SO nao recusou o broadcast e o teste \
-             deixou de exercitar a falha: troque o alvo, nao a asserção.\
-             \n  no fio: {linha}"
+            (campo(i, "frames"), campo(i, "errors")),
+            (Some(u64::from(enviados)), Some(0)),
+            "o no vivo {i} tinha de contar os {enviados} envios sem um unico erro.\
+             \n  Se os tres nos disserem o mesmo par, o relatorio esta a repetir o AGREGADO \
+             — exactamente o que o §8 proibe.\n  no fio: {linha}"
         );
     }
+    let (frames_morto, erros_morto) = (campo(1, "frames"), campo(1, "errors"));
+    assert!(
+        erros_morto.is_some_and(|e| e > 0)
+            && frames_morto.is_some_and(|f| f < u64::from(enviados)),
+        "o no morto tinha de acusar erro E perder envios no fio; veio \
+         (frames={frames_morto:?}, errors={erros_morto:?}) em {enviados} envios.\n  {linha}"
+    );
 }
 
 /// **Sem saída, a lista é vazia — nunca zeros fabricados.**

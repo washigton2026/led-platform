@@ -136,6 +136,39 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-17 — C0: a indução de "nó morto" não era portátil, e a técnica nova foi MEDIDA nas duas plataformas antes de ser escrita
+
+**Nenhum código de produção mudou.** Só os dois testes que a CI reprovou.
+
+**O defeito, que a CI encontrou porque foi a primeira vez que a viu.** `4ca88e2` reprovou no Ubuntu com dois testes a abortar em `OutputManager::open` com `EACCES`. A técnica para matar um nó era `255.255.255.255:1` — **no macOS o `connect` passa e só o `send` falha; no Linux é o `connect` que falha**, o que rebenta a abertura e nunca chega a exercitar o ADR-0029 §5. Foi construída e validada só em macOS.
+
+**Os dois testes falharam na mensagem escrita para apanhar isto** — *"Se falhou, este teste deixou de exercitar o que afirma"*. É o inverso de um falso-verde: sem essa guarda o `open` teria falhado e o teste passaria vacuamente no Linux, deixando o §5 sem cobertura numa plataforma inteira sem ninguém saber.
+
+**A investigação foi read-only e mediu 18 candidatos, nas duas plataformas.** Branch descartável `probe/no-morto-portatil`, fora do padrão `baseline/**` do `ci.yml` — por isso a suíte completa não foi disparada e o sinal ficou limpo. **`baseline/f2-f71` nunca saiu de `4ca88e2`.**
+
+| candidato | Ubuntu | macOS |
+|---|---|---|
+| **`127.0.0.1:1`** | **serve** | **serve** |
+| `255.255.255.255:1` (o antigo) | falha no `connect` | serve |
+| `169.254.1.1` · `224.0.0.1` · `239.255.255.250` | não serve | serve — mas dependem de rota |
+| `127.0.0.2:1` · `127.0.0.1:0` | serve | não serve |
+
+**A intersecção tem dois elementos, e escolheu-se `127.0.0.1:1`** — porta local sem ouvinte: o primeiro envio passa, o ICMP port-unreachable volta, o seguinte falha. Sem privilégios, sem rota, sem broadcast nem multicast, e o nome diz a intenção.
+
+**A sonda local, sub-instrumentada, teria dado a resposta errada.** A primeira versão não tinha pausa entre os dois envios e registava `127.0.0.1:1` como *"não falha"* — o ICMP não tinha tempo de voltar. Com essa tabela a conclusão seria *"não existe mecanismo portátil"*, e daí seguir-se-ia o redesenho do transporte injectado, incomparavelmente mais caro. **Um artefacto da medição quase decidiu a arquitectura.**
+
+**O macOS entrou na matriz da CI como controlo, e apanhou duas divergências contra a minha máquina.** O `255.255.255.255:1` dá `PermissionDenied` aqui e `BrokenPipe` no runner — mesma fase, errno diferente. E endereços sem rota **falham** nesta máquina (WiFi) e **passam** nos runners. Nenhum teste pode afirmar o errno, e nenhuma medição de rede feita só aqui vale para a CI.
+
+**O número de envios até o erro NÃO é fixo, e é isso que obriga ao laço.** Medido: **exactamente 2 no Ubuntu, até 9 no runner macOS**, ≤ 76 µs em ambos. Um teste que assumisse *"falha no segundo envio"* — a leitura óbvia da primeira tabela — seria estável no Linux e instável no macOS. E o erro é **consumido**: o terceiro envio volta a passar.
+
+Por isso a espera é **causal, nunca cronometrada** (TD-003): envia-se até o nó acusar erro, com prazo de 5 s — quatro ordens de grandeza acima do máximo medido, para um runner lento atrasar o teste em vez de o partir.
+
+**A premissa tem guarda própria, e ela sabe reprovar.** Se algum dia houver um serviço na porta 1, o nó deixa de morrer — e isso não pode virar um verde calado. **Falsificado apontando o nó "morto" a um socket vivo:** os dois testes reprovam com *"a condição de nó morto NÃO foi estabelecida em 18535 envios"*.
+
+**E a primeira tentativa de falsificação foi inválida, por minha causa.** Mutei o alvo para `1.2.3.4:1` a contar que nunca falhasse — mas **nesta máquina** endereços sem rota devolvem `NetworkUnreachable`, ao contrário dos runners. A mutação media a rede local, não a guarda. Refeita com um socket vivo, que é independente de plataforma. É a mesma lição do dia, agora dentro da própria falsificação.
+
+**Pending.** A branch `probe/no-morto-portatil` fica até a correcção estar verde na CI; a evidência pode precisar de ser reproduzida. O eixo do tamanho ficou medido e **rejeitado** como técnica: é portátil acima de 65507 B (máximo do UDP sobre IPv4) mas **não é selectivo por alvo** — faria os cinco nós falharem juntos, e o §5 exige um morto com os outros vivos.
+
 ### 2026-08-16 — ADR-0029 §8 e §9: a contabilidade de cada nó chega ao operador, e o custo do fan-out passa a ser um número
 
 **Done.** `por_alvo()` existia desde o passo 2 e **não tinha consumidor** — a forma exacta do TD-014: contador com ADR a exigir reporte e nenhum caminho até fora do processo. O elo fecha: `OutputManager::por_alvo()` → `Snapshot.outputs` (`run.rs`) → `outputs_json` no arm `Cmd::Status` (`server.rs`) → fio → `/api/state` → contrato TypeScript.

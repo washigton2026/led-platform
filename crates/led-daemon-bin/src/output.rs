@@ -898,6 +898,53 @@ impl led_core::ProtocolOutput for OutputManager {
 mod tests {
     use super::*;
 
+    /// **O nó morto portátil.** Uma porta local sem ouvinte: o primeiro envio passa, o ICMP
+    /// port-unreachable volta, e o envio seguinte falha.
+    ///
+    /// Medido nas duas plataformas (C0.3, `probe/no-morto-portatil`): premissa válida em
+    /// **30/30** tentativas em Ubuntu e macOS, erro em ≤ 76 µs, e um alvo **vivo** nunca
+    /// falha dentro do prazo. Foi a única técnica encontrada que serve nos dois sistemas sem
+    /// privilégios, sem rota e sem broadcast/multicast.
+    pub(super) const ALVO_MORTO: &str = "127.0.0.1:1";
+
+    /// Envia até o alvo `indice` acusar erro, e devolve **quantos envios** foram precisos.
+    ///
+    /// ## Porque é um laço e não um `sleep`
+    ///
+    /// O erro chega quando o ICMP volta, e o número de envios até lá **não é fixo**: medido,
+    /// é exactamente 2 em Ubuntu e até **9** no runner macOS. Um teste que assumisse "falha
+    /// no segundo envio" seria estável no Linux e instável no macOS — o pior tipo de falha,
+    /// porque só aparece na CI. E um `sleep` fixo seria a violação do TD-003: esperar uma
+    /// quantidade arbitrária de tempo em vez de observar a condição.
+    ///
+    /// **Entra em pânico se a premissa não se estabelecer.** Se alguém puser um serviço na
+    /// porta 1 do runner, o nó deixa de morrer — e isso não pode virar um verde silencioso.
+    pub(super) fn enviar_ate_o_no_morrer(
+        mgr: &OutputManager,
+        pixels: &[led_core::PixelColor],
+        indice: usize,
+    ) -> u32 {
+        // Quatro ordens de grandeza acima do máximo medido (76 µs). Generoso de propósito:
+        // um runner lento atrasa o teste, nunca o parte.
+        let prazo = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut enviados = 0u32;
+        while std::time::Instant::now() < prazo {
+            enviados += 1;
+            let _ = mgr.send(&LogicalFrame::new(pixels.to_vec(), 0));
+            if mgr.por_alvo()[indice].2 > 0 {
+                return enviados;
+            }
+            std::thread::yield_now();
+        }
+        panic!(
+            "a condição de nó morto NÃO foi estabelecida em {enviados} envios: o alvo {indice} \
+             ({ALVO_MORTO}) nunca acusou erro.\n  Ou há um ouvinte nessa porta, ou o stack \
+             deixou de devolver o erro — nos dois casos este teste deixou de exercitar o \
+             ADR-0029 §5, e passar seria pior que reprovar.\n  estado: {:?}",
+            mgr.por_alvo()
+        )
+    }
+
     /// Atalho dos testes: preset → configuração resolvida. **Passa pelo mesmo caminho da
     /// produção** — se `resolve` deixar de consultar o profile, estes testes vêem.
     fn cfg_de(preset: &str, addr: &str, px: usize) -> OutputConfig {
@@ -1116,8 +1163,16 @@ mod tests {
 
     /// **Um nó morto não apaga os outros, e não desaparece da contabilidade** (ADR-0029 §5).
     ///
-    /// O alvo do meio aponta para uma porta onde ninguém escuta **e** para um endereço que
-    /// o SO recusa, para que o `send` falhe de facto. Os outros têm de acender na mesma.
+    /// ## Como se mata um nó de forma portátil
+    ///
+    /// O alvo do meio é [`ALVO_MORTO`]: uma porta local sem ouvinte. O primeiro envio passa,
+    /// o ICMP port-unreachable volta, e o envio seguinte falha. Foi **medido nas duas
+    /// plataformas** (C0.3, Ubuntu + macOS): premissa válida em 30/30 tentativas, erro em
+    /// ≤ 76 µs, e um alvo **vivo** nunca falha — o controlo negativo que separa "o nó morreu"
+    /// de "o laço partiu-se por outra razão".
+    ///
+    /// A versão anterior usava `255.255.255.255:1`, que só funciona em macOS: em Linux é o
+    /// **`connect`** que falha, o que rebenta o `open()` e nunca chega a exercitar o §5.
     #[test]
     fn um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida() {
         use std::net::UdpSocket;
@@ -1135,9 +1190,9 @@ mod tests {
                 pixel_offset: 0,
                 pixel_count: 8,
             },
-            // Porta 0 num endereço de broadcast: o `connect`/`send` falha localmente.
+            // O nó morto. Ver [`ALVO_MORTO`] e a doc deste teste.
             Alvo {
-                addr: "255.255.255.255:1".parse().unwrap(),
+                addr: ALVO_MORTO.parse().unwrap(),
                 first_universe: 1,
                 pixel_offset: 8,
                 pixel_count: 8,
@@ -1150,39 +1205,46 @@ mod tests {
             },
         ];
 
-        // O `connect` a um endereço de broadcast **passa**; é o `send` que devolve EACCES.
-        // Portanto a abertura tem de ter sucesso, e um erro aqui é um cenário diferente do
-        // que este teste descreve — nunca um motivo para passar em silêncio.
-        let mgr = OutputManager::open(cfg).expect(
-            "a abertura tem de passar: o connect a um destino de broadcast nao falha, \
-             so o send é que falha. Se falhou, este teste deixou de exercitar o que afirma",
-        );
-        let pixels = vec![led_core::PixelColor { r: 9, g: 0, b: 0 }; 24];
-        let _ = mgr.send(&LogicalFrame::new(pixels, 0));
+        // O `connect` a `127.0.0.1:1` passa nos dois sistemas (medido, C0.3); é o `send`
+        // seguinte que falha. Um erro aqui é um cenário diferente do que este teste descreve
+        // — nunca um motivo para passar em silêncio.
+        let mgr = OutputManager::open(cfg)
+            .expect("o `connect` a 127.0.0.1:1 passa em Ubuntu e macOS; se a abertura falhou, \
+                     este teste deixou de exercitar o que afirma");
 
+        let pixels = vec![led_core::PixelColor { r: 9, g: 0, b: 0 }; 24];
+        let enviados = enviar_ate_o_no_morrer(&mgr, &pixels, 1);
+        let por_alvo = mgr.por_alvo();
+
+        assert_eq!(por_alvo.len(), 3, "tres alvos, tres contabilidades: {por_alvo:?}");
+
+        // **Os vivos acendem, e é isso que separa "um nó falhou" de "a saída falhou".**
         let mut buf = [0u8; 2048];
         assert!(vivo1.recv_from(&mut buf).is_ok(), "o no 1 tem de acender apesar do no 2");
         assert!(vivo2.recv_from(&mut buf).is_ok(), "o no 3 tem de acender apesar do no 2");
 
         // **A perda é atribuída, e é isso que este teste existe para provar.**
         //
-        // A versão anterior somava tudo e afirmava `frames + erros == 3` — o que é verdade
+        // Uma versão anterior somava tudo e afirmava `frames + erros == 3` — verdade
         // **sempre**, porque cada alvo incrementa exactamente um dos dois contadores. Passava
         // idêntica se o nó do meio tivesse enviado com sucesso: um gate que não distingue os
         // dois mundos não prova nenhum (KB-012).
-        let por_alvo = mgr.por_alvo();
-        assert_eq!(por_alvo.len(), 3, "tres alvos, tres contabilidades: {por_alvo:?}");
-        for (i, esperado) in [(0usize, (1u64, 0u64)), (1, (0, 1)), (2, (1, 0))] {
+        for i in [0usize, 2] {
             let (addr, frames, erros) = por_alvo[i];
             assert_eq!(
                 (frames, erros),
-                esperado,
-                "alvo {i} ({addr}): esperava (frames, erros)={esperado:?}, veio ({frames}, {erros}).\
-                 \n  Se o alvo do meio contou um FRAME, este SO nao recusou o broadcast e o teste\
-                 \n  deixou de exercitar a falha — troque o alvo, nao a asserção.\
-                 \n  completo: {por_alvo:?}"
+                (u64::from(enviados), 0u64),
+                "o no vivo {i} ({addr}) tinha de contar os {enviados} envios sem um unico erro, \
+                 veio ({frames}, {erros}).\n  completo: {por_alvo:?}"
             );
         }
+        let (addr_morto, frames_morto, erros_morto) = por_alvo[1];
+        assert!(
+            erros_morto > 0 && frames_morto < u64::from(enviados),
+            "o no morto ({addr_morto}) tinha de acusar pelo menos um erro E perder pelo menos \
+             um envio; veio (frames={frames_morto}, erros={erros_morto}) em {enviados} envios.\
+             \n  completo: {por_alvo:?}"
+        );
     }
 
     fn preset_de(proto: &str) -> &'static str {
