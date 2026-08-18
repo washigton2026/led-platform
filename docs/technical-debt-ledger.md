@@ -716,3 +716,72 @@ required_fix: |
      com os dois a zero.
 review_by: "fatia do ADR-0029 (saida multi-controlador)"
 ```
+
+## TD-017 — Daemon e player divergem na politica do universo fora da faixa de 15 bits
+
+```yaml
+td_id:     TD-017
+title:     "O daemon RECUSA um universo fora da faixa; o led-player AVISA e prossegue, e o pacote sai mascarado"
+severity:  Medium
+status:    open
+origin:    "Revisao A1 (porta de saida multi-controlador), 2026-08-17"
+context: |
+  Provado por leitura de codigo, nao presumido:
+
+  1. led-protocols/src/artnet.rs, `build_art_dmx` — o Net e escrito com
+     `buf[15] = ((universe >> 8) & 0x7F)`. O `& 0x7F` deita fora o bit 15, portanto
+     qualquer universo acima de 32767 e MASCARADO em silencio: 40000 (0x9C40) sai como
+     0x1C40 = 7232. Nao ha erro, nao ha aviso no fio, e o pacote e valido.
+
+  2. led-daemon-bin/src/output.rs:376 — a fronteira do ADR-0029 §7 RECUSA:
+     "universo {u} fora da faixa do {proto} ({min}..={max})". O daemon esta protegido.
+
+  3. led-player/src/main.rs:395 — o outro binario que fala Art-Net apenas AVISA
+     ("likely a typo") e PROSSEGUE. O comentario acima declara a intencao:
+     "Warn loudly; do not block (some rigs legitimately use high universes)".
+
+  A divergencia e o problema, nao cada uma das metades. O argumento que o ADR-0029 §7
+  usa para recusar — a bancada de 2026-07-23 mostrou que o universo errado DESLOCA A
+  FITA sem erro nenhum — aplica-se ao player exactamente como ao daemon. E o player e
+  o binario que fez a primeira luz e o burn-in, ou seja e o que esteve mais perto de
+  hardware real.
+
+  O ADR-0029 §7.1 ja nomeia a correccao NA ORIGEM (o mascaramento em `build_art_dmx`)
+  como fatia propria. O que NAO estava nomeado em lado nenhum, e e o que esta entrada
+  regista, e que os dois binarios aplicam politicas diferentes ao mesmo perigo fisico.
+  Divergencias entre binarios apodrecem em silencio: ninguem as ve porque cada metade,
+  lida sozinha, parece deliberada.
+
+  Nao corrigido nesta revisao de proposito: escolher entre "o player passa a recusar"
+  e "a origem passa a recusar e os dois herdam" e decisao de arquitectura, nao edicao.
+review_by: "antes de qualquer uso do led-player contra o rig fisico (GS4.5)"
+```
+
+## TD-018 — A sintaxe obrigatoria do universo nao esta no `--help` do daemon
+
+```yaml
+td_id:     TD-018
+title:     "O ADR-0029 §7 tornou `IP@UNIVERSO` obrigatorio em Art-Net/sACN, e o --help nao o menciona"
+severity:  Low
+status:    open
+origin:    "Revisao A1 (porta de saida multi-controlador), 2026-08-17"
+context: |
+  Medido, nao presumido: `led-daemon --help` tem ZERO ocorrencias de `@`, e a unica
+  linha com a palavra "universo" descreve o que vem do profile, nao a especificacao do
+  endereco. Mas `OutputConfig` EXIGE o universo nos protocolos que o usam — sem ele o
+  palco nao abre.
+
+  Consequencia: o operador que leia a ajuda antes de correr nao descobre a sintaxe. So
+  a aprende falhando. Isto e a superficie de descoberta desactualizada face ao codigo,
+  e o `--help` e literalmente o unico sitio onde um operador escreve flags (foi esse o
+  argumento que abriu o TD-015).
+
+  Muito mitigado, e por isso Low: a mensagem de recusa e explicita e ensina a sintaxe —
+  "o preset `{modelo}` usa {proto} e exige o universo — escreva `{endereco}@N`. Nao ha
+  omissao: a bancada de 2026-07-23 mostrou que o universo errado desloca a fita sem
+  erro nenhum". Quem falha uma vez fica a saber, e a saber PORQUE.
+
+  Nao corrigido aqui porque a revisao A1 e read-only sobre produccao; e uma linha de
+  texto no `--help`, e cabe na fatia que fechar o TD-017.
+review_by: "fatia do TD-017"
+```

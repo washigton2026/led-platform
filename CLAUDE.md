@@ -136,6 +136,24 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-17b — Revisão A1: a porta fecha como capacidade de software, com a fronteira escrita e duas dívidas nomeadas
+
+**Nenhum código alterado.** Revisão read-only da porta A1 (saída multi-controlador), feita contra o repositório em `efc258b` com `A+B` verde na CI.
+
+**As nove secções do ADR-0029 têm implementação e teste discriminante.** §2 repartição derivada (5 testes, recusa 4 configurações impossíveis) · §5 isolamento por nó (agora provado nas **duas** plataformas) · §6 pré-voo com N alvos (13 testes, incl. rig misto e controlo negativo) · §7 universo na especificação (11 testes, recusa em vez de adivinhar) · §8 estado por alvo até ao contrato TS · §9 custo medido nas três plataformas. A CLI aceita `--output` repetido e o `--help` explica que a ordem decide a fatia.
+
+**O §9 fechou o §3 por medição, e isso não estava previsto.** O ADR-0029 §3 afirmava que a `Calibration` não obriga a emendar o ADR-0019 porque é aplicada uma vez, antes do fan-out. Era um argumento; passou a ser um número — o benchmark mede **1 alocação e não 5** com cinco alvos, e há uma asserção que reprova se alguém a mover para dentro do laço por nó.
+
+**Achado A1-1 → TD-018.** A sintaxe `IP@UNIVERSO`, que o §7 tornou **obrigatória** em Art-Net e sACN, tem **zero** ocorrências no `--help`. O operador que leia a ajuda antes de correr não a descobre; só a aprende falhando. Muito mitigado pela mensagem de recusa, que ensina a sintaxe **e a razão** — daí `Low`, não `Medium`.
+
+**Achado A1-2 → TD-017, e é o que interessa.** O daemon **recusa** um universo fora da faixa de 15 bits; o `led-player` **avisa e prossegue** (`main.rs:395`), e o `build_art_dmx` mascara em silêncio (`(universe >> 8) & 0x7F` — 40000 sai 7232). O ADR-0029 §7.1 já nomeia a correcção na origem, mas **a divergência entre os dois binários não estava nomeada em lado nenhum**. O argumento que o §7 usa para recusar — a bancada de 2026-07-23 mostrou que o universo errado desloca a fita sem erro — aplica-se ao player exactamente como ao daemon, e o player é o binário que fez a primeira luz e o burn-in.
+
+Divergências entre binários apodrecem em silêncio, porque cada metade lida sozinha parece deliberada. Escolher entre *"o player passa a recusar"* e *"a origem recusa e os dois herdam"* é arquitectura, não edição — por isso fica registada e não corrigida.
+
+**A fronteira do que A1 fecha, escrita para não ser arredondada.** Entrega **capacidade de software** multi-controlador, provada em três plataformas com bytes lidos de sockets reais. **Não** entrega certificação física — o §9 mede o que *sai* do daemon, nunca que cinco controladores recebem, reconhecem e reproduzem. **Não** entrega visibilidade no ecrã: os `outputs` estão no `/api/state` e não na UI. **Não** entrega o E2E com dois `--output`, que é o C.
+
+**Invariants verified.** `scripts/audit_gate.py` exit 0 — **16 OK** (+2), 0 Critical, 0 Warning. Zero linhas de produção ou de teste tocadas.
+
 ### 2026-08-17 — C0: a indução de "nó morto" não era portátil, e a técnica nova foi MEDIDA nas duas plataformas antes de ser escrita
 
 **Nenhum código de produção mudou.** Só os dois testes que a CI reprovou.
