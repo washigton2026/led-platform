@@ -95,6 +95,29 @@ const CASOS: ReadonlyArray<readonly [keyof typeof ESPERADO, JSX.Element]> = [
       }}
     />,
   ],
+  // **O caso discriminante do ADR-0029 §8.** Os dois cenários acima usam `outputs: []` e só
+  // exercitam o ramo "none" — sem este, a renderização POR NÓ ficaria sem guarda nenhuma,
+  // que é o falso-verde clássico: o ecrã podia somar os nós e ninguém reparava.
+  //
+  // Um nó vivo e um morto, de propósito: se alguém agregar, os dois passam a mostrar o
+  // mesmo par e esta marcação muda.
+  [
+    "DAEMON_COM_NOS",
+    <Daemon
+      estado={{
+        ...ENVELOPE,
+        state: "playing",
+        position_ms: 1000,
+        duration_ms: 8000,
+        ticks: 40,
+        show_id: 7,
+        outputs: [
+          { addr: "192.168.2.156:4048", frames: 40, errors: 0 },
+          { addr: "192.168.2.157:4048", frames: 12, errors: 28 },
+        ],
+      }}
+    />,
+  ],
   ["INDISPONIVEL", <Indisponivel code="console.daemon_offline" detail="/tmp/x.sock" />],
   // A gestao do show. O caminho e ESCRITO — nenhuma rota lista shows, e uma lista
   // fabricada seria o ADR-0028 D3 outra vez.

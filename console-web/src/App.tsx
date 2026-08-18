@@ -370,6 +370,24 @@ export function Daemon({ estado }: { estado: EstadoDoDaemon }) {
         <Campo rotulo="Ticks" valor={String(estado.ticks)} />
         {/* `null` significa SEM SHOW — e é isso que se escreve, não `0`. */}
         <Campo rotulo="Show" valor={estado.show_id === null ? "none" : String(estado.show_id)} />
+        {/*
+          A contabilidade POR NÓ (ADR-0029 §8). Um total somado tornaria um nó morto
+          indistinguível de um vivo — é a alternativa que o ADR rejeita, e seria a
+          interface a desfazer o que o backend fez questão de separar.
+
+          Lista vazia significa SEM SAÍDA, e escreve-se isso. "Sem saída" e "cinco nós
+          parados" são factos diferentes, e o ecrã não os pode colapsar num zero.
+
+          E não há juízo: escreve-se `sent` e `failed`, que é o que o backend mede.
+          Chamar-lhe `healthy` seria inventar evidência (ADR-0028 D3).
+        */}
+        {estado.outputs.length === 0 ? (
+          <Campo rotulo="Outputs" valor="none" />
+        ) : (
+          estado.outputs.map((s) => (
+            <Campo key={s.addr} rotulo={s.addr} valor={`${s.frames} sent · ${s.errors} failed`} />
+          ))
+        )}
       </dl>
     </Seccao>
   );

@@ -26,7 +26,12 @@ const USAGE: &str = "\
 lumyx-hwcheck — medição de hardware do GS4.5
 
 USO:
-    lumyx-hwcheck <IP> --profile <PRESET> [OPÇÕES]
+    lumyx-hwcheck <IP>... --profile <PRESET> [OPÇÕES]
+
+    <IP> é REPETÍVEL: um por nó, com a mesma sintaxe do `--output` do daemon
+    (`IP[@UNIVERSO]`). Cada alvo é medido e reportado SEPARADAMENTE — os
+    vereditos nunca são somados, senão um nó morto ficaria indistinguível de
+    um nó vivo.
 
 OPÇÕES:
     --profile PRESET   Preset do HardwareProfile (obrigatório)
@@ -37,9 +42,12 @@ OPÇÕES:
     -h, --help
 
 CÓDIGOS DE SAÍDA:
-    0  tudo medido e aprovado
-    1  alguma etapa MEDIDA reprovou
+    0  tudo medido e aprovado, em TODOS os alvos
+    1  alguma etapa MEDIDA reprovou, em qualquer alvo
     2  alguma etapa NÃO foi medida — nenhuma conclusão sobre o rig é possível
+
+    Com vários alvos a hierarquia é a mesma da etapa: reprovar vence não-medir,
+    que vence aprovar. Um nó reprovado reprova o rig.
 
 NOTA:
     Sem hardware na rede, o código de saída é 2 e nenhuma etapa diz PASS.
@@ -55,7 +63,8 @@ const WIFI_JITTER_HISTORICO_MS: f64 = 31.0;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut ip: Option<String> = None;
+    // **N alvos, por ordem.** O rig tem cinco; o instrumento tinha um (ADR-0029, achado D3).
+    let mut ips: Vec<String> = Vec::new();
     let (mut preset, mut pixels, mut out) = (None::<String>, None::<usize>, None::<String>);
     let (mut amostras, mut cabo) = (20u32, false);
 
@@ -84,15 +93,20 @@ fn main() {
                 eprintln!("erro: opção desconhecida {outro}\n\n{USAGE}");
                 std::process::exit(2);
             }
-            outro => ip = Some(outro.to_string()),
+            outro => ips.push(outro.to_string()),
         }
         i += 1;
     }
 
-    let (Some(ip), Some(preset)) = (ip, preset) else {
-        eprintln!("erro: faltam <IP> e/ou --profile\n\n{USAGE}");
+    let Some(preset) = preset else {
+        eprintln!("erro: falta --profile\n\n{USAGE}");
         std::process::exit(2);
     };
+    if ips.is_empty() {
+        // Zero alvos nao e "nada a medir": e um harness que nao correu (KB-012).
+        eprintln!("erro: e preciso pelo menos um <IP>\n\n{USAGE}");
+        std::process::exit(2);
+    }
     let perfil = match profile_by_name(&preset) {
         Ok(p) => p,
         Err(e) => {
@@ -101,154 +115,40 @@ fn main() {
         }
     };
     let px = pixels.unwrap_or(perfil.limits.max_pixels as usize);
-    // `IP[@UNIVERSO]` — a **mesma** sintaxe do `--output` (ADR-0029 §7). O harness tem de
-    // conseguir exprimir o universo, senão não pode medir Art-Net/sACN; e usar uma sintaxe
-    // própria daria ao operador duas maneiras de dizer a mesma coisa.
-    let (so_ip, universo) = match ip.rsplit_once('@') {
-        Some((i, u)) => (i.to_string(), Some(u.to_string())),
-        None => (ip.clone(), None),
-    };
-    let alvo_v4: Ipv4Addr = match so_ip.parse() {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("erro: `{so_ip}` não é um IPv4");
-            std::process::exit(2);
+    // **Um relatório por alvo, nunca agregados.** Cinco nós medidos e somados diriam
+    // "houve um problema" sem dizer em qual — que é exactamente o que o ADR-0029 §5 e §8
+    // existem para impedir. O perfil é UM para todo o rig (§3): cinco nós do mesmo preset
+    // partilham-no por construção.
+    let mut relatorios: Vec<Relatorio> = Vec::new();
+    for (n, ip) in ips.iter().enumerate() {
+        if ips.len() > 1 {
+            println!("\n====== alvo {}/{} - {ip} ======", n + 1, ips.len());
         }
-    };
-    // A especificação que o `OutputConfig` recebe. **Sem omissão**: se o preset usa universos
-    // e o operador não escreveu `@N`, o `resolve` recusa e diz porquê.
-    let spec = match &universo {
-        Some(u) => format!("{so_ip}@{u}"),
-        None => so_ip.clone(),
-    };
-
-    let mut r = Relatorio { alvo: ip.clone(), preset: preset.clone(), ..Default::default() };
-
-    // ── 1. Alcance, latência e jitter, por ArtPoll ────────────────────────────
-    //
-    // ArtPoll é o único **round-trip** que o LUMYX já fala: DDP e sACN são fire-and-forget e
-    // não podem medir latência por definição. E não precisa de root, ao contrário do ICMP.
-    let (lat, motivo) = medir_artpoll(alvo_v4, amostras);
-    match (lat.media(), lat.jitter()) {
-        (Some(m), Some(j)) => {
-            let p99 = lat.percentil(99.0).unwrap_or(m);
-            let d = format!(
-                "{}/{} respostas · media {m:.2} ms · p99 {p99:.2} ms · jitter {j:.2} ms \
-                 (WiFi 2026-07-20: {WIFI_JITTER_HISTORICO_MS} ms)",
-                lat.len(),
-                amostras
-            );
-            r.add(
-                "alcance+latencia",
-                "o no responde, e o caminho e estavel",
-                "todas as amostras respondem · jitter < 5 ms",
-                if lat.len() == amostras as usize && j < JITTER_MAX_MS {
-                    Veredito::Passa(d)
-                } else {
-                    Veredito::Reprova(d)
-                },
-            );
-        }
-        _ => r.add(
-            "alcance+latencia",
-            "o no responde, e o caminho e estavel",
-            "todas as amostras respondem · jitter < 5 ms",
-            Veredito::NaoMedido(motivo),
-        ),
+        let r = medir_alvo(ip, &perfil, &preset, px, amostras, cabo);
+        println!("{r}");
+        relatorios.push(r);
     }
 
-    // ── 2. Identidade do controlador, por HTTP ───────────────────────────────
-    let info = ler_json_info(alvo_v4);
-    match &info {
-        Ok(j) => r.add(
-            "controlador",
-            "saber com que firmware se esta a falar",
-            "responde /json/info com ver e freeheap",
-            Veredito::Passa(resumo_info(j)),
-        ),
-        Err(e) => r.add(
-            "controlador",
-            "saber com que firmware se esta a falar",
-            "responde /json/info com ver e freeheap",
-            Veredito::NaoMedido(e.clone()),
-        ),
-    }
-
-    // ── 3. Aceitação de cada protocolo ───────────────────────────────────────
-    //
-    // A evidência de aceitação é o `lm`/`live` do próprio WLED — mais forte que tcpdump
-    // (precedente de 2026-07-23). Enviar sem confirmar seria medir o `sendto`, não o rig.
-    for (proto, preset_do_proto) in
-        [("DDP", "Ddp"), ("Art-Net", "ArtNet"), ("sACN", "Sacn")]
-    {
-        let esperado = format!("{:?}", perfil.capabilities.protocol);
-        if esperado != preset_do_proto {
-            r.add(
-                nome_estatico(proto),
-                "o no aceita este protocolo",
-                "WLED reporta live:true e lm igual ao protocolo",
-                Veredito::NaoMedido(format!(
-                    "o preset `{preset}` declara {esperado}; para medir {proto} use o preset \
-                     correspondente (o protocolo vem do HardwareProfile, GS4.4)"
-                )),
-            );
-            continue;
-        }
-        let v = medir_aceitacao(&perfil, &spec, alvo_v4, px, proto);
-        r.add(
-            nome_estatico(proto),
-            "o no aceita este protocolo",
-            "WLED reporta live:true e lm igual ao protocolo",
-            v,
-        );
-    }
-
-    // ── 4. Gap de heartbeat, medido no relógio de parede ─────────────────────
-    //
-    // **Só conta se o controlador estiver confirmado.** UDP é fire-and-forget: o `sendto`
-    // para um IP inexistente tem sucesso local, e sem esta guarda o harness diria PASS
-    // contra um rig ausente — mediria a cadência do *remetente*, não a do palco. Foi
-    // exatamente isso que a primeira execução deste binário fez, e é a razão da guarda.
-    r.add(
-        "heartbeat",
-        "o palco nunca fica mais de 2400 ms sem frame",
-        "maior intervalo entre envios < 2400 ms, COM o controlador confirmado",
-        match &info {
-            Ok(_) => medir_heartbeat(&perfil, &spec, px),
-            Err(e) => {
-                let local = medir_heartbeat(&perfil, &spec, px);
-                Veredito::NaoMedido(format!(
-                    "cadencia local: {} — mas o controlador nao responde ({e}); \
-                     isto mede o remetente, NAO o palco",
-                    local.detalhe()
-                ))
-            }
-        },
-    );
-
-    // ── 5. Queda de cabo e recuperação (exige o operador) ────────────────────
-    r.add(
-        "queda+recovery",
-        "o sistema recupera de uma falha do meio fisico",
-        "o envio volta a ter sucesso, e o no NAO reinicia (uptime monotonico)",
-        if cabo {
-            medir_queda_de_cabo(&perfil, &spec, alvo_v4, px, info.as_ref().ok())
-        } else {
-            Veredito::NaoMedido(
-                "etapa interativa: correr com --cabo, com o operador presente".into(),
-            )
-        },
-    );
-
-    println!("{r}");
     if let Some(caminho) = &out {
-        match std::fs::write(caminho, r.markdown()) {
-            Ok(()) => println!("\nrelatorio: {caminho}"),
+        // Um relatorio por alvo, concatenados **sem fusao**: cada bloco continua a ser o
+        // relatorio completo daquele no, com o seu proprio veredito.
+        let md: String =
+            relatorios.iter().map(|r| r.markdown()).collect::<Vec<_>>().join("\n---\n\n");
+        match std::fs::write(caminho, md) {
+            Ok(()) => println!("\nrelatorio ({} alvo(s)): {caminho}", relatorios.len()),
             Err(e) => eprintln!("aviso: nao consegui escrever {caminho}: {e}"),
         }
     }
 
-    let saida = r.saida();
+    // **A hierarquia do rig e a mesma da etapa**: reprovar vence nao-medir, que vence
+    // aprovar. Um no reprovado reprova o rig; um no nao medido impede a conclusao.
+    let saida = if relatorios.iter().any(|r| r.saida() == Saida::Reprovou) {
+        Saida::Reprovou
+    } else if relatorios.iter().any(|r| r.saida() == Saida::Incompleto) {
+        Saida::Incompleto
+    } else {
+        Saida::TudoAprovado
+    };
     if saida == Saida::Incompleto {
         eprintln!(
             "\nINCOMPLETO: ha etapas NAO MEDIDAS. Isto nao diz nada sobre o rig — \
@@ -497,4 +397,160 @@ fn medir_queda_de_cabo(
         (Some(_), Some(_)) => Veredito::Passa(d),
         _ => Veredito::NaoMedido(format!("{d} — sem uptime nao sei se houve reset")),
     }
+}
+/// **Mede UM alvo.** Extraída de `main` sem alterar uma linha da medição: o multi-nó do
+/// ADR-0029 precisa de N vereditos, e agregá-los tornaria um nó morto indistinguível de um
+/// nó vivo — a mesma razão pela qual a decisão D do §8 recusa somar `frames_sent`.
+fn medir_alvo(
+    ip: &str,
+    perfil: &led_hardware_profile::HardwareProfile,
+    preset: &str,
+    px: usize,
+    amostras: u32,
+    cabo: bool,
+) -> Relatorio {
+    // `IP[@UNIVERSO]` — a **mesma** sintaxe do `--output` (ADR-0029 §7). O harness tem de
+    // conseguir exprimir o universo, senão não pode medir Art-Net/sACN; e usar uma sintaxe
+    // própria daria ao operador duas maneiras de dizer a mesma coisa.
+    let (so_ip, universo) = match ip.rsplit_once('@') {
+        Some((i, u)) => (i.to_string(), Some(u.to_string())),
+        None => (ip.to_string(), None),
+    };
+    let alvo_v4: Ipv4Addr = match so_ip.parse() {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("erro: `{so_ip}` não é um IPv4");
+            std::process::exit(2);
+        }
+    };
+    // A especificação que o `OutputConfig` recebe. **Sem omissão**: se o preset usa universos
+    // e o operador não escreveu `@N`, o `resolve` recusa e diz porquê.
+    let spec = match &universo {
+        Some(u) => format!("{so_ip}@{u}"),
+        None => so_ip.clone(),
+    };
+
+    let mut r = Relatorio {
+        alvo: ip.to_string(),
+        preset: preset.to_string(),
+        ..Default::default()
+    };
+
+    // ── 1. Alcance, latência e jitter, por ArtPoll ────────────────────────────
+    //
+    // ArtPoll é o único **round-trip** que o LUMYX já fala: DDP e sACN são fire-and-forget e
+    // não podem medir latência por definição. E não precisa de root, ao contrário do ICMP.
+    let (lat, motivo) = medir_artpoll(alvo_v4, amostras);
+    match (lat.media(), lat.jitter()) {
+        (Some(m), Some(j)) => {
+            let p99 = lat.percentil(99.0).unwrap_or(m);
+            let d = format!(
+                "{}/{} respostas · media {m:.2} ms · p99 {p99:.2} ms · jitter {j:.2} ms \
+                 (WiFi 2026-07-20: {WIFI_JITTER_HISTORICO_MS} ms)",
+                lat.len(),
+                amostras
+            );
+            r.add(
+                "alcance+latencia",
+                "o no responde, e o caminho e estavel",
+                "todas as amostras respondem · jitter < 5 ms",
+                if lat.len() == amostras as usize && j < JITTER_MAX_MS {
+                    Veredito::Passa(d)
+                } else {
+                    Veredito::Reprova(d)
+                },
+            );
+        }
+        _ => r.add(
+            "alcance+latencia",
+            "o no responde, e o caminho e estavel",
+            "todas as amostras respondem · jitter < 5 ms",
+            Veredito::NaoMedido(motivo),
+        ),
+    }
+
+    // ── 2. Identidade do controlador, por HTTP ───────────────────────────────
+    let info = ler_json_info(alvo_v4);
+    match &info {
+        Ok(j) => r.add(
+            "controlador",
+            "saber com que firmware se esta a falar",
+            "responde /json/info com ver e freeheap",
+            Veredito::Passa(resumo_info(j)),
+        ),
+        Err(e) => r.add(
+            "controlador",
+            "saber com que firmware se esta a falar",
+            "responde /json/info com ver e freeheap",
+            Veredito::NaoMedido(e.clone()),
+        ),
+    }
+
+    // ── 3. Aceitação de cada protocolo ───────────────────────────────────────
+    //
+    // A evidência de aceitação é o `lm`/`live` do próprio WLED — mais forte que tcpdump
+    // (precedente de 2026-07-23). Enviar sem confirmar seria medir o `sendto`, não o rig.
+    for (proto, preset_do_proto) in
+        [("DDP", "Ddp"), ("Art-Net", "ArtNet"), ("sACN", "Sacn")]
+    {
+        let esperado = format!("{:?}", perfil.capabilities.protocol);
+        if esperado != preset_do_proto {
+            r.add(
+                nome_estatico(proto),
+                "o no aceita este protocolo",
+                "WLED reporta live:true e lm igual ao protocolo",
+                Veredito::NaoMedido(format!(
+                    "o preset `{preset}` declara {esperado}; para medir {proto} use o preset \
+                     correspondente (o protocolo vem do HardwareProfile, GS4.4)"
+                )),
+            );
+            continue;
+        }
+        let v = medir_aceitacao(perfil, &spec, alvo_v4, px, proto);
+        r.add(
+            nome_estatico(proto),
+            "o no aceita este protocolo",
+            "WLED reporta live:true e lm igual ao protocolo",
+            v,
+        );
+    }
+
+    // ── 4. Gap de heartbeat, medido no relógio de parede ─────────────────────
+    //
+    // **Só conta se o controlador estiver confirmado.** UDP é fire-and-forget: o `sendto`
+    // para um IP inexistente tem sucesso local, e sem esta guarda o harness diria PASS
+    // contra um rig ausente — mediria a cadência do *remetente*, não a do palco. Foi
+    // exatamente isso que a primeira execução deste binário fez, e é a razão da guarda.
+    r.add(
+        "heartbeat",
+        "o palco nunca fica mais de 2400 ms sem frame",
+        "maior intervalo entre envios < 2400 ms, COM o controlador confirmado",
+        match &info {
+            Ok(_) => medir_heartbeat(perfil, &spec, px),
+            Err(e) => {
+                let local = medir_heartbeat(perfil, &spec, px);
+                Veredito::NaoMedido(format!(
+                    "cadencia local: {} — mas o controlador nao responde ({e}); \
+                     isto mede o remetente, NAO o palco",
+                    local.detalhe()
+                ))
+            }
+        },
+    );
+
+    // ── 5. Queda de cabo e recuperação (exige o operador) ────────────────────
+    r.add(
+        "queda+recovery",
+        "o sistema recupera de uma falha do meio fisico",
+        "o envio volta a ter sucesso, e o no NAO reinicia (uptime monotonico)",
+        if cabo {
+            medir_queda_de_cabo(perfil, &spec, alvo_v4, px, info.as_ref().ok())
+        } else {
+            Veredito::NaoMedido(
+                "etapa interativa: correr com --cabo, com o operador presente".into(),
+            )
+        },
+    );
+
+    r
 }

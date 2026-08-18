@@ -106,9 +106,23 @@ que o daemon (e não o `led-player`) acende um LED físico.
 **Procedimento.**
 ```sh
 ./target/release/led-daemon striptest.lumyx --assume-integrity \
+    --profile esp32-poe-wled-ddp \
     --output ddp://<IP> --tick-ms 25 --max-ticks 200
 ```
-Repetir com `--output artnet://<IP>` e `--output sacn://<IP>`.
+
+`--profile` é **obrigatório** sempre que há `--output` (GS4.4): protocolo, ordem de canais,
+universos, MTU e heartbeat vêm todos do preset. Sem ele o daemon sai com **exit 2** e manda
+usar `--list-profiles`.
+
+Repetir com os outros dois protocolos. **Art-Net e sACN exigem o universo na própria
+especificação** (`IP@N`, ADR-0029 §7); o DDP recusa-o, porque endereça por byte:
+```sh
+--profile esp32-devkit-wled-artnet --output artnet://<IP>@0
+--profile falcon-f16v3-sacn        --output sacn://<IP>@1
+```
+O mínimo difere por protocolo — o Art-Net define o universo 0, o E1.31 não. Escrever
+`artnet://<IP>` sem `@N` faz o daemon recusar com *"exige o universo"*, e a razão está na
+bancada de 2026-07-23: o universo errado **deslocou a fita sem erro nenhum**.
 
 **Critério de aceite.** Journal sem `output_error`; WLED com `live:true` e `lm:"DDP"` (ou
 `"Art-Net"`); e o **visual R→G→B→cometa confirmado a olho**. O `lm` do WLED é evidência de
@@ -152,7 +166,8 @@ comporta no vidro como se comporta no teste.
 
 **Procedimento.**
 ```sh
-./target/release/led-daemon --socket /tmp/lumyx.sock --output ddp://<IP> \
+./target/release/led-daemon --socket /tmp/lumyx.sock \
+    --profile esp32-poe-wled-ddp --output ddp://<IP> \
     --tick-ms 25 --keep-running &
 ./target/release/ledctl --socket /tmp/lumyx.sock load striptest.lumyx --assume-integrity
 ./target/release/ledctl --socket /tmp/lumyx.sock play
@@ -240,10 +255,85 @@ chega a `Finished` sozinho, com a fita acesa no último frame.
 
 ---
 
-## O que fica fora, mesmo com as nove etapas verdes
+## ETAPA 10 — Multi-nó: da unidade ao rig
 
-- **1 nó de 5.** 720 px de 6.200. Multi-controlador é outra fatia — e o `--output` do daemon
-  aceita **um** alvo.
+**Objetivo.** Provar que N nós recebem **cada um a sua fatia**, e que a perda de um não apaga
+os outros. As nove etapas anteriores validam **um** nó; esta é a única que fala do rig.
+
+**Pré-condição.** Etapas 1–9 verdes **no primeiro nó**. Um controlador validado não implica
+cinco: escalar é `1 → 2 → 5`, e cada aumento é observado.
+
+**Procedimento.** Medir cada nó **individualmente** primeiro — o `lumyx-hwcheck` aceita vários
+endereços e produz um veredito **por alvo**, sem os agregar:
+```sh
+./target/release/lumyx-hwcheck <IP1> <IP2> ... --profile esp32-poe-wled-ddp
+```
+Depois, o rig como sistema. A repartição é **derivada** do `max_pixels` do preset, e a **ordem**
+dos `--output` decide que fatia vai para cada nó:
+```sh
+./target/release/led-daemon robot_sequence.lumyx --assume-integrity \
+    --profile esp32-poe-wled-ddp \
+    --output <IP1> --output <IP2> --output <IP3> --output <IP4> --output <IP5> \
+    --tick-ms 25 --keep-running &
+./target/release/ledctl --socket /tmp/lumyx.sock status   # `outputs` traz a contagem POR NÓ
+```
+
+**Critério de aceite.** Cada nó acende **a sua parte** do show, não o mesmo conteúdo; o
+`status` traz uma entrada por nó, nomeada pelo endereço; e ao desligar o cabo de **um** nó os
+outros continuam acesos, com o erro atribuído só a ele.
+
+**O que esta etapa NÃO prova.** Sincronização visual entre nós — nenhuma medição de software o
+faz. Se os cinco robôs parecerem dessincronizados a olho, isso é observação humana e entra no
+relatório como tal.
+
+**Evidência esperada.** Um relatório do `lumyx-hwcheck` por nó + `status` com as N entradas +
+vídeo do rig com um nó desligado a meio.
+
+**Resultado.** ⏳ _nós medidos: ____ · fatias correctas: ____ · perda isolada: _____
+
+---
+
+## Operar pelo browser (console + Web Platform)
+
+O daemon é comandado por `ledctl` **ou** pelo browser. As duas superfícies falam o **mesmo**
+IPC v1 — o console é um tradutor de transporte, não um segundo cérebro.
+
+```sh
+# 1. daemon (como na ETAPA 6), com --socket
+./target/release/led-daemon --socket /tmp/lumyx.sock --profile <preset> --output <IP> \
+    --tick-ms 25 --keep-running &
+
+# 2. console: ponte HTTP↔IPC. Ambas as flags são OBRIGATÓRIAS — nenhum servidor
+#    deste projecto escolhe sozinho onde escuta.
+./target/release/led-console --bind 127.0.0.1:7878 --socket /tmp/lumyx.sock &
+
+# 3. a interface (dev server; o proxy do Vite mantém a mesma origem)
+cd console-web && npm ci && npm run dev
+```
+
+**O que o ecrã mostra:** estado do transporte, posição, duração, ticks, show carregado, o
+estado da ligação em **três camadas nomeadas** (`Console API`, `Browser stream`,
+`Daemon subscription`) e a contabilidade **por nó** da saída. Comandos: `play`/`pause`/`stop`/
+`seek` e `load`/`unload`.
+
+**O que o ecrã NÃO mostra, e é deliberado (ADR-0028 D3):** não há `healthy`, `degraded` nem
+`connected` — nada no backend os produz, e inventá-los seria a interface a afirmar evidência
+que ninguém mediu. `/api/profiles` responde **501**: a rota existe e o catálogo não atravessa
+a fronteira autorizada (ADR-0026 §9-quater). O preset escolhe-se na CLI do daemon, com
+`--list-profiles`.
+
+**Loopback-only.** O console recusa fazer bind fora de loopback enquanto o ADR-0014 não
+definir autenticação. Não o exponha na LAN.
+
+---
+
+## O que fica fora, mesmo com as dez etapas verdes
+
+- **1 nó de 5 nas etapas 1–9.** 720 px de 6.200. **O software já não é o
+  limite:** desde o ADR-0029 o `--output` é **repetível** e a repartição deriva do
+  `max_pixels` do preset (`--output <IP1> --output <IP2> …`, e a **ordem** decide que fatia
+  vai para cada nó). O que falta é **hardware** — cinco nós, switch e cabos — e a medição do
+  rig como sistema, que a ETAPA 10 descreve.
 - **Burn-in de 2 h não é 72 h.** O critério de certificação é 72 h.
 - **Show musical real** (`robot_sequence.lumyx`, 73 MB) — o `striptest` é síntese de bring-up.
 - **Chaos físico** além do cabo puxado uma vez.

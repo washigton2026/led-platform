@@ -136,6 +136,28 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-17d — D: a documentação e o instrumento apanham o ADR-0029, e o estado por nó chega ao ecrã
+
+**A inspecção D não encontrou nenhum BLOCKER estrutural.** Encontrou quatro coisas necessárias para 1.0, e todas da **mesma família**: a camada operacional não acompanhou o ADR-0029. Nenhuma é código de domínio.
+
+**D1 — o runbook do GS4.5 não corria.** Não é uma imprecisão de redacção: o comando principal da ETAPA 4 **sai com exit 2**, verificado por execução — `--profile` é obrigatório desde o GS4.4 e o runbook é de antes. E a linha que mandava repetir com `--output artnet://<IP>` produz `output_failed`, porque o ADR-0029 §7 passou a exigir o universo na especificação. Um operador com hardware na mão teria seguido um procedimento que não arranca. As três correcções foram provadas contra o binário, não deduzidas.
+
+**Também dizia que o multi-controlador não era possível** — *"o `--output` do daemon aceita **um** alvo"*. Falso desde o ADR-0029. Um operador que lesse aquilo nem tentava ligar cinco nós.
+
+**D2 — nenhum runbook conhecia o console.** Quatro runbooks, todos anteriores à Web Platform, zero menções ao `led-console`. A secção nova documenta o que **existe**: as três flags obrigatórias, o proxy do Vite, e — com igual peso — **o que o ecrã não mostra e porquê**: sem `healthy`/`degraded`/`connected` (ADR-0028 D3, nada no backend os produz), `/api/profiles` a 501, e loopback-only enquanto o ADR-0014 não der autenticação.
+
+**D3 — o instrumento do GS4.5 media um nó; o rig tem cinco.** `lumyx-hwcheck` passa a aceitar N endereços. A medição **não mudou uma linha**: foi extraída para `medir_alvo` e o `main` itera. Os vereditos **nunca são somados** — cada alvo tem o seu relatório completo, e a agregação do exit code usa a hierarquia que a etapa já usava: **reprovar vence não-medir, que vence aprovar**. Somar tornaria um nó morto indistinguível de um vivo, que é a decisão D do §8 outra vez, agora no instrumento.
+
+Verificado contra o rig offline, com dois alvos: `192.168.2.156` deu `Incompleto`, `192.168.2.157` deu `Reprovou`, e o rig deu **exit 1** — o pior venceu, sem fundir os nós. E nasceu a ETAPA 10 do runbook, a única que fala do rig em vez do nó, com a ressalva escrita de que **sincronização visual não é medível por software**.
+
+**D5 — `outputs` chega ao ecrã.** Oito dos nove campos do contrato eram renderizados; este era o que faltava. Usa só dado já contratado: sem métrica nova, sem ecrã novo. Lista vazia escreve-se `none`, porque *"sem saída"* e *"cinco nós parados"* são factos diferentes. E os rótulos são `sent`/`failed`, que é o que o backend mede — chamar-lhe `healthy` seria a interface a inventar evidência.
+
+**O congelamento da marcação apanhou um falso-verde meu.** Os dois cenários existentes usam `outputs: []`, portanto só exercitavam o ramo `none`: a renderização **por nó** ficaria sem guarda nenhuma, e o ecrã podia somar os nós sem ninguém reparar. Nasceu o `DAEMON_COM_NOS`, com um nó vivo e um morto — se alguém agregar, os dois passam a mostrar o mesmo par e a marcação muda.
+
+**Invariants verified.** `led-daemon`, `led-core` e IPC v1 **intocados**. Produção alterada **só** no `lumyx-hwcheck` e no `App.tsx` — os dois autorizados como D3 e D5.
+
+**Pending.** D4 (o daemon não expõe métricas — só o `led-player`), D6 (sem tratamento de sinais; o caminho limpo é o `ledctl shutdown`) e D7 (`/api/profiles` a 501) ficam como **dívida**, não tocados. E o `NOT_MEASURED` continua onde estava: nada disto foi validado com nós físicos, e a ETAPA 10 tem os campos de resultado vazios como as outras nove.
+
 ### 2026-08-17c — C: a falha parcial atravessa o laço, e a mutação provou que ninguém a cobria
 
 **Zero linhas de produção.** Um teste novo em `e2e_output.rs`.
