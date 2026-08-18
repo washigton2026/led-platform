@@ -136,6 +136,30 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-08-17c — C: a falha parcial atravessa o laço, e a mutação provou que ninguém a cobria
+
+**Zero linhas de produção.** Um teste novo em `e2e_output.rs`.
+
+**O buraco era invisível e foi medido, não intuído.** O `output.rs` prova o isolamento ao nível do `OutputManager`, e o `o_laco_publica_a_contabilidade_de_cada_no` prova que o laço lê `por_alvo()` — **mas com os dois nós vivos**. O caminho de **falha** através do laço não tinha teste nenhum: apagar `journal.line(… "output_error" …)` de `run.rs` deixava a suíte inteira do crate **verde**. Por consequência lógica a de-duplicação também não estava coberta — um teste que afirmasse *"aparece uma vez"* teria reprovado com o aviso ausente, e nada reprovou.
+
+**O pacer é o REAL, e essa é a decisão que faz o teste valer alguma coisa.** O nó morto é `127.0.0.1:1` e o erro só chega quando o ICMP volta — tempo de **relógio**. Com o `VPacer` os ticks executam em microssegundos e o laço acabaria o show inteiro antes de o ICMP chegar: o teste passaria **sem exercitar nada**. Com o pacer do sistema a 25 ms a margem é ~300× sobre os 76 µs medidos no C0. Não é um `sleep` — é a cadência real do daemon, que é o que está sob teste.
+
+**Seis propriedades, e a primeira é a premissa.** (1) O nó tem mesmo de morrer, senão o teste **diz** que não exercitou o §5 em vez de passar. (2) A perda é reportada **uma** vez. (3) O laço **não cai** — `ReachedEnd` e `Finished`, que é o coração do §5: um nó perdido não vira falha global. (4) O nó vivo continua a receber, **e com a sua fatia** (offset DDP). (5) A perda é **atribuída**, com o vivo a zero erros. (6) A verdade chega ao **fio**: `Cmd::Status` sobre UDS real, sobre o instantâneo que o laço realmente produziu.
+
+**A (6) existe por causa do §8.** O `estado_por_alvo.rs` prova `Snapshot → fio` mas com um `Snapshot` construído à mão; este prova `laço → Snapshot` com falha real. Compor os dois por argumento seria repetir o erro do §8 — lá, **cada metade parecia bem** e o elo do meio não existia.
+
+**Falsificado 4×.** (A) Sem o `journal.line` → reprova na premissa. (B) Sem a de-duplicação → **36 avisos em 39 ticks**, que é a medida de quanto o journal seria afogado. (C) Endereçamento do nó vivo apontado à fatia do vizinho → reprova com os offsets `[4500, 5961, 7422, 8883]`. (D) Fio a reportar o agregado → reprova a dizer que a falha de um contaminou o relatório do outro.
+
+**Uma falsificação minha falhou, e a lição vale mais que o teste.** Mutei `inicio` — o índice dos píxeis **copiados** — e a asserção não disparou; quase concluí que ela era fraca. Não era: **endereçamento e payload são propriedades diferentes**, de linhas diferentes. O offset no fio vem de `.with_pixel_offset(alvo.pixel_offset)` (`output.rs:708`); os píxeis copiados vêm de `inicio` (`output.rs:832`). Eu tinha atacado a coisa errada.
+
+**Consequência registada como NOT_MEASURED, não arredondada.** Este teste prova **endereçamento** correcto sob falha parcial. **Não** prova que o payload é a fatia certa, porque o helper `escrever` produz quadros **uniformes** e conteúdo idêntico não distingue nós. Essa propriedade tem cobertura própria — `cinco_nos_recebem_cada_um_a_sua_fatia_e_nao_todos_a_mesma`, no `output.rs` — mas **com todos os nós vivos**. Fica assim de propósito: não se estende o C só para apagar um `NOT_MEASURED`.
+
+**SSE fica fora deste C**, porque não está envolvido no caminho que o `Cmd::Status` exercita.
+
+**Invariants verified.** **1092 testes**, exit 0 lido **sem pipe**. Clippy `-D warnings` exit 0. `tsc_gate.sh` exit 0. Zero linhas de produção; `led-daemon`, `led-core` e IPC v1 intocados.
+
+**Pending.** O `outputs` continua **sem chegar ao ecrã**: 8 dos 9 campos do contrato são mostrados pelo `App.tsx`, e este é o que falta. Pelo critério de 1.0 — *"Web Platform representar corretamente os estados existentes"* — é **necessário para 1.0**, não dívida diferível. E nada aqui foi validado com nós físicos: prova-se que o **laço** sobrevive à perda de um alvo, nunca que cinco controladores reais acendem.
+
 ### 2026-08-17b — Revisão A1: a porta fecha como capacidade de software, com a fronteira escrita e duas dívidas nomeadas
 
 **Nenhum código alterado.** Revisão read-only da porta A1 (saída multi-controlador), feita contra o repositório em `efc258b` com `A+B` verde na CI.

@@ -8,7 +8,7 @@
 use led_core::PixelColor;
 use led_daemon::{ShowId, ShowRuntime, State};
 use led_daemon_bin::{
-    descriptor_from_path, run, Config, ExitReason, Integrity, Journal, Pacer,
+    descriptor_from_path, run, Config, ExitReason, Integrity, Journal, Pacer, SystemPacer,
 };
 use led_show_recorder::{ShowRecord, ShowWriter};
 use std::net::UdpSocket;
@@ -16,9 +16,17 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 #[cfg(unix)]
-use led_daemon_bin::{run::run_with_control, ControlPlane};
+use led_daemon_bin::{run::run_with_control, server::Server, ControlPlane};
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::sync::Arc;
+
+/// Cabeçalho DDP: 10 bytes, com o offset em `[4..8]` big-endian.
+#[cfg(unix)]
+const DDP_HEADER_LEN: usize = 10;
 
 /// Pacer virtual: o laço não dorme, e o teste não depende do relógio da máquina.
 struct VPacer {
@@ -257,4 +265,194 @@ fn o_laco_publica_a_contabilidade_de_cada_no() {
         );
         assert_eq!(erros, 0, "loopback nao pode ter erros: {:?}", snap.outputs);
     }
+}
+
+/// **C — um nó morre e o laço NÃO cai: a perda é reportada uma vez e atribuída** (ADR-0029 §5).
+///
+/// ## O que este teste cobre e nenhum outro cobria
+///
+/// O `output.rs` prova o isolamento ao nível do `OutputManager`, e o
+/// `o_laco_publica_a_contabilidade_de_cada_no` prova que o laço lê `por_alvo()` — mas **com os
+/// dois nós vivos**. O caminho de FALHA através do laço não tinha teste nenhum: provado por
+/// mutação, apagar `journal.line(… "output_error" …)` de `run.rs` deixava a suíte inteira do
+/// crate verde. Por consequência, a de-duplicação (`ja_avisou`) também não estava coberta —
+/// um teste que afirmasse "aparece uma vez" teria reprovado com o aviso ausente.
+///
+/// ## Porque o pacer é o REAL e não o virtual
+///
+/// O nó morto é `127.0.0.1:1`, e o erro só chega quando o ICMP port-unreachable volta — isso é
+/// tempo de **relógio**. Com o `VPacer` os ticks executam em microssegundos e o laço acabaria o
+/// show inteiro antes de o ICMP chegar: o teste passaria **sem exercitar nada**, que é o
+/// falso-verde que este ficheiro existe para impedir.
+///
+/// Com o pacer do sistema a 25 ms por tick a margem é ~300× sobre os 76 µs medidos no C0. Não
+/// é um `sleep`: é a cadência real do daemon, que é precisamente o que está sob teste.
+#[cfg(unix)]
+#[test]
+fn um_no_morto_nao_derruba_o_laco_e_a_perda_e_reportada_uma_vez() {
+    // O nó morto portátil — medido em Ubuntu e macOS no C0 (`probe/no-morto-portatil`).
+    // Terceira cópia da constante, e é deliberado: extraí-la poria infraestrutura de teste na
+    // superfície pública do crate, que é troca pior que três literais com o mesmo comentário.
+    const ALVO_MORTO: &str = "127.0.0.1:1";
+
+    // 3000 px porque a repartição é DERIVADA do `max_pixels` (1500): é o que exige dois nós.
+    // 40 quadros a 25 ms ≈ 1 s de show, tempo de sobra para o ICMP voltar.
+    let path = escrever("e2e_falha_parcial.lumyx", 40, 25, 3000);
+    let vivo = socket();
+    let enderecos = vec![vivo.local_addr().unwrap().to_string(), ALVO_MORTO.to_string()];
+
+    let desc = descriptor_from_path(&path, ShowId(1)).expect("carregar");
+    let mut c = cfg(None, Some(preset_de("ddp")));
+    c.output = enderecos.clone();
+
+    let mut rt = ShowRuntime::new();
+    let mut p = SystemPacer::new();
+    let mut buf = Vec::new();
+    let flag = Arc::new(AtomicBool::new(false));
+    let cp = ControlPlane::new(Arc::clone(&flag));
+    let out = {
+        let mut j = Journal::new(&mut buf);
+        run_with_control(&mut rt, Some((path, desc)), &c, &mut p, &mut j, &flag, &cp)
+    };
+    let log = String::from_utf8(buf).expect("journal utf-8");
+    let snap = cp.snapshot.lock().expect("snapshot").clone();
+
+    // ── 1 · A premissa: o nó tem mesmo de morrer ─────────────────────────────
+    //
+    // Se ninguém morreu, este teste não exercitou o §5 — e passar seria pior que reprovar.
+    let avisos = log.matches(r#""notice":"output_error""#).count();
+    assert!(
+        avisos > 0,
+        "a condição de nó morto NÃO foi estabelecida: nenhum `output_error` no journal.\
+         \n  Ou há um ouvinte em {ALVO_MORTO}, ou o laço deixou de reportar a perda.\
+         \n  journal: {log}"
+    );
+
+    // ── 2 · Reportada UMA vez, não a 40 Hz ───────────────────────────────────
+    //
+    // Um erro de rede por tick encheria o journal e esconderia tudo o resto. É o `ja_avisou`
+    // do `tick_do_palco`, que até agora não tinha teste nenhum.
+    assert_eq!(
+        avisos, 1,
+        "a perda tem de ser registada UMA vez; vieram {avisos} avisos em {} ticks.\
+         \n  Um erro por tick afoga o journal e esconde tudo o resto.\n  journal: {log}",
+        out.ticks
+    );
+
+    // ── 3 · O laço NÃO caiu ──────────────────────────────────────────────────
+    //
+    // É o coração do §5: um nó perdido não pode virar falha global. O show tem de chegar ao fim.
+    assert_eq!(
+        out.reason,
+        ExitReason::ReachedEnd,
+        "um nó morto NÃO pode derrubar o laço — o show tinha de chegar ao fim, veio {:?} \
+         com {} ticks.\n  journal: {log}",
+        out.reason,
+        out.ticks
+    );
+    assert_eq!(out.final_state, State::Finished, "estado final: {:?}", out.final_state);
+
+    // ── 4 · O nó vivo continuou a acender, E COM A SUA FATIA ─────────────────
+    //
+    // Receber "alguma coisa" não chega: se o fan-out se enganasse e mandasse ao nó 0 a fatia
+    // do nó 1, este socket receberia bytes na mesma e a asserção passaria. O que distingue é
+    // o **offset** do cabeçalho DDP (bytes 4..8, big-endian), porque o helper `escrever`
+    // produz quadros UNIFORMES — o conteúdo dos píxeis é idêntico e não separa nada.
+    //
+    // O nó 0 cobre os píxeis 0..1500 ⇒ offset em bytes 0. O nó 1 começa em 1500 ⇒ 4500.
+    let mut offsets = Vec::new();
+    let mut b = [0u8; 4096];
+    while let Ok(n) = vivo.recv(&mut b) {
+        if n >= DDP_HEADER_LEN {
+            offsets.push(u32::from_be_bytes([b[4], b[5], b[6], b[7]]));
+        }
+    }
+    assert!(
+        !offsets.is_empty(),
+        "o nó vivo tem de ter recebido bytes apesar do vizinho morto"
+    );
+    assert!(
+        offsets.contains(&0),
+        "o nó vivo tem de receber o INÍCIO do show (offset 0) — é a sua fatia.\
+         \n  offsets vistos: {offsets:?}"
+    );
+    let fronteira = 1500u32 * 3; // onde começa a fatia do nó 1
+    assert!(
+        offsets.iter().all(|o| *o < fronteira),
+        "nenhum datagrama do nó vivo pode cair na fatia do nó 1 (offset ≥ {fronteira}).\
+         \n  Se cair, o fan-out atribuiu a fatia errada e o palco acenderia trocado.\
+         \n  offsets vistos: {offsets:?}"
+    );
+
+    // ── 5 · A perda é ATRIBUÍDA, e o vivo fica limpo ─────────────────────────
+    //
+    // É isto que separa "um nó falhou" de "o sistema falhou". Um agregado diria que houve
+    // erros e não diria de quem — e com cinco robôs isso manda procurar em cinco sítios.
+    assert_eq!(snap.outputs.len(), 2, "dois nós, duas contabilidades: {:?}", snap.outputs);
+    let (addr_vivo, frames_vivo, erros_vivo) = snap.outputs[0];
+    let (addr_morto, _frames_morto, erros_morto) = snap.outputs[1];
+    assert_eq!(&addr_vivo.to_string(), &enderecos[0], "a entrada 0 nomeia o nó vivo");
+    assert_eq!(&addr_morto.to_string(), ALVO_MORTO, "a entrada 1 nomeia o nó morto");
+    assert!(
+        frames_vivo > 0 && erros_vivo == 0,
+        "o nó VIVO tinha de enviar sem erros; veio (frames={frames_vivo}, erros={erros_vivo}).\
+         \n  Erros no nó vivo significam que a falha do vizinho contaminou este.\
+         \n  {:?}",
+        snap.outputs
+    );
+    assert!(
+        erros_morto > 0,
+        "o nó MORTO tinha de acusar erro; veio erros={erros_morto}. Se for 0, a perda \
+         desapareceu da contabilidade.\n  {:?}",
+        snap.outputs
+    );
+
+    // ── 6 · A verdade chega ao FIO, não fica no instantâneo em memória ───────
+    //
+    // O `estado_por_alvo.rs` prova `Snapshot → Cmd::Status → fio`, mas com um `Snapshot`
+    // construído à mão. Este teste prova `laço → Snapshot` com falha real. Compor os dois
+    // por argumento seria repetir o erro do §8: lá, **cada metade parecia bem** e o elo do
+    // meio não existia. Por isso o fio é interrogado aqui, sobre o instantâneo que o laço
+    // REALMENTE produziu.
+    let sock_path =
+        std::env::temp_dir().join(format!("lumyx-c-falha-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&sock_path);
+    let srv = Server::bind(&sock_path).expect("bind do socket de controlo");
+    srv.spawn(Arc::clone(&cp));
+
+    let s = UnixStream::connect(&sock_path).expect("ligar ao daemon");
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut w = s;
+    let mut linha = String::new();
+    writeln!(w, r#"{{"v":1,"id":1,"cmd":"hello","client":"teste-c"}}"#).unwrap();
+    w.flush().unwrap();
+    r.read_line(&mut linha).unwrap();
+    linha.clear();
+    writeln!(w, r#"{{"v":1,"id":2,"cmd":"status"}}"#).unwrap();
+    w.flush().unwrap();
+    r.read_line(&mut linha).unwrap();
+    let _ = std::fs::remove_file(&sock_path);
+
+    // O nó morto tem de aparecer no fio, nomeado e com erro. Um agregado — ou um estado
+    // global inventado — falharia aqui.
+    assert!(
+        linha.contains(&format!(r#""addr":"{ALVO_MORTO}""#)),
+        "o nó morto tem de ser NOMEADO no fio; sem nome, cinco robôs mandam procurar em \
+         cinco sítios.\n  no fio: {linha}"
+    );
+    assert!(
+        linha.contains(&format!(r#""addr":"{}""#, enderecos[0])),
+        "e o nó vivo também.\n  no fio: {linha}"
+    );
+    assert!(
+        linha.contains(r#""errors":0"#),
+        "o nó vivo tem de aparecer com `errors:0` no fio — se todos tiverem erro, a falha \
+         de um contaminou o relatório do outro.\n  no fio: {linha}"
+    );
+    // E o estado global continua a ser o real: nada de `Error` inventado por causa de um nó.
+    assert!(
+        linha.contains(r#""state":"finished""#),
+        "o estado global tem de continuar `finished` — um nó perdido NÃO pode virar falha \
+         global.\n  no fio: {linha}"
+    );
 }
