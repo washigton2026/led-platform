@@ -212,21 +212,83 @@ fn medir_artpoll(alvo: Ipv4Addr, n: u32) -> (Amostras, String) {
 }
 
 /// Lê `/json/info` do WLED por HTTP 1.0 — std puro, sem dependência nova.
+///
+/// # Porque não é um `read_to_string`
+///
+/// O WLED 16.0.1 responde `HTTP/1.0 200 OK` com o corpo completo e **deixa a ligação aberta**.
+/// Um `read_to_string`, que lê até EOF, fica preso até ao read timeout, recebe `WouldBlock`
+/// (`os error 35`) e — o que importa — **descarta o que já tinha lido**. O corpo chegava e era
+/// deitado fora, e todas as etapas que dependem desta leitura diziam `NAO MEDIDO` contra um nó
+/// vivo. Medido: 1225 bytes recebidos, resposta completa, e mesmo assim erro.
+///
+/// Por isso lemos por `Content-Length`: um timeout com a resposta **já completa** é fim de
+/// resposta, não falha. Um timeout com a resposta **incompleta** continua a ser falha — essa
+/// distinção é o ponto todo, senão voltávamos a não saber se o nó respondeu.
 fn ler_json_info(alvo: Ipv4Addr) -> Result<String, String> {
     let mut s = TcpStream::connect_timeout(
         &SocketAddr::from((alvo, 80)),
         Duration::from_millis(1_500),
     )
     .map_err(|e| format!("HTTP {alvo}:80 inacessivel: {e}"))?;
-    s.set_read_timeout(Some(Duration::from_millis(2_000))).ok();
+    s.set_read_timeout(Some(Duration::from_millis(500))).ok();
     s.write_all(format!("GET /json/info HTTP/1.0\r\nHost: {alvo}\r\n\r\n").as_bytes())
         .map_err(|e| format!("envio HTTP falhou: {e}"))?;
-    let mut corpo = String::new();
-    s.read_to_string(&mut corpo).map_err(|e| format!("leitura HTTP falhou: {e}"))?;
-    corpo
-        .split_once("\r\n\r\n")
-        .map(|(_, b)| b.to_string())
-        .ok_or_else(|| "resposta HTTP sem corpo".into())
+
+    let limite = Instant::now() + Duration::from_millis(2_000);
+    let mut bruto: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 2048];
+    let mut erro_leitura: Option<String> = None;
+    while Instant::now() < limite {
+        match s.read(&mut buf) {
+            Ok(0) => break, // EOF: o servidor fechou, temos tudo o que havia
+            Ok(n) => {
+                bruto.extend_from_slice(&buf[..n]);
+                if resposta_completa(&bruto) {
+                    break;
+                }
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                if resposta_completa(&bruto) {
+                    break;
+                }
+                erro_leitura = Some(format!("leitura HTTP falhou: {e}"));
+            }
+            Err(e) => return Err(format!("leitura HTTP falhou: {e}")),
+        }
+    }
+
+    let texto = String::from_utf8_lossy(&bruto).into_owned();
+    match texto.split_once("\r\n\r\n") {
+        Some((_, corpo)) if !corpo.is_empty() => Ok(corpo.to_string()),
+        // Sem corpo é indistinguível de não ter lido nada: reporta o erro que travou a leitura,
+        // se houve um, para não transformar um timeout numa resposta vazia legítima.
+        _ => Err(erro_leitura.unwrap_or_else(|| "resposta HTTP sem corpo".into())),
+    }
+}
+
+/// `true` quando o cabeçalho já terminou e o corpo tem o tamanho que o `Content-Length` anuncia.
+///
+/// Sem `Content-Length` não há como saber que a resposta acabou sem esperar pelo EOF, e nesse
+/// caso devolve `false` — deixamos o timeout decidir, que é o comportamento antigo.
+fn resposta_completa(bruto: &[u8]) -> bool {
+    let texto = String::from_utf8_lossy(bruto);
+    let Some((cab, corpo)) = texto.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let Some(len) = cab
+        .lines()
+        .find_map(|l| {
+            l.split_once(':')
+                .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        })
+        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+    else {
+        return false;
+    };
+    corpo.len() >= len
 }
 
 fn campo(json: &str, chave: &str) -> Option<String> {
