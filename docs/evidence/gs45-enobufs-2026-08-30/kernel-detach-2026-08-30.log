@@ -1,0 +1,11 @@
+2026-08-30 08:00:38.125 Df kernel[0:219] [com.apple.usb:all] AppleUSB20HubPort@14120000: AppleUSBHostPort::terminateDevice: destroying 0x1a86/7523/a233 (USB Serial): hardware connection lost
+2026-08-30 08:00:41.992 Df kernel[0:2010] (IOgPTPPlugin) Using IOSkywalkLegacyEthernet as no other controller was found for en7
+2026-08-30 08:00:42.283 Df kernel[0:171] [com.apple.usb:all] SSP2@00200000: AppleUSBHostPort::terminateDevice: destroying 0x0bda/8153/31fd (USB 10/100/1000 LAN): hardware connection lost
+2026-08-30 08:00:42.290 Df kernel[0:69ee] (IOgPTPPlugin) IOTimeSyncgPTPManager Interface "en7" terminated
+2026-08-30 08:00:42.290 Df kernel[0:69ee] (IOgPTPPlugin) IOTimeSyncgPTPManager interfaceTerminated dumped port manager for en7
+2026-08-30 08:00:42.290 Df kernel[0:69ee] (IOgPTPPlugin) IOTimeSyncgPTPManager interfaceTerminated dumped interface adapter for en7
+2026-08-30 08:00:42.290 Df kernel[0:69ee] (IOgPTPPlugin) IOTimeSyncgPTPManager interfaceTerminated dumped controller adapter for en7
+2026-08-30 08:00:42.290 Df kernel[0:111] ifnet_detach_final: Waiting for IO references on en7 interface to be released
+2026-08-30 08:00:42.292 Df kernel[0:111] ifnet_ioctl_async:7753 en7 Failed for ioctl 2149607730 as interface is not attached
+2026-08-30 08:00:42.292 Df kernel[0:111] ifnet_ioctl_async:7753 en7 Failed for ioctl 2149607730 as interface is not attached
+2026-08-30 08:00:42.292 Df kernel[0:111] ifnet_ioctl_async:7753 en7 Failed for ioctl 2149607730 as interface is not attached
