@@ -192,15 +192,28 @@ impl DdpOutput {
     /// # Porque isto foi preciso
     ///
     /// Num host com mais do que um endereço a alcançar o alvo, o wildcard entrega a escolha da
-    /// interface de saída à tabela de rotas. Medido na bancada de 2026-08-28, contra o
-    /// ESP32-POE em `192.168.2.162` a partir de um host dual-homed numa só sub-rede
-    /// (`en0` WiFi e `en7` Ethernet): a mesma carga, variando **só** o bind, deu
-    /// **ENOBUFS em surto com `0.0.0.0` (2 corridas em 2)** e **zero falhas com o endereço do
-    /// cabo (2 corridas em 2, 300 s cada)**. O `led-player` era o único caminho que não
-    /// conseguia exprimir a escolha, e por isso o burn-in não a podia testar.
+    /// interface de saída à tabela de rotas — e um profile que declara
+    /// `OutputInterface::Ethernet` não podia ser honrado, porque nada abaixo dele sabia
+    /// exprimir de que endereço enviar. O `led-player` era o único caminho sem essa expressão.
     ///
-    /// A correlação está estabelecida; a **cadeia causal não**. Este construtor existe para a
-    /// tornar mensurável, não para afirmar que a explica.
+    /// **A capacidade está provada em hardware** (2026-08-30, sobre `Mac → router → ESP32-POE`):
+    /// com `--bind 192.168.2.32` o receptor observou a origem `192.168.2.32` apesar de a rota
+    /// resolver `en7`/`192.168.2.163` — o endereço declarado vence a tabela de rotas, lido no
+    /// WLED e não na configuração do CLI.
+    ///
+    /// # O que este construtor NÃO é
+    ///
+    /// **Não é uma correcção para o `ENOBUFS`.** Uma versão anterior desta nota citava, da
+    /// bancada de 2026-08-28, «ENOBUFS com `0.0.0.0` e zero falhas com o endereço do cabo».
+    /// Essa leitura está **refutada** e fica registada por ter guiado o trabalho:
+    ///
+    /// - o burn-in abortou nas **7 corridas**, com e sem origem fixada;
+    /// - as «zero falhas em 300 s» eram uma janela na fronteira — o player falhou aos ~284 s;
+    /// - a causa está medida em [`docs/certification/ENOBUFS-CAUSA-2026-08-30.md`] e é o
+    ///   adaptador USB-Ethernet, por desanexo da interface ou por *flow advisory* do AQM.
+    ///   Ambos os mecanismos são **por interface e independentes do bind**.
+    ///
+    /// O bind decide por que cabo o show sai. Não decide se esse cabo aguenta.
     pub fn bound(
         addr: std::net::SocketAddr,
         pixel_count: usize,
