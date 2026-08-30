@@ -321,8 +321,24 @@ pub struct ArtNetDevice {
 
 impl ArtNetDevice {
     /// Unicast sender: every universe goes to `dest` (a controller's IP:6454).
+    ///
+    /// The socket takes the **wildcard** bind — the routing table picks the egress interface.
+    /// To choose it, use [`ArtNetDevice::unicast_bound`].
     pub fn unicast(id: DeviceId, dest: SocketAddr) -> std::io::Result<Arc<Self>> {
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+        Self::unicast_bound(id, dest, None)
+    }
+
+    /// Unicast sender bound to an **explicit local address**. [`ArtNetDevice::unicast`] is this
+    /// constructor with `None`, so this type opens a socket in one place.
+    ///
+    /// `bind` is where the datagrams leave from — instance data about **this host's** path to
+    /// **this node**, not a capability of the node (see [`crate::bind`]).
+    pub fn unicast_bound(
+        id: DeviceId,
+        dest: SocketAddr,
+        bind: Option<SocketAddr>,
+    ) -> std::io::Result<Arc<Self>> {
+        let socket = crate::bind::bind_sender(bind)?;
         Ok(Arc::new(Self {
             id,
             socket,

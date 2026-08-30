@@ -168,10 +168,7 @@ pub struct DdpOutput {
 
 impl DdpOutput {
     pub fn new(addr: std::net::SocketAddr, pixel_count: usize) -> std::io::Result<Self> {
-        Ok(Self {
-            dev: std::sync::Mutex::new(led_protocols::DdpDevice::new(addr, 0)?),
-            universes_equiv: pixel_count.div_ceil(170) as u16,
-        })
+        Self::bound(addr, pixel_count, led_core::ColorFormat::Rgb(RgbOrder::Rgb), None)
     }
 
     /// Saída DDP pixel-nativa com um [`ColorFormat`] explícito — é assim que um preset RGBW
@@ -182,8 +179,36 @@ impl DdpOutput {
         pixel_count: usize,
         format: led_core::ColorFormat,
     ) -> std::io::Result<Self> {
+        Self::bound(addr, pixel_count, format, None)
+    }
+
+    /// **O construtor completo** — [`DdpOutput::new`] e [`DdpOutput::with_format`] são os seus
+    /// atalhos com bind wildcard, para que exista um só sítio onde este tipo abre um socket.
+    ///
+    /// `bind` é o endereço **local** de onde os datagramas saem, e chega aqui como dado, pelo
+    /// [`led_protocols::DdpDevice::bound`]. `None` mantém o comportamento histórico
+    /// (`0.0.0.0:0` — a tabela de rotas escolhe).
+    ///
+    /// # Porque isto foi preciso
+    ///
+    /// Num host com mais do que um endereço a alcançar o alvo, o wildcard entrega a escolha da
+    /// interface de saída à tabela de rotas. Medido na bancada de 2026-08-28, contra o
+    /// ESP32-POE em `192.168.2.162` a partir de um host dual-homed numa só sub-rede
+    /// (`en0` WiFi e `en7` Ethernet): a mesma carga, variando **só** o bind, deu
+    /// **ENOBUFS em surto com `0.0.0.0` (2 corridas em 2)** e **zero falhas com o endereço do
+    /// cabo (2 corridas em 2, 300 s cada)**. O `led-player` era o único caminho que não
+    /// conseguia exprimir a escolha, e por isso o burn-in não a podia testar.
+    ///
+    /// A correlação está estabelecida; a **cadeia causal não**. Este construtor existe para a
+    /// tornar mensurável, não para afirmar que a explica.
+    pub fn bound(
+        addr: std::net::SocketAddr,
+        pixel_count: usize,
+        format: led_core::ColorFormat,
+        bind: Option<std::net::SocketAddr>,
+    ) -> std::io::Result<Self> {
         Ok(Self {
-            dev: std::sync::Mutex::new(led_protocols::DdpDevice::with_format(addr, 0, format)?),
+            dev: std::sync::Mutex::new(led_protocols::DdpDevice::bound(addr, 0, format, bind)?),
             universes_equiv: pixel_count.div_ceil(170) as u16,
         })
     }
@@ -375,6 +400,45 @@ mod tests {
             fragments += 1;
         }
         assert_eq!(fragments, 6, "3 frames × 2 fragments (600px @ 487/packet)");
+    }
+
+    /// **A origem declarada chega ao socket — e continua a enviar.**
+    ///
+    /// O discriminante é o **controlo negativo**, e é ele que dá valor ao teste: um endereço
+    /// que este host não tem obriga o construtor a **falhar**. Se alguém deixar cair o
+    /// parâmetro `bind` — a mutação óbvia, e a que reintroduziria o defeito — o socket volta ao
+    /// wildcard, o bind passa a ter sucesso, e esta metade fica vermelha. Sem ela, um teste que
+    /// só afirmasse *"com bind ainda envia"* passaria com o parâmetro completamente ignorado.
+    ///
+    /// Não se afirma aqui **por que interface** os datagramas saem: isso precisa de um host com
+    /// duas interfaces a alcançar o alvo, que nenhum runner tem. A prova de origem no fio vive
+    /// no `led-protocols`; aqui prova-se que o `led-player` **transporta a escolha** em vez de
+    /// a perder pelo caminho — que era exactamente o que faltava para o burn-in a poder testar.
+    #[test]
+    fn a_origem_declarada_e_honrada_e_um_endereco_inexistente_e_erro() {
+        use std::net::UdpSocket;
+
+        let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+        let alvo = rx.local_addr().unwrap();
+        let rgb = led_core::ColorFormat::Rgb(RgbOrder::Rgb);
+
+        // 203.0.113.0/24 é TEST-NET-3 (RFC 5737): nunca atribuído a uma interface real.
+        let inexistente: std::net::SocketAddr = "203.0.113.7:0".parse().unwrap();
+        assert!(
+            DdpOutput::bound(alvo, 60, rgb, Some(inexistente)).is_err(),
+            "um endereço que este host não tem tem de falhar — nunca cair no wildcard em silêncio"
+        );
+
+        // E com uma origem que existe, o caminho continua a entregar.
+        let out = DdpOutput::bound(alvo, 60, rgb, Some("127.0.0.1:0".parse().unwrap())).unwrap();
+        let report = play(&records(2, 60), &out, Speed::Max).unwrap();
+        assert_eq!(report.frames_played, 2);
+
+        let mut buf = [0u8; 2048];
+        let (n, origem) = rx.recv_from(&mut buf).expect("chegou datagrama");
+        assert!(led_protocols::parse_ddp_packet(&buf[..n]).is_some(), "DDP válido");
+        assert_eq!(origem.ip(), "127.0.0.1".parse::<std::net::IpAddr>().unwrap());
     }
 
     /// **TD-016 — o offset de cada nó chega ao fio, e nós diferentes escrevem offsets

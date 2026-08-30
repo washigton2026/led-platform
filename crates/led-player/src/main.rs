@@ -28,9 +28,15 @@ use led_show_recorder::ShowReader;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: led-player <show.lumyx> [--info] [--verify <hex-hash>] \
-         [--artnet <ip[:port]>] [--ddp <ip[:port]>] [--first-universe N] \
+         [--artnet <ip[:port]>] [--ddp <ip[:port]>] [--bind <ip[:port]>] \
+         [--first-universe N] \
          [--speed X|max] [--loop N] [--discover] [--require-all] \
-         [--profile <preset>] [--list-profiles]"
+         [--profile <preset>] [--list-profiles]\n\
+         \n\
+         --bind fixa o endereço LOCAL de onde os datagramas saem, e com ele a interface.\n\
+         Sem ele, a tabela de rotas escolhe — o que num host com mais de um endereço a\n\
+         alcançar o alvo significa que a rota, e não o operador, decide por que cabo o\n\
+         show sai. Hoje só o caminho --ddp o honra."
     );
     ExitCode::from(2)
 }
@@ -44,6 +50,8 @@ fn main() -> ExitCode {
     let mut verify_key: Option<[u8; 32]> = None;
     let mut artnet: Option<SocketAddr> = None;
     let mut ddp: Option<SocketAddr> = None;
+    // Endereço local declarado pelo operador. `None` = wildcard, o comportamento histórico.
+    let mut bind: Option<SocketAddr> = None;
     let mut first_universe: u16 = 1;
     let mut speed = Speed::Factor(1.0);
     let mut loops: Option<u64> = None; // Some(0) = infinite burn-in
@@ -100,6 +108,20 @@ fn main() -> ExitCode {
                     Some(sa) => ddp = Some(sa),
                     None => {
                         eprintln!("cannot resolve --ddp address '{addr}'");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "--bind" => {
+                i += 1;
+                let Some(addr) = args.get(i) else { return usage() };
+                // Porta omitida = `:0` = porta efémera. O que se está a fixar é a INTERFACE,
+                // e obrigar a escrever uma porta convidaria a fixar uma sem razão.
+                let full = if addr.contains(':') { addr.clone() } else { format!("{addr}:0") };
+                match full.to_socket_addrs().ok().and_then(|mut a| a.next()) {
+                    Some(sa) => bind = Some(sa),
+                    None => {
+                        eprintln!("cannot resolve --bind address '{addr}'");
                         return ExitCode::from(2);
                     }
                 }
@@ -350,15 +372,17 @@ fn main() -> ExitCode {
     };
     let output: Box<dyn led_core::ProtocolOutput> = if let Some(dest) = ddp {
         // Pixel-native DDP: 487 px/datagram, no universe mapping (WLED-friendly).
-        let built = match profile_color {
-            Some(fmt) => DdpOutput::with_format(dest, px, fmt),
-            None => DdpOutput::new(dest, px),
-        };
+        let fmt = profile_color.unwrap_or(led_core::ColorFormat::Rgb(led_core::RgbOrder::Rgb));
+        let built = DdpOutput::bound(dest, px, fmt, bind);
         match built {
             Ok(o) => {
                 match profile_color {
                     Some(fmt) => println!("output: DDP {dest} (pixel-native, {fmt:?})"),
                     None => println!("output: DDP {dest} (pixel-native)"),
+                }
+                match bind {
+                    Some(b) => println!("origem: {b} (interface fixada pelo operador)"),
+                    None => println!("origem: 0.0.0.0:0 (a tabela de rotas escolhe)"),
                 }
                 if !calibration.is_empty() {
                     eprintln!(
@@ -377,6 +401,14 @@ fn main() -> ExitCode {
     } else if let Some(dest) = artnet {
         // Real hardware: linear mapping, universes from --first-universe (WLED
         // rigs number from 1), 170 px per universe.
+        if bind.is_some() {
+            // Silêncio aqui seria a classe de defeito que este trabalho veio corrigir: uma
+            // escolha declarada pelo operador que ninguém honra, e nada no ecrã a dizê-lo.
+            eprintln!(
+                "⚠ --bind é IGNORADO no caminho --artnet: só o caminho DDP o honra hoje. \
+                 A interface de saída continua a ser escolhida pela tabela de rotas."
+            );
+        }
         let dev = match ArtNetDevice::unicast(0, dest) {
             Ok(d) => d,
             Err(e) => {

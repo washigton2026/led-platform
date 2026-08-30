@@ -8,6 +8,7 @@
 //!
 //! | Module | What it does |
 //! |---|---|
+//! | [`bind`] | Where a sender binds locally — the single place that defines the wildcard |
 //! | [`packet`] | E1.31 sACN byte layout — `build_data_packet`, wire accessors |
 //! | [`device`] | Synchronous `SacnDevice` ([`DeviceDriver`]) — unicast + multicast |
 //! | [`artnet`] | `ArtPoll`/`ArtPollReply` source-conflict detection |
@@ -27,6 +28,7 @@
 //! - Zero allocations on the send path (pre-sized buffers).
 
 pub mod artnet;
+pub mod bind;
 pub mod ddp;
 pub mod device;
 pub mod heartbeat;
@@ -42,6 +44,7 @@ pub use artnet::{
     // testável sobre sockets reais, em vez de por um mock do formato do fio.
     build_art_poll, build_art_poll_reply, parse_art_poll_reply, ART_POLL_LEN, ART_POLL_REPLY_LEN,
 };
+pub use bind::bind_sender;
 pub use ddp::{build_ddp_packet, build_ddp_packet_bytes, build_ddp_packet_format, max_pixels_per_packet, DDP_MAX_PAYLOAD_BYTES, parse_ddp_packet, DdpDevice, DdpPacket, DDP_MAX_PAYLOAD, DDP_MAX_PIXELS, DDP_PORT};
 pub use device::{multicast_addr, SacnDevice};
 pub use heartbeat::{health, HealthStatus, Heartbeat, HEARTBEAT_MS};
