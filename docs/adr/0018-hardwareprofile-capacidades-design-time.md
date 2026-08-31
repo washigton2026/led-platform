@@ -160,3 +160,24 @@ inexpressável por composição), **adicionar a capacidade faltante como campo**
 o modelo em enum de produtos. Reverter para enum plano exigiria revogar este ADR **e** o
 ADR-0011 e reintroduzir a combinatória; só se justificaria com evidência de que a composição é
 inexpressável, o que o `led-xlights` hoje contradiz.
+
+## Emenda 1 (2026-08-30) — `Capabilities` ganha `ports`, e a decisão 5 fica **intacta**
+
+**Estado:** proposta, junto com o [ADR-0030](0030-portas-fisicas-subdivisao-de-enderecamento.md).
+Não substitui nenhuma decisão deste ADR; regista por que uma delas **não** foi violada.
+
+O ADR-0030 acrescenta `ports` a `Capabilities` — quantas saídas físicas o hardware tem. O
+`falcon-f16v3-sacn` tem 16 e este schema só sabia dizer 1.
+
+**A decisão 5 continua a valer, e a emenda existe para que ninguém precise de a re-derivar.**
+Ela diz que `Capabilities` só contém capacidades declarativas ou booleanas, e que limites
+numéricos de píxel vivem **apenas** em `Limits`. `ports` é uma capacidade **declarativa
+estrutural** — uma contagem de saídas — e **não é um limite de píxeis**: a capacidade por porta
+é **derivada** de `max_pixels`, nunca declarada ao lado dele (ADR-0030 §4 e §5).
+
+Portanto **nenhum campo entra em `Limits`**, e `max_pixels` continua o único lar do tecto de
+píxeis do nó. Um leitor futuro que encontre `ports` em `Capabilities` e suspeite de uma segunda
+fonte de verdade encontra aqui a resposta: não há.
+
+A decisão 7 (*compila e desaparece*) e a decisão 8 (*zero mudança em seam Frozen*) atravessam o
+ADR-0030 sem alteração — a porta é resolvida no arranque e `led-core` fica intocado.

@@ -785,3 +785,131 @@ context: |
   texto no `--help`, e cabe na fatia que fechar o TD-017.
 review_by: "fatia do TD-017"
 ```
+
+## TD-019 — `linear_assignments` tem 170 e 3 canais escritos à mão, e é o caminho Art-Net/sACN do daemon
+
+```yaml
+td_id:     TD-019
+title:     "O daemon endereca Art-Net/sACN por uma funcao que ignora `pixels_per_universe` e colapsa RGBW em RGB"
+severity:  High
+status:    open
+origin:    "Inspeccao para o ADR-0030 (portas fisicas), 2026-08-30. Registado como DL-2 nesse ADR."
+adr:       "ADR-0030 §Dividas registadas / DL-2"
+context: |
+  SINTOMA. O `led-player` tem valores fisicos escritos a mao no caminho de saida, e o
+  daemon usa esse caminho para Art-Net e sACN. Dois campos que o `HardwareProfile`
+  declara — `pixels_per_universe` e `color` — nao chegam ao fio por esta rota.
+
+  Provado por leitura de codigo, nao presumido, e nao executado:
+
+  1. crates/led-player/src/lib.rs:297-312 — `linear_assignments`:
+       `const PX_PER_UNIVERSE: usize = 170;  // 510 / 3`
+       `universe: first_universe + (i / PX_PER_UNIVERSE) as u16`
+       `channel:  ((i % PX_PER_UNIVERSE) * 3) as u16`
+       `format:   order.into()`
+     O 170 e o *3 estao escritos a mao. E a assinatura recebe `order: RgbOrder` — nao
+     `ColorFormat`. Nao e um argumento que o chamador se esqueceu de passar: e um
+     parametro que a API NAO EXPOE. Mesma forma do TD-016.
+
+  2. crates/led-core/src/types.rs:141-146 — `impl From<RgbOrder> for ColorFormat` devolve
+     sempre `ColorFormat::Rgb(o)`. Logo `format: order.into()` e SEMPRE tres canais.
+
+  3. crates/led-daemon-bin/src/output.rs:28 — `use led_player::linear_assignments;`
+     Chamado em :713 (Art-Net) e :724 (sACN), com `cfg.rgb_order()` como quarto argumento.
+
+  4. crates/led-daemon-bin/src/output.rs:569-574 — `rgb_order()` faz
+     `ColorFormat::Rgbw(o, _) => o`: descarta o RGBW E o `WhiteMode`.
+
+  5. CONTRASTE DENTRO DO MESMO `match`. O arm DDP (:700-707) passa `cfg.color` inteiro
+     a `DdpOutput::with_limits`, mais `cfg.pixels_per_universe`. O DDP honra; o
+     Art-Net/sACN nao. A assimetria esta a tres linhas de distancia.
+
+  6. ALCANCAVEL, nao hipotetico. O preset `generic-sk6812-rgbw-sacn`
+     (presets.rs:178-197) declara `protocol: Sacn`, `color: Rgbw(Grb, MinSubtract)` e
+     `pixels_per_universe: 128`. O validador do ADR-0018 so recusa RGBW quando o
+     protocolo e DDP (validate.rs:181, `caps.protocol == Protocol::Ddp`) — nao ha guarda
+     nenhuma para RGBW sobre sACN. O preset valida limpo e chega ao arm do sACN.
+
+  7. O GATE NAO COBRE. `nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida`
+     (led-daemon-bin/tests/wled_driver.rs:395) le exactamente tres ficheiros —
+     `output.rs`, `stage.rs`, `run.rs` (linhas 397-399). O `led-player/src/lib.rs` esta
+     fora, e e onde os numeros vivem. O gate criado na GS4.4 para impedir esta classe
+     nao a ve.
+impact: |
+  Com `generic-sk6812-rgbw-sacn` o daemon produziria, no fio: tres canais por pixel em
+  vez de quatro, e 170 pixels por universo em vez dos 128 declarados. O endereco de
+  cada pixel a partir do primeiro fica errado, e o die branco da fita nunca acende.
+
+  E a mesma familia do `RgbOrder` (GS4.3), do MTU (GS4.4) e do TD-016: campo declarado
+  que o fio ignora. E, como esses, NAO da palco escuro — da uma fita que acende com as
+  cores e as posicoes trocadas, que e mais caro de diagnosticar porque parece funcionar.
+
+  Segundo eixo, e e o que o torna High e nao Medium: os dois binarios que falam com
+  hardware passam a ter semanticas diferentes para o mesmo profile. O DDP honra o
+  `ColorFormat` e o `pixels_per_universe`; o Art-Net/sACN nao. Divergencias entre
+  caminhos apodrecem em silencio — cada metade, lida sozinha, parece deliberada.
+severity_rationale: |
+  Classificado por comparacao com o ledger, nao por intuicao.
+
+  = TD-016 (High): valor fisico escrito a mao num caminho de saida, num parametro que a
+    API nao expoe, latente hoje e produtor de saida errada-mas-plausivel quando activa.
+    A forma e a mesma; aqui sao DOIS campos declarados em vez de um.
+  > TD-017 (Medium): la a divergencia daemon/player e uma escolha DELIBERADA e
+    documentada no codigo ("Warn loudly; do not block"). Aqui nada e deliberado — e uma
+    constante escrita a mao que ignora um campo declarado.
+  > TD-018 (Low): nao ha mitigacao. O TD-018 e Low porque a mensagem de recusa ensina o
+    operador. Aqui nao ha recusa, nao ha aviso, e nada no ecra o denuncia.
+mitigation_now: |
+  Nenhuma necessaria hoje, e o defeito e LATENTE, nao activo:
+
+  - os quatro presets validados ou usados em hardware — `esp32-devkit-wled-artnet`,
+    `esp32-poe-wled-ddp`, `falcon-f16v3-sacn`, `advatek-pixlite16-sacn` — declaram todos
+    `pixels_per_universe: 170` e cor RGB, que e exactamente o que o codigo assume;
+  - o unico preset RGBW+sACN do catalogo (`generic-sk6812-rgbw-sacn`) nunca foi corrido
+    contra hardware;
+  - o caminho DDP, que e o validado em hardware (94/94 frames, 2026-07-20), NAO passa
+    por aqui.
+
+  Ou seja: o defeito so acorda quando alguem correr o daemon com um preset cujo
+  `pixels_per_universe` seja diferente de 170, ou com RGBW em Art-Net/sACN.
+not_fixed_because: |
+  Tres razoes, e nenhuma e falta de tempo:
+
+  a) E ANTERIOR a FASE C. Nao foi introduzido pelo ADR-0030; foi encontrado por ele.
+     Corrigi-lo dentro da etapa documental misturaria duas preocupacoes no mesmo diff.
+  b) E CODIGO DE PRODUCAO, e a etapa que o encontrou era read-only por directiva.
+  c) A CORRECCAO CERTA E CONSEQUENCIA DO ADR-0030 §6, nao independente dele. Quando a
+     reparticao tiver um so dono (`led-hardware-profile`), o 170 escrito a mao deixa de
+     ter onde viver. Corrigi-lo agora, isolado, criaria uma segunda implementacao da
+     regra que o §6 existe para unificar — exactamente o que este repositorio recusa.
+required_fix: |
+  Pre-condicoes, por ordem:
+
+  1. ADR-0030 §6 implementado: `led-hardware-profile` como fonte normativa unica do
+     enderecamento, e o daemon a consumi-lo em vez de construir o layout inline.
+  2. `linear_assignments` deixa de receber `RgbOrder` e passa a receber o que o profile
+     declara — ou desaparece, absorvida pelo `compile_layout`. A segunda hipotese e a
+     preferivel, e e a que o §6 aponta.
+  3. O gate `nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida` passa a incluir
+     `led-player/src/lib.rs` nas suas FONTES. Sem isto a correccao nao fica protegida
+     contra reincidencia, e foi a ausencia deste ficheiro que deixou o defeito crescer.
+closure_criteria: |
+  Fecha quando TODAS as quatro se verificarem:
+
+  A) Um teste discriminante le os datagramas de um socket real com o preset
+     `generic-sk6812-rgbw-sacn` e afirma QUATRO canais por pixel e 128 pixels por
+     universo. Contar so canais nao chega — tem de afirmar tambem a fronteira do
+     universo, senao passa com o 170 ainda la.
+  B) CONTROLO NEGATIVO OBRIGATORIO: repor o `PX_PER_UNIVERSE = 170` (ou o `* 3`) tem de
+     REPROVAR esse teste. Um teste que so afirmasse "sai RGBW" passaria com a fronteira
+     de universo errada.
+  C) Um teste que compare o enderecamento produzido pelo `led-player` e pelo
+     `led-daemon-bin` para o MESMO profile e o MESMO show, e que reprove se divergirem.
+     E o gate do ADR-0030 §8, e e o que impede a divergencia de voltar.
+  D) O gate textual da GS4.4 cobre `led-player/src/lib.rs` e reprova com `170` ou `* 3`
+     fora de comentario nesse ficheiro.
+
+  Mais `evidence_ref` e `negative_control` no schema de fecho (KB-012), como qualquer
+  entrada `closed` deste ledger.
+review_by: "fatia de implementacao da FASE C (ADR-0030). NAO correr o daemon contra hardware com um preset de pixels_per_universe != 170 ou com RGBW em Art-Net/sACN antes disso."
+```
