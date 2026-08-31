@@ -40,7 +40,7 @@ recuperada do changelog.
 | [0027](0027-contrato-tipos-rust-typescript.md) | O contrato TypeScript é **gerado** do Rust; dois caminhos independentes provam que não divergiu | aceito | 2026-08-09 |
 | [0028](0028-web-platform-topology-and-state-boundary.md) | Topologia da Web Platform (`console-web/`) e a **fronteira de estado** que ela não pode atravessar | aceito | 2026-08-10 |
 | [0029](0029-saida-multi-controlador.md) | Saída multi-controlador: N nós, um mapa, um só caminho — DDP primeiro, sequencial | aceito | 2026-08-14 |
-| [0030](0030-portas-fisicas-subdivisao-de-enderecamento.md) | Portas físicas: a porta é subdivisão de **endereçamento**, e a repartição tem um só dono | proposto (pré-impl.) | 2026-08-30 |
+| [0030](0030-portas-fisicas-subdivisao-de-enderecamento.md) | Portas físicas: a porta é subdivisão de **endereçamento**, e a repartição tem um só dono | aceito (pré-impl.) | 2026-08-30 |
 
 ## Quando escrever um novo ADR
 Uma mudança merece ADR quando altera um **seam**, um **invariante**, ou uma

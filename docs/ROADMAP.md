@@ -100,7 +100,7 @@ há um motor forte com dois vãos no caminho do operador.
 | **Console do operador** | ⬜ | — | **a maior peça faltante** (FASE D) |
 | **Observabilidade** | ✅ | Prometheus + Grafana + 5 alertas + 4 SLOs, scrape ao vivo em show real | — |
 | **Segurança** | ✅ | cosign, SBOM, attestation, Ed25519 pinado, red-team com achado CRITICAL fechado | — |
-| **Governança** | ✅ | **22 ADRs**, ledger de TD com gate executável (hook de pre-commit), 27 agentes, guardiões mecânicos, CI verde | 2 ADRs por decidir: **B1** (0017) e **B2** (0016) |
+| **Governança** | ✅ | **22 ADRs**, ledger de TD com gate executável (hook de pre-commit), 27 agentes, guardiões mecânicos, CI verde | 1 ADR por decidir: **B1** (0017). **B2** (0016) fechou em 2026-08-09 |
 | **Hardware real** | 🟡 | **1 nó de 5** validado ponta-a-ponta (720 px de 6.200) | Ethernet, Falcon, FPP, 72h (FASE G) |
 | **Trajes de dança** | 🟡 | bifurcação **decidida** (ADR-0022: playback autônomo); `bake` por traje + playback em fluxo com pacing absoluto (F2, `9b89501`) | player embarcado (F3) e sync multi-traje (F4) não existem; autenticação pré-playback é **TD-013** |
 

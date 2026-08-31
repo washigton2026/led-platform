@@ -1,6 +1,6 @@
 # ADR-0030 — Portas físicas: a porta é subdivisão de **endereçamento**, e a repartição tem um só dono
 
-- **Estado:** proposto (pré-implementação — congela o contrato antes do código)
+- **Estado:** aceito (pré-implementação — congela o contrato antes do código)
 - **Data:** 2026-08-30
 - **Decide sobre:** `led-hardware-profile` (schema + compilação) e quem o consome
   (`led-player`, `led-daemon-bin`). **Não** toca `led-core`, a calibração, o IPC v1 nem os

@@ -163,7 +163,7 @@ inexpressável, o que o `led-xlights` hoje contradiz.
 
 ## Emenda 1 (2026-08-30) — `Capabilities` ganha `ports`, e a decisão 5 fica **intacta**
 
-**Estado:** proposta, junto com o [ADR-0030](0030-portas-fisicas-subdivisao-de-enderecamento.md).
+**Estado:** aceita (pré-implementação), junto com o [ADR-0030](0030-portas-fisicas-subdivisao-de-enderecamento.md).
 Não substitui nenhuma decisão deste ADR; regista por que uma delas **não** foi violada.
 
 O ADR-0030 acrescenta `ports` a `Capabilities` — quantas saídas físicas o hardware tem. O
