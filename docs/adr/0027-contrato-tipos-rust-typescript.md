@@ -104,6 +104,9 @@ O contrato atravessa o IPC v1, que tem `v` negociado. Portanto:
 - **Incompatível** (remover ou renomear uma variante, mudar um tipo): **não** é uma edição.
   Exige a mesma disciplina que o `PROTOCOL_V` já tem — versão nova do protocolo e migração de
   cliente — porque um valor removido é um valor que um daemon mais antigo ainda emite.
+- **Vocabulário** (um **comando novo** no `enum Cmd`): **incompatível**, e exige
+  `PROTOCOL_V` novo. Ver **Emenda 3** — esta classe faltava, e a sua ausência produziu uma
+  divergência entre este ADR e o ADR-0026 §9-quater.
 - **Nunca** se remove um código de erro para "limpar" o contrato: `no_show_loaded` significa o
   mesmo dos dois lados desde a GS1.6, e foi para isso que o contrato foi congelado.
 
@@ -226,8 +229,68 @@ enviar seria alargar o contrato para lá do que atravessa **esta** fronteira.
 gate ganha uma extracção nova. É o preço de a assimetria deixar de existir — e o momento certo
 para o pagar é agora, quando o primeiro comando que a torna perigosa está a ser construído.
 
+## Emenda 3 (2026-08-31) — **um comando novo é mudança incompatível de vocabulário**
+
+**Estado:** decisão do operador. Fecha uma divergência entre este ADR e o ADR-0026 §9-quater.
+
+**A lacuna, e como apareceu.** O §6 classificava mudanças por **forma** — aditivo (campo,
+variante) contra incompatível (remover, renomear, mudar tipo). **Nunca classificou o
+vocabulário.** Acrescentar um comando ao `enum Cmd` não é remover nem renomear, portanto não
+caía em «incompatível»; e também não é campo nem variante de união, portanto não caía em
+«aditivo». Ficava **fora das duas classes**.
+
+A consequência não foi teórica. O ADR-0026 §9-quater afirma que *«um comando novo é versão
+nova de protocolo»*, o `proto.rs` trata comando desconhecido como **recusa recuperável**
+(`unknown_command`, com o `id` preservado e a ligação viva — testado em
+`comando_desconhecido_preserva_o_id`), e este ADR não arbitrava. Três fontes, nenhuma errada
+isoladamente, sem regra que as ligasse.
+
+**A decisão: `PROTOCOL_V = 2`.** Um comando novo é **incompatível** e exige versão nova de
+protocolo, com negociação por ligação.
+
+**A razão é operacional, e é o que a torna diferente de um argumento de forma.** Sob a
+alternativa — comando aditivo dentro do v1 — a incompatibilidade só se manifesta **quando o
+operador usa a capacidade**: um cliente que conhece o comando mostra-o na superfície, e o
+daemon antigo responde `unknown_command`. Ao nível do protocolo, uma recusa impecável; ao
+nível do palco, **a acção que não aconteceu**. É a distinção do ADR-0026 §9 — *observabilidade
+não é evidência física* — aplicada ao vocabulário: uma resposta correcta que descreve um
+efeito inexistente.
+
+Com versão negociada, a incompatibilidade aparece no **`hello`**, antes de qualquer comando
+ser enviado. O cliente sabe **antes** de expor a capacidade. É a mesma disciplina que o
+repositório já escolheu noutros sítios: *tornar irrepresentável* em vez de *proibir por
+convenção* (SSE em vez de WebSocket, ADR-0026 §5; sem TCP, `0.0.0.0` não é representável,
+GS3).
+
+**A distinção que se preserva, e é o ponto todo:**
+
+| Mudança | Classe | Custo |
+|---|---|---|
+| Campo novo **opcional** numa resposta existente | **aditivo** | regenerar e commitar |
+| Variante nova numa união existente | **aditivo** | regenerar; o `switch` exaustivo quebra de propósito |
+| **Comando novo** no `enum Cmd` | **incompatível** | `PROTOCOL_V` novo + negociação |
+| Remover ou renomear; mudar um tipo | incompatível | `PROTOCOL_V` novo + migração |
+
+O precedente aditivo **não é revogado**: o `outputs` do ADR-0029 §8 entrou como campo numa
+resposta que já existia, e continua a ser o padrão certo para dado novo. O que muda é que
+**vocabulário não é dado**.
+
+**Consequência aceite, e não é pequena.** O `accepts:[1]` do `hello` é hoje um **literal**
+(`server.rs:305`) e **não tem um único leitor** em todo o repositório — verificado. Um `v2`
+que não torne `accepts` real e que não faça os emissores (`ok_line`, `err_line`,
+`event_line`, hoje com `PROTOCOL_V` fixo) responderem na versão **do pedido** seria um número
+novo, não capacidade nova. Isso é trabalho da implementação, não desta emenda.
+
+**Não implementado.** Nenhuma linha de Rust foi escrita. `PROTOCOL_V` continua **1**, o
+`enum Cmd` continua com 12 comandos, e não existe v2.
+
 ## Critério de reversão
 
 Se o repo alguma vez adotar `serde` por outra razão de peso, geração por schema passa a ser
 mais barata que esta e este ADR deve ser revisitado. Enquanto o JSON for escrito à mão, esta
 é a solução proporcional.
+
+**Da Emenda 3:** se a negociação por ligação se mostrar impraticável — por exemplo se o custo
+de um daemon bilingue exceder o benefício num transporte que é owner-only e same-host — a
+alternativa não é «voltar ao aditivo em silêncio»: é uma decisão nova, com a mesma
+formalidade, que tem de dizer **onde** a incompatibilidade passa a aparecer ao operador.

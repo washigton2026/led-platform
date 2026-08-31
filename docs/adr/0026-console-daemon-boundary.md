@@ -219,6 +219,18 @@ Nenhuma das duas é uma edição; ambas são decisões de arquitetura. Enquanto 
 o 501 é a resposta **honesta**, e é preferível a qualquer das alternativas que *pareceriam*
 funcionar.
 
+> **Actualização (2026-08-31) — a decisão foi tomada, e confirma a saída 2.** O operador
+> decidiu que **um comando novo exige `PROTOCOL_V = 2`** (ADR-0027, Emenda 3). Este parágrafo
+> já o afirmava; o que muda é o **estatuto** das duas saídas:
+>
+> - a **saída 1 continua proibida** — o §15 não foi tocado, e o gate continua a recusá-la;
+> - a **saída 2 deixa de ser hipótese e passa a ser o caminho**, com um pré-requisito
+>   nomeado: o v2 tem de existir e ser **negociado por ligação**.
+>
+> **O 501 permanece, e não por inércia.** Enquanto o v2 não existir, a capacidade continua a
+> não chegar através da fronteira autorizada — que é exactamente o que o 501 afirma. Trocá-lo
+> agora voltaria a dizer algo falso, e as três respostas da tabela acima continuam a valer.
+
 **O que fica proibido, com gate:** devolver `200 []`; devolver `404`; escrever perfis à mão no
 console; declarar `led-hardware-profile` como dependência de produção; inventar um `cmd_ipc`
 que o IPC v1 não define. Cada um destes tem um teste, e dois deles foram falsificados.
