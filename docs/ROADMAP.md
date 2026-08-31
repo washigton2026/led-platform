@@ -263,14 +263,19 @@ Canvas2D com 10k `fillRect` — propriedade do **desenho do preview**, não de n
 **já é por-pixel**, então o `CompiledLayout` já consegue expressar portas com formatos
 diferentes. Quem achata é apenas o **descritor de design-time**.
 
+> **O contrato fechou em 2026-08-30 — [ADR-0030](adr/0030-portas-fisicas-subdivisao-de-enderecamento.md).**
+> O modelo de porta que esta secção propunha foi **rejeitado por evidência**; está registado,
+> na íntegra e com a razão, em *Alternativas rejeitadas* do ADR. A tabela abaixo é o contrato;
+> os `§` remetem para ele.
+
 | Slice | Conteúdo | Risco |
 |---|---|---|
-| C1 | `Port { index, pixel_count, color, calibration }` no profile — **aditivo** | baixo |
-| C2 | `compile_layout` distribui por porta preservando o `pixels_per_universe` declarado | médio (é o coração do mapeamento) |
+| C1 | `ports` — uma **contagem** — entra em `Capabilities` (§5). `color` (§2) e `calibration` (§3) **não** entram na porta; `pixel_offset`/`pixel_count` são **derivados, nunca declarados** (§4) | baixo |
+| C2 | A repartição ganha **um só dono**, o `led-hardware-profile` (§6), e o **daemon passa a consumi-lo** — hoje constrói o mapa inline e nunca chama `compile_layout` (§8) | **alto** (toca o caminho validado em hardware; o §8 existe para não ser feito pela metade) |
 | C3 | Presets ganham portas — Falcon F16V3 tem **16** portas; hoje declara 1 | nenhum (é dado) |
-| C4 | Guardião: 9º check — porta não pode vazar para o runtime | baixo |
+| C4 | Guardião: 9º check — porta não pode vazar para o runtime (§7) | baixo |
 
-**Não toca nenhum seam Frozen.** É a próxima peça de código que pode começar **hoje**.
+**Não toca nenhum seam Frozen** (§9): `led-core` fica intocado e sem bump.
 
 ---
 
