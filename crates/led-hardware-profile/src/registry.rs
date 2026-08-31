@@ -30,6 +30,7 @@ fn row_to_profile(row: &PresetRow) -> HardwareProfile {
             color: row.color,
             supports_discovery: row.supports_discovery,
             supports_metrics: row.supports_metrics,
+            ports: row.ports,
         },
         limits: Limits {
             pixels_per_universe: row.pixels_per_universe,
@@ -194,6 +195,31 @@ mod tests {
                 "preset '{}' tem erro(s) de validação: {:?}",
                 row.name,
                 v.errors().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// ADR-0030 §5: a contagem de portas do preset chega ao profile sem tradução.
+    ///
+    /// A segunda asserção descreve o **catálogo de hoje**, não uma regra do validador: os 8
+    /// presets declaram 1 saída física cada. Nenhum preset multi-porta existe ainda — o
+    /// Falcon F16V3 tem 16 portas e continua a declarar 1 até à fatia C3, que é onde o dado
+    /// muda.
+    #[test]
+    fn as_portas_do_preset_chegam_ao_profile() {
+        let reg = HardwareRegistry::with_builtin();
+        for row in PRESETS {
+            let p = reg.profile(row.name).expect("profile");
+            assert_eq!(
+                p.capabilities.ports, row.ports,
+                "preset '{}': a contagem de portas não sobreviveu à conversão",
+                row.name
+            );
+            assert!(
+                row.ports >= 1,
+                "preset '{}' declara {} portas — um nó sem saída física não endereça nada",
+                row.name,
+                row.ports
             );
         }
     }

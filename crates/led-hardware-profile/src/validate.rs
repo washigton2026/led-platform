@@ -220,6 +220,7 @@ mod tests {
                 color: ColorFormat::Rgb(RgbOrder::Grb),
                 supports_discovery: true,
                 supports_metrics: false,
+                ports: 1,
             },
             limits: Limits { pixels_per_universe: 170, max_pixels: 1_560, refresh_hz: 44 },
             transport: crate::Transport { mtu_bytes: 1_500, heartbeat_ms: 800 },
