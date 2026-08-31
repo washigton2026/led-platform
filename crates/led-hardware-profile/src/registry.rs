@@ -224,6 +224,36 @@ mod tests {
         }
     }
 
+    /// Os dois presets multi-porta declaram o que o ADR-0030 §5 afirma, e a aritmética dele
+    /// fecha contra o `max_pixels` que já estava na tabela.
+    ///
+    /// **Isto NÃO é uma regra de validação.** O §5 regista explicitamente que
+    /// `max_pixels % ports != 0` é uma pendência **sem política decidida**, com gatilho no
+    /// primeiro preset que a alcance. Este teste nomeia os dois presets um a um, de propósito:
+    /// se algum dia um preset dividir inexacto, ele **não** o reprova — o que reprova é mexer
+    /// nestes dois sem refazer a conta.
+    #[test]
+    fn os_presets_multi_porta_batem_com_a_aritmetica_do_adr() {
+        let reg = HardwareRegistry::with_builtin();
+        for (nome, portas, px_por_porta) in
+            [("falcon-f16v3-sacn", 16u16, 1024u32), ("advatek-pixlite16-sacn", 16, 1020)]
+        {
+            let p = reg.profile(nome).expect("profile");
+            assert_eq!(p.capabilities.ports, portas, "{nome}: contagem de portas");
+            assert_eq!(
+                p.limits.max_pixels % u32::from(portas),
+                0,
+                "{nome}: {} / {portas} não é exacto — o ADR §5 afirma que é",
+                p.limits.max_pixels
+            );
+            assert_eq!(
+                p.limits.max_pixels / u32::from(portas),
+                px_por_porta,
+                "{nome}: capacidade por porta",
+            );
+        }
+    }
+
     /// Os avisos esperados são exatamente os previstos pelos ADRs — nem a mais, nem a menos.
     #[test]
     fn preset_warnings_are_the_ones_the_adrs_predict() {
