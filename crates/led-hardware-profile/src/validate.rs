@@ -49,6 +49,13 @@ pub enum Finding {
     /// Os pixels declarados não cabem num universo com esse número de canais/pixel.
     /// Só se aplica a protocolos baseados em universo (sACN/Art-Net); DDP é endereçado por byte.
     PixelsExceedUniverse { pixels_per_universe: u16, channels_per_pixel: u16, universe_size: u16 },
+    /// O nó declara **zero** saídas físicas (`Capabilities.ports`).
+    ///
+    /// Não é um [`Finding::ZeroLimit`], e a distinção é a decisão do ADR-0030 §5: `ports` é
+    /// capacidade declarativa, nunca limite de píxeis. Um nó sem saída física não endereça
+    /// nada — e a capacidade por porta é `max_pixels / ports` (§4), que com zero não existe.
+    /// Sem payload: a regra só pode disparar de uma maneira, como a `WifiNotPermittedLive`.
+    NoPhysicalPorts,
     /// Um limite obrigatório está zerado.
     ZeroLimit { field: &'static str },
     /// Orçamento elétrico inválido.
@@ -135,6 +142,16 @@ pub fn validate(profile: &HardwareProfile, available: &Available) -> Validation 
     // 3 · o protocolo declarado tem driver?
     if !available.protocols.contains(&caps.protocol) {
         findings.push(Finding::ProtocolHasNoDriver { protocol: caps.protocol });
+    }
+
+    // 3-bis · o nó declara pelo menos uma saída física?
+    //
+    // Regra de CAPACIDADE, não de limite — por isso vive aqui, entre as regras 2 e 3, e não
+    // na regra 5 com o `ZeroLimit`. Reusar o `ZeroLimit` rotularia `ports` como limite de
+    // píxeis e contradiria o ADR-0030 §5, que o pôs em `Capabilities` precisamente por não o
+    // ser.
+    if caps.ports == 0 {
+        findings.push(Finding::NoPhysicalPorts);
     }
 
     // 4 · os pixels cabem no universo? (só para protocolos baseados em universo)
@@ -324,6 +341,46 @@ mod tests {
         let v = validate(&p, &available());
         assert!(v.findings.contains(&Finding::WifiNotPermittedLive));
         assert!(!v.has_errors(), "o validador não usurpa o NetworkGuard (ADR-0005)");
+    }
+
+    /// ADR-0030 §5 + §4: um nó sem saída física é recusado, e o achado **não** é um
+    /// `ZeroLimit`.
+    ///
+    /// A segunda asserção é a que interessa e é a que protege a decisão do C1. Reusar o
+    /// `ZeroLimit { field: "ports" }` seria a simplificação óbvia para quem chegar a este
+    /// código sem contexto — e rotularia `ports` como limite de píxeis, contradizendo a razão
+    /// de ele viver em `Capabilities`. Este teste reprova essa simplificação.
+    #[test]
+    fn um_no_sem_saida_fisica_e_recusado_e_nao_como_limite() {
+        let mut p = valid();
+        p.capabilities.ports = 0;
+        let v = validate(&p, &available());
+
+        assert!(
+            v.findings.contains(&Finding::NoPhysicalPorts),
+            "ports=0 tem de ser recusado — o C2 divide `max_pixels / ports`: {:?}",
+            v.findings
+        );
+        assert_eq!(Finding::NoPhysicalPorts.severity(), Severity::Error, "recusa, não aviso");
+        assert!(v.has_errors(), "`Error` impede o profile de abrir saída (ADR-0024)");
+
+        assert!(
+            !v.findings.iter().any(|f| matches!(f, Finding::ZeroLimit { .. })),
+            "`ports` NÃO é um limite (ADR-0030 §5) — o achado não pode ser um ZeroLimit: {:?}",
+            v.findings
+        );
+    }
+
+    /// Controlo negativo: com uma saída física, a regra 3-bis fica calada. Sem isto, um
+    /// `NoPhysicalPorts` empurrado incondicionalmente passaria no teste acima.
+    #[test]
+    fn com_saida_fisica_a_regra_das_portas_fica_calada() {
+        let v = validate(&valid(), &available());
+        assert!(
+            !v.findings.contains(&Finding::NoPhysicalPorts),
+            "o profile válido declara portas: {:?}",
+            v.findings
+        );
     }
 
     #[test]
