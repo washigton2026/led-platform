@@ -90,6 +90,26 @@ grep -rn 'HardwareProfile' crates/led-hal/src/hal.rs crates/led-pixel-engine/src
 ```
 Any reference to the profile inside `send_frame`, `apply`, or the render path → **BLOCK**.
 
+## 9 · The port does not leak into the runtime (ADR-0030 §7)
+The port is resolved **once, at startup**, and never consulted during rendering — never per
+frame, never on `Show → Logical Pixels → ProtocolOutput → HAL → DeviceDriver`.
+
+```sh
+cargo test -p integration-tests --test porta_nao_vaza_para_o_runtime
+```
+`led-hal` or `led-pixel-engine` declaring a dependency on `led-hardware-profile` → **BLOCK**.
+Pass the `CompiledLayout` the profile *produces*, never the profile itself.
+
+**Do not re-check the seam side here.** A port field entering a `led-core` type
+(`PixelPhysical`, `CompiledLayout`, `UniverseData`) is caught by check 7 / the SemVer
+Guardian — that is invariant 8 of ADR-0030, and duplicating it would be the second rule for
+one fact that §6 refuses.
+
+**A textual scan for the word "port" is NOT an acceptable form of this check.** It was tried
+and rejected: `network_guard.rs` uses `Port` in the macOS `networksetup` sense (hardware
+ports = network interfaces), and its multi-line string literals defeat line-based literal
+stripping. That scan produces false BLOCKs.
+
 ---
 
 **Verdict format:** one line per check (`✅ PASS` / `❌ BLOCK` + evidence file:line), then
