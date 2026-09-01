@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (1091 tests)
+cargo test --workspace                  # all suites (1114 tests)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -89,13 +89,13 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (1091 tests)
+cargo test --workspace                  # all suites (1114 tests)
 ```
 
-16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1091 tests green** · zero warnings.
+16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1114 tests green** · zero warnings.
 
 Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
-Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
+Governance: `scripts/audit_gate.py` (KB-012) — 17 TD entries, all **10** closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
 
 | Crate | Status |
 |---|---|
@@ -110,9 +110,9 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `audio-core` | CPAL → SPSC ring → Hann FFT → bands/beat/BPM/harmonic + **SectionDetector** (musical section detection: Intro/Verse/Chorus/Build/Bridge/Drop/Outro) |
 | `led-show-recorder` | **NEW** — `.lumyx` binary format: write/read `LogicalFrame` + `AudioSnapshot` streams; `pixel_hash` for regression replay comparison |
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
-| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. **+`Transport` (GS4.3): MTU declarado, fragmentação DERIVADA dele.** Leaf: depends only on `led-core` |
+| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. **+`Transport` (GS4.3): MTU declarado, fragmentação DERIVADA dele.** **+FASE C (ADR-0030): `Capabilities.ports` — uma contagem, não um limite — e `reparticao`, o DONO ÚNICO da aritmética de repartição (§6). `compile_layout` alinha cada porta numa fronteira de universo (§4-bis).** Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
-| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN), `FrameSource` e `Stage` — **ligados ao laço**, com pré-voo real (WifiBlockGuard + ArtPoll) e heartbeat conduzido pelo tick. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
+| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN), `FrameSource` e `Stage` — **ligados ao laço**, com pré-voo real (WifiBlockGuard + ArtPoll) e heartbeat conduzido pelo tick. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede. **+FASE C (ADR-0030 §8): os três protocolos pedem o endereçamento ao `led-hardware-profile` — Art-Net e sACN deixaram de usar `linear_assignments`, e o `170`/`× 3` escritos à mão saíram do caminho do daemon (TD-019)** |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -135,6 +135,116 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-09-01 — FASE C: a porta física entra no schema, ganha um dono, e chega ao endereçamento
+
+**Sete commits, e os três primeiros não têm uma linha de Rust.** A ordem foi contrato primeiro,
+código depois — e foi ela que evitou construir sobre uma decisão por tomar.
+
+**A cabeça do DAG estava mal descrita, e o repositório ganhou.** O briefing dizia *«contrato
+fechado, PASS»*; o ADR-0030 dizia `proposto`. Neste repositório `proposto (pré-impl.)` e
+`aceito (pré-impl.)` são vocabulários distintos — os ADRs 0013/0014/0015/0018 usam o segundo, e
+**nenhum ADR tem código por trás enquanto está `proposto`**. Escrever `ports` antes de o aceitar
+teria aberto uma excepção que ninguém decidiu. O ADR-0030 e a Emenda 1 do ADR-0018 passaram a
+`aceito (pré-implementação)`.
+
+**ADR-0031 — a negociação de versão do IPC, escrita antes de existir v2.** A Emenda 3 do
+ADR-0027 decidiu que um comando novo exige `PROTOCOL_V = 2`; a inspecção encontrou que **a
+negociação estava documentada e nunca implementada** — `from_line` recusa `v != PROTOCOL_V` no
+parser, antes de saber se a linha é um `hello`, e o `accepts:[1]` é um literal **sem um único
+leitor**. O ADR fixa: o `hello` viaja **sempre em `v:1`** (é o chão, e resolve o ovo-e-galinha
+sem tocar no parser), `accepts` passa a bilateral e **derivado**, a ligação fica com
+`max(∩)`, e sem intersecção é `unsupported_version` **não fatal**. Com isto um cliente v2 contra
+um daemon v1 **desce limpamente** em vez de levar recusa — melhor comportamento que o actual, com
+**zero** alterações do lado v1. **Não implementado**: `PROTOCOL_V` continua 1 e o `enum Cmd`
+continua com 12 comandos; o gatilho é o primeiro comando que exija v2.
+
+**C1 — `ports` em `Capabilities`, e o gate não é uma asserção.**
+`ports_vive_em_capabilities_e_limits_nao_ganhou_nada` **destrutura exaustivamente** as duas
+structs: quem acrescentar um tecto por porta a `Limits` deixa de **compilar**, em vez de criar um
+limite paralelo ao `max_pixels`. Falsificado com `max_pixels_per_port` plantado em `Limits` →
+`E0027: pattern does not mention field`. E digo-o com honestidade: os três `E0063` que o
+compilador também emite **não são o gate** — quem acrescenta o campo actualiza os construtores e
+o build volta ao verde; o `E0027` é o único que sobrevive a isso.
+
+**C3 — os dois presets multi-porta declaram as 16 portas que têm.** Falcon `16_384/16 = 1024`,
+Advatek `16_320/16 = 1020`, ambas exactas e **verificadas contra o `max_pixels` que já estava na
+tabela**. Os outros seis ficaram em `ports: 1` **não por omissão**: o repositório não determina a
+contagem deles, e inventá-la era o que estava proibido. Fica registado que o
+`raspberry-fpp-sacn` declara `max_pixels: 32_768` com `ports: 1` — quase de certeza falso, e sem
+fonte para corrigir.
+
+**`ports == 0` — variante própria, e a razão de não reusar o `ZeroLimit`.** Tornar o zero
+irrepresentável (`NonZeroU16`) é mais forte, e foi **rejeitado por três custos**:
+`#![forbid(unsafe_code)]` obrigaria a `NonZeroU16::new(16).unwrap()` **dentro da `const`** que o
+módulo declara ser só literais; muda tipos públicos; e — o que decide — `pixels_per_universe`,
+`max_pixels` e `refresh_hz` também não podem ser zero e já usam a regra 5 com `ZeroLimit`. Ter só
+o `ports` irrepresentável deixaria **dois mecanismos para a mesma classe**. `Finding::NoPhysicalPorts`
+é regra **3-bis**, entre as capacidades — reusar `ZeroLimit` rotularia `ports` como limite e
+contradiria o §5. Falsificado 2×, e a segunda mutação é essa simplificação exacta.
+
+**C4 — o 9.º check do guardião, e o scanner textual foi REJEITADO com razão medida.** Um `grep`
+por `port` daria falso BLOCK: `network_guard.rs` usa `Port` no sentido do `networksetup` do
+macOS, e os literais multi-linha desse ficheiro quebram remoção linha a linha. O gate ficou na
+**direcção da dependência** — nenhum crate do caminho de runtime declara `led-hardware-profile` —
+que é o **check 4 do guardião aplicado ao contrário**, não arquitectura nova. O lado do seam
+continua delegado ao SemVer Guardian (invariante 8), sem duplicar.
+
+**C2a — a repartição ganha dono único, e a prova é uma mutação CRUZADA.** O núcleo passou para
+`led-hardware-profile::reparticao`; o `repartir` do daemon virou **chamador**. Mutei o núcleo
+(`inicio = i*tecto + 1`) e reprovaram **quatro testes do `led-daemon-bin`** — se o daemon tivesse
+cópia própria, teriam passado. E os **8 testes de `repartir` do daemon, escritos contra a
+implementação antiga, passam inalterados**: assinatura e mensagens foram preservadas de
+propósito. O núcleo é **parametrizado** (`UnidadeVazia` entra como **dado**) porque duas regras
+não transferem: unidade vazia é **recusa** no nó e **válida** na porta (§4-ter).
+
+**C2b — Art-Net e sACN passam a pedir o endereçamento ao dono (§8), e o TD-019 fecha no fio.** Os
+dois arms chamavam `linear_assignments`, com `170` e `× 3` **escritos à mão** e `RgbOrder` em vez
+de `ColorFormat` — não é argumento esquecido, é parâmetro que a API não expõe. O arm DDP, no
+mesmo `match`, honrava os dois. **Alcançável e agora medido:** `generic-sk6812-rgbw-sacn` declara
+`ppu: 128` e RGBW, e o validador só recusa RGBW sobre DDP; 300 px dão **3 universos** a 128 e
+seriam **2** a 170.
+
+**A equivalência foi provada ANTES de migrar.** Com `ports = 1` — 6 dos 8 presets e **todos** os
+validados em hardware — a repartição dá uma só fatia e o endereçamento é **idêntico**. Prova: os
+**16 testes de bytes no fio** do `wled_driver.rs` passam **inalterados**.
+
+**A falsificação apanhou algo não previsto.** Reintroduzi o TD-019 e reprovaram **dois** testes: o
+novo (`left: 2, right: 3`) e o **gate estrutural da GS4.4**,
+`nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida`. O TD-019 registava que esse gate
+**não via** o defeito porque lê `output.rs` e o `170` vivia no `led-player`; agora que o
+endereçamento é pedido de dentro do `output.rs`, **o gate cobre-o**.
+
+**Falcon é o discriminante obrigatório, e não por acaso:** `1024/170` **não é inteiro**, o último
+universo de cada porta é parcial, e a porta 1 arranca no universo **7** — para lá do 6, que é o
+que o `ceil` do §4-bis garante. Advatek (`1020/170 = 6`) é o controlo exacto. O show real do rig
+(6 200 px) num Falcon de 16 portas compila com **9 portas vazias** (§4-ter).
+
+**Dois erros meus, ambos apanhados por gates e não por mim.** (1) Deixei um `#[test]` órfão: o
+`cargo test` **passou** (atributo duplicado é lint de nível warning), o teste correu **duas
+vezes**, e eu li `49 passed` como «+3» esperando «+2» **sem estranhar o número**. Foi o
+`clippy -D warnings` que o tornou erro. (2) Reportei duas falhas da suite como possível regressão;
+a causa era **método meu** — lancei duas suites de workspace **em paralelo**, e o
+`o_daemon_recusa_a_linha_longa_por_si_proprio` é uma corrida de `BrokenPipe` sensível a carga, já
+documentada em 2026-08-13c. Corrida sozinha: 0 failed.
+
+**Invariants verified.** `led-core` **intocado** — SemVer *«superfície de seam inalterada (v1.4.0,
+62 itens)»* nos sete commits. Guardião mecânico **0 regressões**. Clippy `--workspace
+--all-targets -D warnings` exit 0. Gate de dívida `17 TD · 0 Critical`. Presets alterados **só** nos
+dois valores de `ports` do C3. `show.gif` **nunca** entrou em commit nenhum.
+
+**Pending — e a distinção que não pode ser arredondada.** Está provado que os bytes que **saem**
+do daemon não mudaram para os presets existentes e passam a honrar `ppu`/`ColorFormat` no preset
+RGBW+sACN. **Não** está provado que um controlador real os aceita: **o rig está offline**, nenhum
+controlador multi-porta foi alguma vez observado — o `16` é folha de catálogo, e isso está no
+critério de reversão do ADR-0030 — e o sACN continua bloqueado no rig por **firmware** (WLED
+16.0.1 não faz bind na 5568). **Validação física PENDENTE.**
+
+Continuam abertos, todos deliberadamente: **`max_pixels % ports != 0`** (§5, gatilho no primeiro
+preset com divisão inexacta) · **DL-1** (dois caminhos constroem o mapa) · **TD-019 no
+`led-player`** sem `--profile`, que está fora do que o TD-019 descreve · **`raspberry-fpp-sacn`**
+sem fonte · **IPC v2** diferido com gatilho · **B1/ADR-0017** (blackout), decisão humana que
+bloqueia o D6 · **G2/G3** (rig por energizar; plist ausente e Mac a bateria).
 
 ### 2026-08-17d — D: a documentação e o instrumento apanham o ADR-0029, e o estado por nó chega ao ecrã
 
