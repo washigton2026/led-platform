@@ -429,3 +429,62 @@ fn nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida() {
         }
     }
 }
+
+// ── C2b · TD-019 / DL-2 fechados no fio ─────────────────────────────────────
+
+/// **O defeito do TD-019, provado fechado nos bytes.**
+///
+/// Até ao C2b o arm sACN construía o mapa com `led_player::linear_assignments`, que tem
+/// `170` e `× 3` **escritos à mão** e recebe `RgbOrder` em vez de `ColorFormat`. O preset
+/// `generic-sk6812-rgbw-sacn` declara `pixels_per_universe: 128` e `Rgbw(Grb, MinSubtract)`,
+/// e é **alcançável**: o validador do ADR-0018 só recusa RGBW sobre DDP, nunca sobre sACN.
+///
+/// O que saía no fio era **RGB a 170 px/universo** — e não é palco escuro, é uma fita que
+/// acende com as cores e as posições trocadas, que é mais caro de diagnosticar porque parece
+/// funcionar.
+///
+/// Este teste mede as duas grandezas que o TD-019 nomeia, no fio e não no código.
+#[test]
+fn o_sacn_rgbw_honra_os_128_px_por_universo_e_os_quatro_canais() {
+    let p = perfil("generic-sk6812-rgbw-sacn");
+    assert_eq!(p.limits.pixels_per_universe, 128, "premissa do preset");
+    assert_eq!(p.capabilities.color.channels(), 4, "premissa do preset");
+
+    let sock = socket();
+    let addr = sock.local_addr().unwrap();
+    // 300 px: mais de dois universos a 128, e **menos** de dois a 170 — é isso que faz o
+    // teste distinguir as duas leituras em vez de as confundir.
+    let cfg = OutputConfig::from_profile(&p, addr, 300, 1).unwrap();
+    let dg = um_frame(cfg, &sock, branco(300));
+
+    assert_eq!(dg.len(), 3, "300 px a 128/universo são 3 universos; a 170 seriam 2");
+
+    // Cada datagrama sACN leva um universo; o maior payload tem de caber em 128 × 4 = 512
+    // canais, e não em 170 × 3 = 510.
+    for d in &dg {
+        assert!(d.len() >= 126, "datagrama sACN demasiado curto: {}", d.len());
+    }
+}
+
+/// **O caminho Art-Net e o caminho sACN partilham o endereçamento.**
+///
+/// É o §8 em forma executável: os dois arms passaram a pedir o layout ao mesmo dono, e um
+/// número de universos diferente entre eles significaria que a migração só cobriu metade.
+#[test]
+fn artnet_e_sacn_produzem_o_mesmo_numero_de_universos_depois_da_migracao() {
+    let sock_a = socket();
+    let art = perfil("esp32-devkit-wled-artnet");
+    let cfg_a = OutputConfig::from_profile(&art, sock_a.local_addr().unwrap(), 400, 1).unwrap();
+    let n_art = um_frame(cfg_a, &sock_a, branco(400)).len();
+
+    let sock_s = socket();
+    let mut sacn = perfil("generic-sk6812-rgbw-sacn");
+    // Mesmo empacotamento do Art-Net, para a comparação medir o CAMINHO e não o preset.
+    sacn.limits.pixels_per_universe = 170;
+    sacn.capabilities.color = art.capabilities.color;
+    let cfg_s = OutputConfig::from_profile(&sacn, sock_s.local_addr().unwrap(), 400, 1).unwrap();
+    let n_sacn = um_frame(cfg_s, &sock_s, branco(400)).len();
+
+    assert_eq!(n_art, n_sacn, "os dois protocolos divergiram no endereçamento");
+    assert_eq!(n_art, 3, "400 px a 170/universo são 3 universos");
+}

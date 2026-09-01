@@ -148,17 +148,42 @@ pub fn repartir_portas(
     pixeis_do_no: usize,
     first_universe: u16,
 ) -> Result<Vec<FatiaDePorta>, RepartirError> {
-    let portas = profile.capabilities.ports as usize;
+    repartir_portas_de(
+        profile.capabilities.ports,
+        profile.limits.pixels_per_universe,
+        profile.limits.max_pixels,
+        pixeis_do_no,
+        first_universe,
+    )
+}
+
+/// A mesma regra, a partir dos campos em vez do profile.
+///
+/// Existe para quem **já não tem o profile na mão** — o `led-daemon-bin` extrai as
+/// primitivas do profile no arranque (`OutputConfig`) e o descritor desaparece, como o
+/// ADR-0018 decisão 7 exige. Sem esta entrada, o daemon teria de guardar o profile até ao
+/// `open()` só para poder chamar o dono da regra.
+///
+/// **Não é uma segunda implementação:** [`repartir_portas`] delega aqui, e é esta função que
+/// contém o cálculo.
+pub fn repartir_portas_de(
+    ports: u16,
+    pixels_per_universe: u16,
+    max_pixels: u32,
+    pixeis_do_no: usize,
+    first_universe: u16,
+) -> Result<Vec<FatiaDePorta>, RepartirError> {
+    let portas = ports as usize;
     if portas == 0 {
         // O validador já recusa por `Finding::NoPhysicalPorts` e o ADR-0024 impede a saída de
         // abrir. Aqui é guarda contra divisão por zero, não uma segunda política.
         return Err(RepartirError::SemUnidades);
     }
-    let ppu = profile.limits.pixels_per_universe as usize;
+    let ppu = pixels_per_universe as usize;
     if ppu == 0 {
         return Err(RepartirError::TectoZero);
     }
-    let capacidade_por_porta = profile.limits.max_pixels as usize / portas;
+    let capacidade_por_porta = max_pixels as usize / portas;
 
     let fatias = repartir(pixeis_do_no, capacidade_por_porta, portas, UnidadeVazia::Aceita)?;
 

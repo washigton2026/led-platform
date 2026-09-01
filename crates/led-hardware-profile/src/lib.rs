@@ -34,11 +34,14 @@ pub mod registry;
 pub mod reparticao;
 pub mod validate;
 
-pub use compile::{compile_layout, driver_config, CompileError, DriverConfig};
+pub use compile::{
+    compile_layout, compile_layout_de, driver_config, CompileError, DriverConfig, Enderecamento,
+};
 pub use led_core::{ColorFormat, RgbOrder, WhiteMode};
 pub use presets::{PresetRow, PRESETS};
 pub use reparticao::{
-    repartir, repartir_portas, Fatia, FatiaDePorta, RepartirError, UnidadeVazia,
+    repartir, repartir_portas, repartir_portas_de, Fatia, FatiaDePorta, RepartirError,
+    UnidadeVazia,
 };
 pub use registry::HardwareRegistry;
 pub use validate::{validate, Available, Finding, Severity, Validation};

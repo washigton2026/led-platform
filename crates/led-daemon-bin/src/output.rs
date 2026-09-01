@@ -25,7 +25,6 @@ use led_hal::{CalibrationLut, Hal};
 use led_hardware_profile::{
     Calibration as ProfileCalibration, HardwareProfile, Protocol, Transport,
 };
-use led_player::linear_assignments;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -257,6 +256,12 @@ pub struct OutputConfig {
     pub color: ColorFormat,
     /// Pixels por universo **declarados pelo nó**.
     pub pixels_per_universe: u16,
+    /// Saídas físicas do nó (ADR-0030 §5). Como todo o resto aqui, é uma **primitiva
+    /// derivada** do profile — o descritor compila e desaparece (ADR-0018 decisão 7).
+    pub ports: u16,
+    /// Tecto de píxeis **do nó**, declarado pelo profile. A capacidade por porta deriva
+    /// daqui (§4); não é o tamanho do show, que é o `pixel_count`.
+    pub max_pixels: u32,
     /// MTU e heartbeat declarados. **A fragmentação deriva daqui** — não é um segundo número.
     pub transport: Transport,
     /// Correção óptica declarada pelo nó (ADR-0019 Emenda 1). **Vem do profile**, como tudo
@@ -516,6 +521,8 @@ impl OutputConfig {
             pixel_count,
             color: profile.capabilities.color,
             pixels_per_universe: profile.limits.pixels_per_universe,
+            ports: profile.capabilities.ports,
+            max_pixels: profile.limits.max_pixels,
             transport: profile.transport,
             calibration: profile.calibration,
             supports_discovery: profile.capabilities.supports_discovery,
@@ -570,6 +577,40 @@ impl OutputConfig {
     }
 
     /// A ordem de canais, seja qual for o formato.
+    /// O layout físico da fatia deste nó, **pedido ao dono** (ADR-0030 §8).
+    ///
+    /// # Porque isto não constrói o mapa aqui
+    ///
+    /// Até ao C2b o daemon chamava `led_player::linear_assignments`, que tinha **`170` e
+    /// `× 3` escritos à mão** e recebia `RgbOrder` em vez de `ColorFormat` — dois campos que
+    /// o profile declara e que **não chegavam ao fio por esta rota** (TD-019 / DL-2). O arm
+    /// DDP, no mesmo `match`, honrava os dois; a assimetria estava a três linhas de
+    /// distância.
+    ///
+    /// Agora os três protocolos partilham o mesmo endereçamento, e ele vive no
+    /// `led-hardware-profile` — o dono único do §6. Nenhum valor físico é escrito aqui.
+    fn compilar_layout(&self, alvo: &Alvo) -> std::io::Result<CompiledLayout> {
+        led_hardware_profile::compile_layout_de(
+            led_hardware_profile::Enderecamento {
+                ports: self.ports,
+                pixels_per_universe: self.pixels_per_universe,
+                // A capacidade do NÓ, não a do show: a repartição por porta deriva daqui
+                // (§4), e a fatia que este nó recebeu já saiu da repartição por nó.
+                max_pixels: self.max_pixels,
+                color: self.color,
+            },
+            alvo.pixel_count as u32,
+            1,
+            alvo.first_universe,
+        )
+        .map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("o profile não compila um layout para {} px: {e:?}", alvo.pixel_count),
+            )
+        })
+    }
+
     pub fn rgb_order(&self) -> RgbOrder {
         match self.color {
             ColorFormat::Rgb(o) => o,
@@ -714,24 +755,12 @@ impl OutputManager {
                 OutputProtocol::ArtNet => {
                     // O layout é da FATIA deste nó, e o `first_universe` é dele: é assim que
                     // o equivalente do offset chega ao Art-Net.
-                    let assigns = linear_assignments(
-                        alvo.pixel_count,
-                        1,
-                        alvo.first_universe,
-                        cfg.rgb_order(),
-                    );
-                    let layout = CompiledLayout::compile(&assigns);
+                    let layout = cfg.compilar_layout(alvo)?;
                     let dev = led_protocols::ArtNetDevice::unicast(1, alvo.addr)?;
                     Box::new(Hal::new(layout, vec![dev]))
                 }
                 OutputProtocol::Sacn => {
-                    let assigns = linear_assignments(
-                        alvo.pixel_count,
-                        1,
-                        alvo.first_universe,
-                        cfg.rgb_order(),
-                    );
-                    let layout = CompiledLayout::compile(&assigns);
+                    let layout = cfg.compilar_layout(alvo)?;
                     // CID fixo e nome próprio: um receptor E1.31 distingue fontes por CID, e
                     // dois senders com o mesmo CID seriam indistinguíveis no diagnóstico.
                     let cid = *b"LUMYX-DAEMON-001";
