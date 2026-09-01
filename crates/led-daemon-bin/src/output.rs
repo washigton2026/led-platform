@@ -198,39 +198,43 @@ pub struct Alvo {
 /// convenção oposta (universos 1–149 contíguos pelos cinco robôs), e se o rig real exigir
 /// essa, a derivação passa a ser `first_universe + i × universos_por_nó` — mudança de uma
 /// linha aqui, e é o critério de reversão desta decisão.
+///
+/// # Um CHAMADOR, não uma segunda implementação (ADR-0030 §6, fatia C2a)
+///
+/// A aritmética vive em `led_hardware_profile::repartir` e tem **um só dono**. Esta função
+/// escolhe a política do nó ([`UnidadeVazia::Recusa`]) e traduz o erro para o vocabulário do
+/// daemon — *«endereço de saída»*, *«nó»*, *«max_pixels»* — que é do daemon e não da regra.
+/// Reescrever o laço aqui seria a segunda implementação que o §6 existe para impedir.
 fn repartir(total: usize, max_por_no: usize, n: usize) -> Result<Vec<(u32, usize)>, String> {
-    if n == 0 {
-        return Err("é preciso pelo menos um endereço de saída".into());
-    }
-    if max_por_no == 0 {
-        // O validador do ADR-0018 já emite `ZeroLimit`, e o ADR-0024 impede a saída de
-        // abrir. Aqui é uma guarda contra divisão por zero, não uma segunda política.
-        return Err("o profile declara max_pixels = 0".into());
-    }
-    let capacidade = max_por_no.saturating_mul(n);
-    if total > capacidade {
-        return Err(format!(
-            "o show tem {total} px e os {n} nó(s) declaram no máximo {max_por_no} px cada \
-             ({capacidade} no total)"
-        ));
-    }
-    let mut fatias = Vec::with_capacity(n);
-    for i in 0..n {
-        let inicio = i * max_por_no;
-        // `saturating_sub`: quando o nó começa **para lá** do fim do show, a subtracção
-        // simples estoura. Dá 0, que é a condição de recusa logo abaixo — o caso não é
-        // aritmética inválida, é um endereço a mais.
-        let conta = total.saturating_sub(inicio).min(max_por_no);
-        if conta == 0 {
-            return Err(format!(
-                "o nó {i} ficaria sem píxeis: {total} px cabem em {} nó(s) de {max_por_no}, \
-                 e foram dados {n} endereços",
-                inicio.div_ceil(max_por_no)
-            ));
+    use led_hardware_profile::{RepartirError, UnidadeVazia};
+
+    match led_hardware_profile::repartir(total, max_por_no, n, UnidadeVazia::Recusa) {
+        Ok(fatias) => Ok(fatias.into_iter().map(|f| (f.pixel_offset, f.pixel_count)).collect()),
+        Err(RepartirError::SemUnidades) => {
+            Err("é preciso pelo menos um endereço de saída".into())
         }
-        fatias.push((inicio as u32, conta));
+        Err(RepartirError::TectoZero) => {
+            // O validador do ADR-0018 já emite `ZeroLimit`, e o ADR-0024 impede a saída de
+            // abrir. Aqui é uma guarda contra divisão por zero, não uma segunda política.
+            Err("o profile declara max_pixels = 0".into())
+        }
+        Err(RepartirError::NaoCabe { total, tecto, unidades, capacidade }) => Err(format!(
+            "o show tem {total} px e os {unidades} nó(s) declaram no máximo {tecto} px cada \
+             ({capacidade} no total)"
+        )),
+        Err(RepartirError::UnidadeSemPixeis { indice, total, tecto, unidades, cabem_em }) => {
+            Err(format!(
+                "o nó {indice} ficaria sem píxeis: {total} px cabem em {cabem_em} nó(s) de \
+                 {tecto}, e foram dados {unidades} endereços"
+            ))
+        }
+        Err(e @ RepartirError::UniversoForaDeFaixa { .. }) => {
+            // Inalcançável por este caminho: a repartição por NÓ não deriva universos (a
+            // fronteira do §4-bis é da porta). Traduzido em vez de `unreachable!` — um
+            // pânico no caminho de saída seria pior que uma recusa.
+            Err(format!("repartição recusada: {e:?}"))
+        }
     }
-    Ok(fatias)
 }
 
 /// Como a saída é construída. **É isto que o daemon recebe**; ele nunca vê um driver.
