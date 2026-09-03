@@ -216,6 +216,16 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 | 0019 | calibração por-output no HAL | ✅ |
 | 0020 | `WhiteMode::MinSubtract` | ✅ |
 | 0021 | efeito é **função pura**, estado derivado nunca armazenado | ✅ implementado (E1, 1ª fatia) |
+| 0022 | traje de LED: playback autónomo + sync determinístico | ✅ aceito (`docs/adr/0022-wearable-playback-autonomo-sync-deterministico.md:3`) · ⬜ **sem código neste repo** — não há crate; as únicas ocorrências de «wearable» são lições citadas em comentários (`crates/led-daemon-bin/src/loader.rs:10`) |
+| 0023 | superfície de transporte do engine (8 estados) | ✅ aceito e **implementado** (`docs/adr/0023-superficie-de-transporte-do-engine.md:3` · `crates/led-daemon/src/lib.rs:71`); contrato **congelado** na GS1.6 (`docs/adr/0023-anexo-tabela-de-contrato.md:8`) |
+| 0024 | fronteira de validação do `HardwareProfile` | ✅ aceite (`docs/adr/0024-fronteira-de-validacao-do-hardwareprofile.md:3`) e **implementado** — o daemon chama `validate` ao construir a saída (`crates/led-daemon-bin/src/output.rs:471`) |
+| 0025 | `refresh_hz` é um **limite**, não uma recomendação | ✅ aceite (`docs/adr/0025-refresh-hz-e-a-cadencia-pedida.md:3`) e **implementado** — o tecto é lido do profile e o daemon recusa ultrapassá-lo (`crates/led-daemon-bin/src/output.rs:671`) |
+| 0026 | fronteira console↔daemon (o console é **cliente** do IPC v1) | ✅ aceite (`docs/adr/0026-console-daemon-boundary.md:3`) e **implementado** — `led-console-bin` serve HTTP (`crates/led-console-bin/src/http.rs:75`) |
+| 0027 | contrato TypeScript **gerado** do Rust | ✅ aceito (`docs/adr/0027-contrato-tipos-rust-typescript.md:3`) e **implementado** — o gerador é o caminho A (`crates/led-console-bin/src/contract.rs:89`) |
+| 0028 | topologia da Web Platform e a fronteira de estado | ✅ aceito (`docs/adr/0028-web-platform-topology-and-state-boundary.md:3`) e **implementado** — `console-web/`, com o único `fetch` em `console-web/src/transport/api.ts:141` |
+| 0029 | saída multi-controlador (N nós, um mapa) | ✅ aceito (`docs/adr/0029-saida-multi-controlador.md:3`) e **implementado** — `OutputConfig.alvos` (`crates/led-daemon-bin/src/output.rs:247`) |
+| 0030 | portas físicas: a porta é subdivisão de **endereçamento** | ✅ aceito (`docs/adr/0030-portas-fisicas-subdivisao-de-enderecamento.md:3`) e **implementado** na FASE C — `Capabilities.ports` (`crates/led-hardware-profile/src/lib.rs:126`) e o daemon a pedir a repartição ao dono (`crates/led-daemon-bin/src/output.rs:210`). ⚠️ **o Estado escrito no ADR ainda diz «pré-implementação» — está desactualizado** |
+| 0031 | negociação de versão no handshake (o `hello` viaja em `v:1`) | ✅ aceito (`docs/adr/0031-negociacao-de-versao-no-handshake.md:3`) · ⬜ **não implementado** — `PROTOCOL_V` continua 1 (`crates/led-daemon-bin/src/proto.rs:17`) |
 
 ---
 
