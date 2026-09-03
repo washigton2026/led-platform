@@ -68,15 +68,15 @@ existe um **caminho contínuo** — e hoje não existe. Estado elo a elo:
 | Criar / importar show | ✅ | import xLights com gate de conflito (2.701 achados no projeto real), `RigBuilder`, `ShowIntent` |
 | Editar na timeline | 🔴 | o motor existe (`led-sequencer`); **a interface não** — é o **D5**, e a FASE D já arrancou |
 | Pré-visualizar | 🔴 | só GIF offline no `led-demo`; o preview do console é o **D4**, e será WebGPU (ver anexo do ADR-0016) |
-| Configurar controladores | 🟡 | `led-hardware-profile` compila o layout, mas o WLED é configurado **à mão** (E6) e o profile tem **porta física única** (FASE C) |
-| Enviar via **Ethernet** | 🔴 | os protocolos estão prontos e validados; o **meio** não — toda validação de hardware foi sobre **WiFi**, que o ADR-0005 proíbe ao vivo |
-| Executar em hardware real | 🟡 | **1 nó de 5** (720 px de 6.200), e sobre WiFi |
+| Configurar controladores | 🟡 | `led-hardware-profile` compila o layout, mas o WLED é configurado **à mão** (E6); o profile já declara **múltiplas portas** (FASE C, entregue) |
+| Enviar via **Ethernet** | ✅ | validado em hardware a **2026-08-28**: **DDP e sACN aceites** (94/0 cada). **Art-Net não aceite** neste nó — o WLED faz bind de uma só porta de entrada, e sACN/Art-Net são mutuamente exclusivos nele |
+| Executar em hardware real | 🟡 | **1 nó de 5** (720 px de 6.200), agora sobre Ethernet — falta energizar o rig (G2) |
 | Validar o resultado | ✅ | replay por hash, Ed25519 com chave fixada, métricas ao vivo durante show real |
 
-**Os dois elos ausentes são exatamente os dois gargalos do produto:** a **interface**
-(bloqueada pela decisão **B2**, que é sua) e o **Ethernet** (bloqueado por recurso físico,
-não por código). Enquanto qualquer um dos dois estiver aberto, **não há Golden Slice** —
-há um motor forte com dois vãos no caminho do operador.
+**Os dois bloqueios caíram, e nenhum era de código:** o **B2** foi decidido a 2026-08-09 e o
+**Ethernet** foi validado em hardware a 2026-08-28. **Mas continua a não haver Golden Slice** —
+o elo *pré-visualizar* está vazio. A diferença é o tipo de vão: era **decisão e recurso**,
+passou a ser **trabalho por fazer** (o D4). O caminho do operador tem um vão, e é construível.
 
 ---
 
@@ -95,13 +95,13 @@ há um motor forte com dois vãos no caminho do operador.
 | **Áudio** (`led-audio`, `audio-core`) | ✅ | Hann→FFT→bandas→flux-beat→BPM→seções musicais, zero-alloc, ring SPSC Miri-limpo | — |
 | **Gravação / replay** (`led-show-recorder`) | ✅ | formato `.lumyx`, manifest, hash FNV-1a, Ed25519 **com chave fixada**, `bake` por traje + leitura em fluxo | playback **embarcado** (no traje) não existe — F3 |
 | **Migração xLights** (`led-xlights`) | ✅ | import + gate de conflito + auto-fix + **export bidirecional** | `.fseq` **não existe** (interop FPP) |
-| **Perfil de hardware** (`led-hardware-profile`) | ✅ | descritor de capacidades, validador, presets como **dado**, compilação | **porta física única** por profile (FASE C) |
+| **Perfil de hardware** (`led-hardware-profile`) | ✅ | descritor de capacidades, validador, presets como **dado**, compilação, **portas físicas** (ADR-0030) | — |
 | **Read-model** (`led-readmodel`) | ✅ | snapshot read-only, JSON à mão, bind loopback-only | nenhuma UI consome |
 | **Console do operador** | ⬜ | — | **a maior peça faltante** (FASE D) |
 | **Observabilidade** | ✅ | Prometheus + Grafana + 5 alertas + 4 SLOs, scrape ao vivo em show real | — |
 | **Segurança** | ✅ | cosign, SBOM, attestation, Ed25519 pinado, red-team com achado CRITICAL fechado | — |
-| **Governança** | ✅ | **22 ADRs**, ledger de TD com gate executável (hook de pre-commit), 27 agentes, guardiões mecânicos, CI verde | 1 ADR por decidir: **B1** (0017). **B2** (0016) fechou em 2026-08-09 |
-| **Hardware real** | 🟡 | **1 nó de 5** validado ponta-a-ponta (720 px de 6.200) | Ethernet, Falcon, FPP, 72h (FASE G) |
+| **Governança** | ✅ | **31 ADRs**, ledger de TD com gate executável (hook de pre-commit), 27 agentes, guardiões mecânicos, CI verde | **nenhum ADR por decidir** — **B2** (0016) fechou a 2026-08-09 e **B1** (0017) a 2026-09-01 |
+| **Hardware real** | 🟡 | **1 nó de 5** ponta-a-ponta (720 px de 6.200), **em Ethernet** desde 2026-08-28 | nós 2–5, Falcon, FPP, 72h (FASE G) |
 | **Trajes de dança** | 🟡 | bifurcação **decidida** (ADR-0022: playback autônomo); `bake` por traje + playback em fluxo com pacing absoluto (F2, `9b89501`) | player embarcado (F3) e sync multi-traje (F4) não existem; autenticação pré-playback é **TD-013** |
 
 ## I.2 — Parâmetros medidos
@@ -185,7 +185,8 @@ Derivada de corrente nominal por die; **não medida no rig**.
 - `led-core` **1.4.0** · **61 itens** de superfície pública · baseline SemVer **commitado**
 - **5 seams Frozen**: `ProtocolOutput`, `DeviceDriver`, `IDevice`, `CompiledLayout`, `UniverseData`
 - `ColorFormat` é **Evolving** (foi o que permitiu RGBW e vai permitir RGB+CCT)
-- **20 ADRs** · **12 TDs fechados com evidência auditável** · 2 `wontfix` com gatilho de revisita
+- **31 ADRs** · **17 entradas de TD**: **10 fechadas** com evidência auditável, 2 `wontfix` com
+  gatilho de revisita, **5 abertas** (TD-013, TD-014, TD-017, TD-018, TD-019)
 - CI: **Linux + macOS bloqueantes, verdes** em `80c2a6c`; Windows não-bloqueante
 
 **Gates executados nesta revisão (2026-08-03, não citados de memória):**
@@ -210,7 +211,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 | 0014 | IPC e segurança UI↔engine | ✅ aceito, **UDS implementado** (GS3); auth de LAN continua vazia |
 | 0015 | preview lossy fora do hot-path | ✅ aceito, ⬜ **não implementado** |
 | 0016 | stack do console | ✅ **aceito (2026-08-09)** — **React + TypeScript**, com os tipos GERADOS do Rust |
-| 0017 | blackout × heartbeat | 🔴 **adiado — decisão pendente** |
+| 0017 | blackout × heartbeat | ✅ **aceito (2026-09-01)** — máscara no `OutputManager`, a jusante de `record()`; ⬜ **não implementado** (é o D6) |
 | 0018 | HardwareProfile | ✅ implementado (5 slices) |
 | 0019 | calibração por-output no HAL | ✅ |
 | 0020 | `WhiteMode::MinSubtract` | ✅ |
@@ -220,25 +221,35 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # PARTE II — O que falta
 
-## FASE B — Decisões que estão bloqueando código 🔴
+## FASE B — Decisões que estavam bloqueando código ✅ *as duas fechadas*
 
-**Nada aqui é trabalho de programação. São duas escolhas.** Enquanto não forem feitas,
-duas fases inteiras ficam paradas.
+**Nada aqui era trabalho de programação. Eram duas escolhas, e as duas foram feitas.**
 
-### B1 — ADR-0017: semântica do blackout 🔴 *decisão do usuário*
+### B1 — ADR-0017: semântica do blackout ✅ *FECHADO em 2026-09-01*
 
-**A pergunta:** o operador aciona blackout. O heartbeat dispara em seguida. O que vai no fio?
+**A pergunta era:** o operador aciona blackout. O heartbeat dispara em seguida. O que vai no fio?
 
-| Opção | Consequência |
-|---|---|
-| **(a) O preto persiste** ← *recomendação* | O palco fica apagado até comando explícito. O invariante "nunca envia frame zerado" continua valendo para o **silêncio acidental**; o preto vira estado **comandado**. |
-| (b) Último frame pré-blackout | O rig **reacende sozinho** no próximo heartbeat. Inaceitável em palco. |
+**A resposta desfez a premissa da pergunta.** O dilema assumia que a máscara de blackout e o
+armazenamento do último frame vivem na **mesma camada** — e por isso obrigava a escolher entre
+gravar preto e não gravar. Não vivem: a máscara é aplicada **a jusante** de
+`heartbeat.record()`, que guarda sempre o frame **real**. O preto persiste sem nunca ser
+gravado, e o invariante *"o heartbeat nunca envia um frame zerado"* continua **literalmente**
+verdadeiro — quem zera é a máscara, e a máscara é comandada.
 
-**Implementação já desenhada** (não escrita): máscara no HAL reusando o ponto de
-interceptação do ADR-0019, **memset** no scratch do device — não multiplicação por-byte —
-e o heartbeat **empurra** (`send_frame`), não puxa.
+**Onde a máscara vive: no `OutputManager`, antes do fan-out** — um ponto, três protocolos.
+Isto **corrige** o desenho anterior desta secção, que dizia *"máscara no HAL"*: a Emenda 1 do
+ADR-0019 invalidou esse sítio, porque o `DdpOutput` contorna o HAL. Pô-la lá daria blackout em
+Art-Net e sACN e **nenhum no DDP**, que é o protocolo validado em hardware.
 
-**Desbloqueia:** botão/atalho de blackout no console (D6) — hoje **proibido** por ADR.
+As dez decisões — incluindo o **escape por device** como requisito normativo, o fade
+instantâneo e o **fail-safe por nó** no cluster — estão em
+[ADR-0017](adr/0017-blackout-intencional-vs-heartbeat.md).
+
+> **Uma metade da decisão do cluster é requisito, não garantia.** Que o firmware do
+> controlador entre em blackout ao perder o link **não está medido**. É o requisito 9.C do
+> ADR, e entra na fila de validação física ao lado de G3–G7.
+
+**Desbloqueia:** o **D6** — botão de blackout no console, com confirmação em duas fases.
 
 ### B2 — ADR-0016: stack do console ✅ *FECHADO em 2026-08-09*
 
@@ -257,7 +268,7 @@ Canvas2D com 10k `fillRect` — propriedade do **desenho do preview**, não de n
 
 ---
 
-## FASE C — HardwareProfile: múltiplas portas físicas ⬜ *não bloqueado*
+## FASE C — HardwareProfile: múltiplas portas físicas ✅ *ENTREGUE em 2026-09-01*
 
 **Achado sustentado** da revisão externa, com o diagnóstico refinado: `PixelPhysical.format`
 **já é por-pixel**, então o `CompiledLayout` já consegue expressar portas com formatos
@@ -297,7 +308,7 @@ verdade) e o contrato de tipos em [ADR-0027](adr/0027-contrato-tipos-rust-typesc
 | D3 | **Shell do console**: HTTP + SSE + AppShell + design system + transporte + `load`/`unload` | ✅ **feito** |
 | D4 | **Preview WebGPU**: cópia downsampled, rate-limited, **lossy por contrato** (ADR-0015) | ⬜ depende de D3 |
 | D5 | **Timeline visual**: waveform de áudio, clips, keyframes — o `led-sequencer` já tem o modelo | ⬜ depende de D3 |
-| D6 | **Blackout**: botão + atalho + confirmação + log auditável | ⛔ bloqueado por **B1** |
+| D6 | **Blackout**: botão + confirmação em duas fases + log auditável. **Sem atalho de teclado nesta fatia** (ADR-0017, decisão 10) | ⬜ **desbloqueado** — o B1 fechou a 2026-09-01. Não landa sem o **escape por device** |
 | D7 | **Editor de layout**: desenhar modelos, posicionar no palco | ⬜ depende de D3 |
 | D8 | **Empacotamento**: app desktop com webview do SO | ⬜ depende de D3, D4 |
 
@@ -389,14 +400,14 @@ Tudo aqui tem **comando pronto e ensaiado**. Nada depende de escrever código.
 
 | # | Item | O que destrava | Comando |
 |---|---|---|---|
-| G1 | **Migração WiFi → Ethernet** | cabo/switch no rig | preset `esp32-poe-wled-ddp` já existe |
+| G1 | ✅ **Migração WiFi → Ethernet** | — | **feito em 2026-08-28**: latência e jitter medidos, ENOBUFS com causa identificada (adaptador USB) |
 | G2 | **Nós 2–5** (6.200 px completos) | energizar o rig | `led-player robot_sequence.lumyx --ddp <ip>` |
 | G3 | **Burn-in 72 h** → 168 h | lançar **fora da sessão** | `launchctl load ~/Library/LaunchAgents/com.lumyx.burnin.plist` |
 | G4 | **Falcon / FPP** | ter o controlador | mesmo player, `--artnet`/`--ddp` |
 | G5 | **Determinismo Linux/Windows** | máquina ou CI | `./scripts/determinism_probe.sh` |
 | G6 | **Chaos físico** | rig + puxar o cabo | burn-in rodando + desconectar ETH |
 | G7 | **RGBW `dtype 0x33` no DDP** | fita RGBW no rig | o validador já **avisa** que não foi validado |
-| G8 | **sACN em hardware** | reflash do WLED | bloqueio é de **firmware**, não do LUMYX (provado) |
+| G8 | ✅ **sACN em hardware** | — | **feito em 2026-08-28** (94/0, `lm:"E1.31"`): o ESP32-POE faz bind na 5568. **Art-Net ficou não aceite neste nó** — bind exclusivo, não é defeito do LUMYX |
 
 ---
 
@@ -417,21 +428,21 @@ O que transforma "meu projeto" em "plataforma que outros usam".
 # PARTE III — Caminho crítico
 
 ```
-        ┌── B1 blackout ──────────────┐            (decisão sua — 1 resposta)
+        ┌── B1 ✅ ────────────────────┐   (decidido 2026-09-01 — ADR-0017 aceito)
         │                             ▼
-HOJE ───┤                          D6 blackout no console
+HOJE ───┤                          D6 blackout no console  ◄── desbloqueado
         │
-        ├── B2 stack ── D1 daemon ─ D2 IPC ─ D3 shell ─┬─ D4 preview ─ D8 app
-        │  (3 medições)                                 ├─ D5 timeline
-        │                                               └─ D7 layout
+        ├── B2 ✅ ── D1 ✅ ── D2 ✅ ── D3 ✅ ─┬─ D4 preview ─ D8 app
+        │                                     ├─ D5 timeline
+        │                                     └─ D7 layout
         │
-        ├── C portas múltiplas ──────► (não bloqueado — pode começar agora)
+        ├── C ✅ portas múltiplas ───► (entregue 2026-09-01 — ADR-0030)
         │
         ├── E2..E8 paridade xLights ─► (E1 efeitos: 1ª tranche FEITA — 13 de ~40)
         │
         ├── F1 ✅ ─ F2 🟡 ─ F3 player ─ F4 sync ─ F5 orçamento ─ F6 degradação
         │
-        └── G1..G8 certificação ──────► (bloqueada por hardware/tempo, não por código)
+        └── G1 ✅ G8 ✅ · G2..G7 ────► (bloqueada por hardware/tempo, não por código)
 ```
 
 > **Correção de 2026-08-05.** A versão anterior deste diagrama listava **E1** e **F1** como
@@ -441,16 +452,22 @@ HOJE ───┤                          D6 blackout no console
 
 **O que pode correr hoje, sem esperar por decisão:**
 
-1. **C** — portas físicas múltiplas (aditivo, sem decisão pendente) — **a única frente
-   inteiramente livre**
-2. **E1 (continuação)** — ~25 efeitos para paridade; o molde (`ComputeKernel` + ADR-0021)
+1. **D6** — blackout no console. **Desbloqueado a 2026-09-01**; a semântica está fixada pelo
+   ADR-0017 e o desenho não tem lacunas. É a frente com o caminho mais curto
+2. **D4 / D5 / D7** — preview, timeline e editor de layout. São **superfície** sobre domínio
+   que já existe; nenhum abre arquitectura nova
+3. **E1 (continuação)** — ~25 efeitos para paridade; o molde (`ComputeKernel` + ADR-0021)
    já existe, cada efeito é aditivo e testável
-3. **F3/F4** — player embarcado e sync multi-traje. **Atenção:** F3 é *decisão de
-   plataforma* (firmware próprio × preset WLED), explicitamente fora do escopo do ADR-0022
+4. **F4** — sync multi-traje (`SharedClock` e `net_time` já existem). **F3 não**: é *decisão
+   de plataforma* (firmware próprio × preset WLED), explicitamente fora do ADR-0022 e precisa
+   de ADR próprio antes de qualquer código
 
-**Uma frente continua parada esperando você:** B1 (uma resposta sobre o blackout, ADR-0017).
-**B2 fechou em 2026-08-09** e a FASE D arrancou: o console tem processo, HTTP, SSE e uma
-Application Shell que comanda o daemon a sério.
+**Nenhuma frente está parada à espera de decisão.** B2 fechou a 2026-08-09, a FASE C foi
+entregue a 2026-09-01 e o B1 foi decidido no mesmo dia. O que resta são decisões **menores**,
+listadas onde aparecem: TD-017 (política do universo), `/api/profiles` (IPC v2 ou catálogo no
+console), o comportamento do preview sem WebGPU, o F3 e a licença.
+
+**O que continua parado é recurso, não decisão:** o rig por energizar.
 
 ---
 
@@ -469,14 +486,19 @@ Application Shell que comanda o daemon a sério.
 
 # PARTE V — Onde estamos, em uma frase
 
-**O motor está pronto e provado; o produto ainda não tem rosto — e o Golden Slice tem dois
-vãos.**
+**O motor está pronto e provado; o produto ainda não tem rosto — mas já não há nada a
+decidir para lho dar.**
 
 O núcleo — determinismo, contratos, protocolos, áudio, replay, segurança, observabilidade —
 está em estado que xLights e Vixen não alcançam. O que falta é quase tudo **acima** do
 motor: o console que torna isso operável e os efeitos que tornam isso expressivo. A decisão
 de wearable, que era a terceira lacuna, **foi tomada** (ADR-0022) e está em execução.
 
-Medido contra o Golden Slice, sobram **dois elos rompidos**: **editar/pré-visualizar** (a
-interface, travada na decisão B2) e **enviar por Ethernet** (o meio, travado em recurso
-físico). Nenhum dos dois se resolve escrevendo mais motor.
+**O que mudou desde a versão anterior desta secção:** os dois vãos que ela nomeava eram de
+**decisão** e de **recurso**, e os dois fecharam — B2 a 2026-08-09, Ethernet a 2026-08-28,
+B1 a 2026-09-01. Medido contra o Golden Slice **continua a faltar um elo**: *pré-visualizar*
+não existe (D4). Mas é a primeira vez que o que falta é **só trabalho** — nenhuma frente
+espera por uma escolha, e nenhuma espera por hardware que não seja energizar o rig.
+
+**A afirmação que este documento não faz:** que o rig completo funciona. **1 nó de 5**,
+720 px de 6.200. Isso é a FASE G, e depende de energia, não de código.

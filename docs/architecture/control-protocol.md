@@ -31,21 +31,26 @@ Levantei o que existe hoje como comandável. O resultado é pequeno, e isso muda
 | `discover_controllers(expected, timeout)` | `led-protocols::artnet` | pré-show, ArtPoll |
 | `check_network()` | `Hal` | gate WiFi (ADR-0005) |
 
-### O que a UI vai precisar e o engine **NÃO TEM**
+### O que a UI vai precisar — o que o engine já tem, e o que ainda não
 
 | O console vai querer | Existe? | Realidade |
 |---|---|---|
-| play / pause / stop do show | ❌ | `led-player` toca um arquivo **linearmente do início ao fim**; os `stop()` do codebase são desligamento de thread, não transporte |
-| seek / scrub na timeline | ❌ | não há noção de posição de reprodução em runtime |
-| carregar/trocar show sem reiniciar | ❌ | o caminho do `.lumyx` é argumento de startup |
+| play / pause / stop do show | ✅ | `Cmd::Play` / `Pause` / `Stop` (`led-daemon-bin/src/proto.rs:63-65`), IPC v1 (ADR-0023, GS1–GS3). A observação sobre o `led-player` continua verdadeira **para o `led-player`** — quem faz transporte é o `led-daemon` |
+| seek / scrub na timeline | ✅ | `Cmd::Seek { to_ms }` (`proto.rs:66`); `PositionChanged` carrega a `cause` que distingue avanço de salto (ADR-0023 F2) |
+| carregar/trocar show sem reiniciar | ✅ | `Cmd::Load { path, assume_integrity }` / `Cmd::Unload` (`proto.rs:61-62`), na UI desde 2026-08-14. `assume_integrity` é afirmação do operador, **nunca verificação** |
 | mudar calibração ao vivo | ❌ | `Hal::with_calibration` é **construtor**; não há setter em runtime |
 | grand master / intensidade global | ❌ | não existe |
-| blackout | ⛔ | **bloqueado** pelo [ADR-0017](../adr/0017-blackout-intencional-vs-heartbeat.md) |
+| blackout | 🟡 | **decidido** ([ADR-0017](../adr/0017-blackout-intencional-vs-heartbeat.md), 2026-09-01): a máscara vive no `OutputManager`, **a jusante** de `heartbeat.record()` — o preto persiste sem ser gravado. **Falta implementar:** é o D6, e não landa sem o escape por device |
 
-**Consequência para o roadmap:** o console **read-only** (PRs 05–09: saúde, discovery, métricas)
-é implementável hoje. Um console **de controle** exige antes uma **superfície de transporte no
-engine** — que é trabalho de backend, não de UI, e ainda não foi projetada. Isso deve virar
-ADR próprio antes de qualquer tela de transporte.
+**Consequência para o roadmap — atualizada em 2026-09-02.** A versão anterior desta secção
+dizia que a superfície de transporte *"ainda não foi projetada"* e que *"deve virar ADR próprio"*.
+**As duas coisas aconteceram:** o [ADR-0023](../adr/0023-superficie-de-transporte-do-engine.md)
+projetou-a — *"aceito — implementado em `crates/led-daemon` (GS1)"* — e a matriz exaustiva de
+8 estados × 10 comandos está congelada desde a GS1.6.
+
+O que resta desta tabela são **duas** lacunas reais — calibração ao vivo e grand master — e
+nenhuma delas bloqueia o console. O blackout deixou de ser uma lacuna de **decisão** e passou
+a ser uma de **implementação**.
 
 ## Mecânica do protocolo
 
@@ -87,7 +92,7 @@ vivo — ADR-0005), `device_not_connected`, `engine_busy`.
 
 ### Ações irreversíveis
 
-`device.reboot`, `device.update_firmware` e (futuramente) blackout exigem **duas fases**: o
+`device.reboot`, `device.update_firmware`, `shutdown` e **blackout** exigem **duas fases**: o
 engine responde `confirmation_required` com um token de uso único e curta validade; o cliente
 repete o comando com `confirm`. Toda ação irreversível é **registrada** — alinhado à trilha
 Ed25519/Provenance existente.
@@ -115,5 +120,4 @@ handshake, nenhum comando é aceito.
 
 ## Fora de escopo
 
-Blackout (ADR-0017, adiado) · a **superfície de transporte do engine** (play/pause/seek — não
-existe; precisa de ADR próprio) · descoberta do daemon na rede · multiusuário e papéis.
+Descoberta do daemon na rede · multiusuário e papéis · calibração ao vivo · grand master.

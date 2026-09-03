@@ -177,7 +177,10 @@ comporta no vidro como se comporta no teste.
 ```
 
 **Critério de aceite.** Cada comando tem efeito visível, e **`pause` e `stop` deixam a fita
-acesa** no último frame. Apagar seria blackout, que continua bloqueado pelo ADR-0017.
+acesa** no último frame. Apagar seria blackout — ⬜ **NÃO IMPLEMENTADO**: o ADR-0017 está
+**aceito** e já não bloqueia nada, mas o D6 ainda não foi escrito. A conclusão prática é a
+mesma (não há blackout hoje); mudou a causa, de «decisão pendente» para «sem código». Ver
+[blackout-operador.md](./blackout-operador.md).
 
 **Evidência esperada.** Vídeo da sequência completa + journal do daemon.
 
