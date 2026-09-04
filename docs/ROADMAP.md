@@ -224,7 +224,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 | 0027 | contrato TypeScript **gerado** do Rust | ✅ aceito (`docs/adr/0027-contrato-tipos-rust-typescript.md:3`) e **implementado** — o gerador é o caminho A (`crates/led-console-bin/src/contract.rs:89`) |
 | 0028 | topologia da Web Platform e a fronteira de estado | ✅ aceito (`docs/adr/0028-web-platform-topology-and-state-boundary.md:3`) e **implementado** — `console-web/`, com o único `fetch` em `console-web/src/transport/api.ts:141` |
 | 0029 | saída multi-controlador (N nós, um mapa) | ✅ aceito (`docs/adr/0029-saida-multi-controlador.md:3`) e **implementado** — `OutputConfig.alvos` (`crates/led-daemon-bin/src/output.rs:247`) |
-| 0030 | portas físicas: a porta é subdivisão de **endereçamento** | ✅ aceito (`docs/adr/0030-portas-fisicas-subdivisao-de-enderecamento.md:3`) e **implementado** na FASE C — `Capabilities.ports` (`crates/led-hardware-profile/src/lib.rs:126`) e o daemon a pedir a repartição ao dono (`crates/led-daemon-bin/src/output.rs:210`). ⚠️ **o Estado escrito no ADR ainda diz «pré-implementação» — está desactualizado** |
+| 0030 | portas físicas: a porta é subdivisão de **endereçamento** | ✅ **implementado** na FASE C (`docs/adr/0030-portas-fisicas-subdivisao-de-enderecamento.md:3`) — `Capabilities.ports` (`crates/led-hardware-profile/src/lib.rs:126`) e o daemon a pedir a repartição ao dono (`crates/led-daemon-bin/src/output.rs:210`). Fica aberta, **por decisão**, a pendência do §5 (`max_pixels % ports != 0`), com o gatilho por disparar; e as portas continuam **NÃO MEDIDO** em hardware |
 | 0031 | negociação de versão no handshake (o `hello` viaja em `v:1`) | ✅ aceito (`docs/adr/0031-negociacao-de-versao-no-handshake.md:3`) · ⬜ **não implementado** — `PROTOCOL_V` continua 1 (`crates/led-daemon-bin/src/proto.rs:17`) |
 
 ---
@@ -284,17 +284,24 @@ Canvas2D com 10k `fillRect` — propriedade do **desenho do preview**, não de n
 **já é por-pixel**, então o `CompiledLayout` já consegue expressar portas com formatos
 diferentes. Quem achata é apenas o **descritor de design-time**.
 
-> **O contrato fechou em 2026-08-30 — [ADR-0030](adr/0030-portas-fisicas-subdivisao-de-enderecamento.md).**
+> **O contrato fechou em 2026-08-30 e o código chegou a 2026-09-01 —
+> [ADR-0030](adr/0030-portas-fisicas-subdivisao-de-enderecamento.md), hoje `implementado`.**
 > O modelo de porta que esta secção propunha foi **rejeitado por evidência**; está registado,
 > na íntegra e com a razão, em *Alternativas rejeitadas* do ADR. A tabela abaixo é o contrato;
 > os `§` remetem para ele.
 
-| Slice | Conteúdo | Risco |
+| Slice | Conteúdo | Estado |
 |---|---|---|
-| C1 | `ports` — uma **contagem** — entra em `Capabilities` (§5). `color` (§2) e `calibration` (§3) **não** entram na porta; `pixel_offset`/`pixel_count` são **derivados, nunca declarados** (§4) | baixo |
-| C2 | A repartição ganha **um só dono**, o `led-hardware-profile` (§6), e o **daemon passa a consumi-lo** — hoje constrói o mapa inline e nunca chama `compile_layout` (§8) | **alto** (toca o caminho validado em hardware; o §8 existe para não ser feito pela metade) |
-| C3 | Presets ganham portas — Falcon F16V3 tem **16** portas; hoje declara 1 | nenhum (é dado) |
-| C4 | Guardião: 9º check — porta não pode vazar para o runtime (§7) | baixo |
+| C1 | `ports` — uma **contagem** — entra em `Capabilities` (§5). `color` (§2) e `calibration` (§3) **não** entram na porta; `pixel_offset`/`pixel_count` são **derivados, nunca declarados** (§4) | ✅ `led-hardware-profile/src/lib.rs:126` |
+| C2 | A repartição ganha **um só dono**, o `led-hardware-profile` (§6), e o **daemon passa a consumi-lo** (§8) — era o slice de risco **alto**, por tocar o caminho validado em hardware | ✅ dono em `reparticao.rs:95`; daemon a pedir por `compile_layout_de` (`led-daemon-bin/src/output.rs:593`) |
+| C3 | Presets ganham portas — Falcon F16V3 tem **16** portas | ✅ Falcon e Advatek a 16; os outros seis em `ports: 1` **não por omissão** — o repositório não determina a contagem deles |
+| C4 | Guardião: 9º check — porta não pode vazar para o runtime (§7) | ✅ pela **direcção da dependência**, não por scanner textual |
+
+**O que a FASE C não fechou, e não é dívida por esquecimento:** a pendência do §5
+(`max_pixels % ports != 0`) continua **por decidir**, com o gatilho por disparar — implementar
+uma política por omissão está proibido pelo critério de reversão do ADR. E as portas continuam
+**NÃO MEDIDO** em hardware: nenhum controlador multi-porta foi observado, o `16` é folha de
+catálogo, e os testes de bytes no fio usam apenas presets de porta única.
 
 **Não toca nenhum seam Frozen** (§9): `led-core` fica intocado e sem bump.
 
