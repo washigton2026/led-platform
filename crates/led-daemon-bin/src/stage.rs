@@ -130,7 +130,7 @@ mod tests {
     use std::net::UdpSocket;
 
     fn escrever(nome: &str, frames: &[(u64, u8)], px: u32) -> String {
-        let path = std::env::temp_dir().join(nome);
+        let path = std::env::temp_dir().join(format!("{}-{nome}", std::process::id()));
         let f = std::fs::File::create(&path).unwrap();
         let mut w = ShowWriter::new(f, px).unwrap();
         for &(ts, v) in frames {
