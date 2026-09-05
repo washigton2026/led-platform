@@ -28,8 +28,15 @@ impl Pacer for VPacer {
 }
 
 /// Escreve um `.lumyx` real num ficheiro temporário e devolve o caminho.
+///
+/// **O pid no nome não é decoração** — é a mesma correcção que o `pipeline.rs:33-47`
+/// documenta em detalhe. Com um nome fixo, duas execuções concorrentes de `cargo test`
+/// são dois processos a escrever o MESMO ficheiro em `temp_dir()`: uma trunca o que a
+/// outra está a ler, e o desfecho é `UnexpectedEof` a meio do `.lumyx` — uma falha que
+/// parece regressão do loader e não é. O discriminante certo é o **processo**, porque é
+/// essa a unidade que colide.
 fn escrever_show(nome: &str, frames: u32, passo_ms: u64, pixels: u32) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(nome);
+    let path = std::env::temp_dir().join(format!("{}-{nome}", std::process::id()));
     let f = std::fs::File::create(&path).unwrap();
     let mut w = ShowWriter::new(f, pixels).unwrap();
     for i in 0..frames {
@@ -91,7 +98,9 @@ fn do_ficheiro_ao_fim_do_show() {
 
 #[test]
 fn ficheiro_que_nao_e_lumyx_e_recusado_com_erro_legivel() {
-    let path = std::env::temp_dir().join("lumyx_gs2_lixo.bin");
+    // pid pela mesma razão do `escrever_show`: este ficheiro é escrito e lido dentro do
+    // teste, e duas execuções concorrentes disputariam o mesmo caminho.
+    let path = std::env::temp_dir().join(format!("{}-lumyx_gs2_lixo.bin", std::process::id()));
     std::fs::write(&path, b"isto nao e um show").unwrap();
     let e = descriptor_from_path(path.to_str().unwrap(), ShowId(1)).unwrap_err();
     let msg = format!("{e}");
