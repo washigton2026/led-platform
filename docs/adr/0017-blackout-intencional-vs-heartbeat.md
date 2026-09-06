@@ -224,10 +224,10 @@ como não-conforme.
 
 - [x] Decisões 1–10 registadas · alternativas rejeitadas · critério de reversão escrito
 - [x] Decisão 9 separada em normativa (9.A) / evidência (9.B) / aceitação (9.C)
-- [ ] `docs/adr/README.md` — 0017 de `proposto (adiado)` para `aceito`
-- [ ] `docs/ROADMAP.md` — B1 de 🔴 para ✅ *(e as contagens de ADRs corrigidas)*
-- [ ] `docs/architecture/control-protocol.md` — blackout deixa de ser ⛔
-- [ ] Doc de operador — trajes autónomos + o que a decisão 9 garante **e o que não**
+- [x] `docs/adr/README.md` — 0017 de `proposto (adiado)` para `aceito` *(linha 30)*
+- [x] `docs/ROADMAP.md` — B1 de 🔴 para ✅ *(`:238` — «FECHADO em 2026-09-01»; contagens em `:103` e `:188` dizem **31 ADRs** e «nenhum ADR por decidir»)*
+- [x] `docs/architecture/control-protocol.md` — blackout deixa de ser ⛔ *(`:43` está 🟡; **zero** ocorrências de ⛔ no ficheiro)*
+- [x] Doc de operador — trajes autónomos + o que a decisão 9 garante **e o que não** *([blackout-operador.md](../runbooks/blackout-operador.md) §3 e §4, esta última partida em 4.1 ✅ POR CONSTRUÇÃO e 4.2 ⚠ NÃO VALIDADO EM HARDWARE)*
 - [ ] **Plano de validação física (9.C)** — medir o estado das saídas do controlador após
       perda de link, antes de declarar a garantia operacional comprovada
 - [ ] Implementação (D6) — não faz parte deste ADR

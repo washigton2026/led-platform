@@ -177,10 +177,11 @@ comporta no vidro como se comporta no teste.
 ```
 
 **Critério de aceite.** Cada comando tem efeito visível, e **`pause` e `stop` deixam a fita
-acesa** no último frame. Apagar seria blackout — ⬜ **NÃO IMPLEMENTADO**: o ADR-0017 está
-**aceito** e já não bloqueia nada, mas o D6 ainda não foi escrito. A conclusão prática é a
-mesma (não há blackout hoje); mudou a causa, de «decisão pendente» para «sem código». Ver
-[blackout-operador.md](./blackout-operador.md).
+acesa** no último frame. Apagar seria blackout — ⬜ **SEM COMANDO DE OPERADOR**: a máscara do
+ADR-0017 está implementada desde `1030a7e`, mas o D6 (o botão) não, porque a decisão 6 exige
+`PROTOCOL_V = 2`. A conclusão prática nesta etapa é a mesma desde o início — **não há blackout
+acionável hoje** — e a causa já mudou duas vezes: de «decisão pendente» para «sem código», e
+agora para «sem superfície». Ver [blackout-operador.md](./blackout-operador.md).
 
 **Evidência esperada.** Vídeo da sequência completa + journal do daemon.
 
