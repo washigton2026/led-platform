@@ -1,8 +1,15 @@
 # ADR-0017 — Blackout intencional × invariante do heartbeat
 
-- **Status:** 🟢 **aceito (pré-implementação)** — decisão tomada, **nenhuma implementação existe
-  ainda**. Desbloqueia o D6.
+- **Status:** 🟢 **aceito** — a **máscara** está implementada
+  (`crates/led-daemon-bin/src/output.rs`, commit `1030a7e`): decisões **1–5, 7 e 8**, cada uma
+  com teste em `crates/led-daemon-bin/tests/blackout.rs`. ⬜ **Decisão 6 por implementar** —
+  exige `PROTOCOL_V = 2` (Emenda 3 do ADR-0027) e `PROTOCOL_V` é 1
+  (`crates/led-daemon-bin/src/proto.rs:17`); o ADR-0031, que faz a negociação descer
+  limpamente, está aceite e **não** implementado. ⬜ **Decisão 9.C por medir** — exige o rig.
+  O **D6** — o botão no console, tal como `docs/ROADMAP.md:328` o define — continua **aberto**:
+  o que aterrou é a **pré-condição** dele, não ele.
 - **Data original:** 2026-07-26 · **Decidido:** 2026-09-01 · **Revisão da decisão 9:** 2026-09-02
+  · **Máscara implementada:** 2026-09-04
 - **Fonte:** Revisão do plano de console do operador (regra: blackout requer decisão separada)
 - **Análise:** [anexo](0017-anexo-analise-e-proposta.md) (2026-08-05). O **P1** do anexo está
   **corrigido** por este ADR — ver decisão 2.
