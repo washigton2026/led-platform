@@ -188,10 +188,13 @@ impl SignedManifest {
         if rest.len() != frame_count * 8 {
             return Err(SignatureError::Malformed);
         }
-        let frame_hashes = rest
-            .chunks_exact(8)
-            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        // A guarda acima exige `rest.len() == frame_count * 8`, logo o resto é **sempre
+        // vazio** — o `.1` descartado abaixo é, por construção, uma fatia de comprimento 0.
+        // Ao contrário do `chunks_exact`, o `as_chunks` torna esse descarte visível: quem
+        // relaxar a guarda vê o `.0` e sabe que há um resto por decidir.
+        let (blocos, resto) = rest.as_chunks::<8>();
+        debug_assert!(resto.is_empty(), "a guarda de comprimento devia tornar o resto vazio");
+        let frame_hashes = blocos.iter().map(|c| u64::from_le_bytes(*c)).collect();
         Ok(Self {
             manifest: ReplayManifest { frame_count, aggregate_hash, frame_hashes, pixel_count },
             public_key: pk,
