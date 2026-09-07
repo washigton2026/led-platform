@@ -1,10 +1,36 @@
 # ADR-0030 — Portas físicas: a porta é subdivisão de **endereçamento**, e a repartição tem um só dono
 
-- **Estado:** aceito (pré-implementação — congela o contrato antes do código)
-- **Data:** 2026-08-30
+- **Estado:** 🟢 **implementado** — o contrato foi congelado **antes** do código, e o código
+  chegou depois dele, na ordem que este ADR fixou.
+- **Data:** 2026-08-30 · **Implementado:** 2026-09-01 (FASE C, `6617794`..`24c5b78`)
 - **Decide sobre:** `led-hardware-profile` (schema + compilação) e quem o consome
   (`led-player`, `led-daemon-bin`). **Não** toca `led-core`, a calibração, o IPC v1 nem os
   protocolos.
+
+**O que «implementado» afirma.** Que as decisões deste ADR têm código e teste discriminante:
+`Capabilities.ports` (§5) em `crates/led-hardware-profile/src/lib.rs:126`; o **dono único** da
+aritmética (§6) em `crates/led-hardware-profile/src/reparticao.rs:95`; o alinhamento de cada
+porta a uma fronteira de universo (§4-bis) em `crates/led-hardware-profile/src/compile.rs:133`;
+e os **dois** consumidores a pedirem o endereçamento ao dono (§8) — o daemon por
+`compile_layout_de` (`crates/led-daemon-bin/src/output.rs:593`) e o `led-player --profile` por
+`compile_layout` (`crates/led-player/src/main.rs:333`). `led-core` ficou intocado (§9).
+
+**O que «implementado» NÃO afirma — e nenhuma das duas é implementação por acabar:**
+
+1. **A pendência do §5 continua por decidir.** `max_pixels % ports != 0` não tem política
+   normativa, e isso é **deliberado**. Verificado, não presumido: `validate.rs` emite
+   `Finding::NoPhysicalPorts` para `ports == 0` e **nada** para a divisão inexacta. O gatilho
+   nomeado no §5 — *o primeiro preset com divisão inexacta* — **não disparou**: os oito presets
+   dividem exacto (seis com `ports: 1`; Falcon `16384/16 = 1024`; Advatek `16320/16 = 1020`).
+   Não é uma excepção à implementação: é a decisão que o §5 escolheu **não** tomar, com o
+   gatilho por disparar. Implementar uma política por omissão agora está **proibido** pelo
+   *Critério de reversão*.
+2. **Portas continuam NÃO MEDIDO em hardware**, como as *Consequências* já diziam. Nenhum
+   controlador multi-porta foi alguma vez observado; o `16` é folha de catálogo. O
+   `raspberry-fpp-sacn` declara `ports: 1` **sem fonte** para a contagem — e com `ports: 1` a
+   divisão é exacta **por construção**, o que *esconde* a pendência do §5 em vez de a resolver.
+   É o candidato mais provável a disparar o gatilho no dia em que a contagem real for
+   estabelecida (`max_pixels: 32_768`).
 
 ## Contexto e problema
 
@@ -199,6 +225,13 @@ Consequência para a implementação: o `repartir` privado do `led-daemon-bin` (
 passa a **chamador**, não a segunda implementação. **Este ADR não faz esse movimento** — é
 trabalho da FASE C, e está registado como obrigação, não como feito.
 
+> **FASE C (2026-09-01) — obrigação cumprida.** O núcleo vive em
+> `crates/led-hardware-profile/src/reparticao.rs:95` e o `repartir` do daemon
+> (`crates/led-daemon-bin/src/output.rs:210`) é hoje um **chamador** que escolhe a política do
+> nó (`UnidadeVazia::Recusa`) e traduz o erro para o vocabulário do daemon. A prova foi uma
+> **mutação cruzada**: mutar o núcleo reprova testes do `led-daemon-bin` — se o daemon tivesse
+> cópia própria, teriam passado.
+
 ### 7 · Onde a repartição acontece: **uma vez, no arranque**
 
 `HardwareProfile → CompiledLayout + DriverConfig → Runtime`, e depois o profile desaparece
@@ -214,6 +247,19 @@ chamá-lo — ou a porta existirá só num binário.
 
 Isto é a obrigação central da implementação, e o teste que a guarda está listado em
 *Invariantes que precisam de teste novo*.
+
+> **FASE C (2026-09-01) — obrigação cumprida, e o TD-019 fechou no fio.** Os dois binários
+> pedem o endereçamento ao `led-hardware-profile`: o daemon por `compile_layout_de`
+> (`crates/led-daemon-bin/src/output.rs:593`) e o `led-player --profile` por `compile_layout`
+> (`crates/led-player/src/main.rs:333`). Os arms Art-Net e sACN do daemon deixaram de usar
+> `led_player::linear_assignments`, e com eles saíram o `170` e o `× 3` escritos à mão.
+>
+> **A fronteira exacta, para não ser arredondada:** o `led-player` **sem** `--profile` continua
+> no caminho histórico (`linear_assignments`, `170` px/universo, `RgbOrder::Rgb`,
+> `crates/led-player/src/main.rs:305`). Isso **não** é uma segunda semântica de porta — sem
+> profile não há porta nenhuma a exprimir, e o daemon **não** arranca sem `--profile` desde a
+> GS4.4. Logo não existe configuração em que os dois binários tenham profile e discordem. Fica
+> nomeado porque é o resíduo do TD-019 que o próprio TD-019 não descreve.
 
 ### 9 · Zero mudança em `led-core`
 
@@ -291,7 +337,35 @@ nesta etapa) — a inconsistência fica aqui, para ser reconciliada por quem tiv
 
 ## Invariantes que precisam de teste novo na implementação
 
-Listados, **não implementados**:
+> **Estado após a FASE C (2026-09-01): 8 dos 11 têm teste discriminante; 3 não têm, e a razão
+> de cada um está escrita.** Cobertos: **1** (`repartir_por_nos_e_depois_por_portas_e_uma_so_regra`),
+> **3** e **5** (`ports_vive_em_capabilities_e_limits_nao_ganhou_nada` — destruturação
+> exaustiva: um campo novo deixa de **compilar**, `E0027`), **6**
+> (`o_sacn_rgbw_honra_os_128_px_por_universo_e_os_quatro_canais`, com `ppu: 128 ≠ 170`), **8**
+> (SemVer Guardian), **9** (`falcon_reparte_1024_por_porta_e_arranca_de_7_em_7_universos`),
+> **10** (`duas_portas_nunca_partilham_universo`), **11**
+> (`porta_sem_pixeis_e_valida_e_o_show_real_do_rig_compila`).
+>
+> **Não cobertos, e o que isso significa em cada caso:**
+>
+> - **2 — nenhum teste compara os dois binários.** A propriedade está garantida por
+>   **construção**, que é mais forte do que a comparação que este item pedia: desde o §8 há um
+>   só dono do endereçamento e ambos o chamam. Um teste de comparação continua a valer a pena
+>   no dia em que houver um segundo caminho; hoje não há um para comparar.
+> - **4 — `custo_do_fanout.rs` NÃO foi estendido com portas.** O item chamava-lhe *"o mais
+>   importante"*, e a razão de não ser um vão é o §7: a porta é resolvida **no arranque** e
+>   nunca é consultada por quadro, portanto não pode acrescentar alocação por porta ao laço de
+>   fan-out. O gate existente (1 alocação com 1 alvo, 1 com 5) continua a guardar o ADR-0019
+>   Emenda 1 sem alteração.
+> - **7 — bytes no fio, por porta: NÃO coberto.** Os testes de fio (`wled_driver.rs`) usam
+>   **apenas presets com `ports: 1`** (os quatro: três `esp32-*` e o
+>   `generic-sk6812-rgbw-sacn`), portanto provam ordem de canais, MTU e
+>   universos consecutivos — **não** que duas portas escrevem intervalos disjuntos. Essa
+>   propriedade está provada ao nível da **aritmética** (invariantes 9 e 10), não ao nível do
+>   **byte**. Fecha quando houver um nó multi-porta no rig, e é a mesma medição que o
+>   *NÃO MEDIDO* das *Consequências* exige.
+
+Listados como obrigação da implementação:
 
 1. **Uma só regra de repartição** — o resultado de repartir por nós e depois por portas tem de
    ser o mesmo produzido por uma chamada, com N = nós × portas. Um teste que compare os dois

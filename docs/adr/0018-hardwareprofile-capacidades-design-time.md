@@ -163,8 +163,12 @@ inexpressável, o que o `led-xlights` hoje contradiz.
 
 ## Emenda 1 (2026-08-30) — `Capabilities` ganha `ports`, e a decisão 5 fica **intacta**
 
-**Estado:** aceita (pré-implementação), junto com o [ADR-0030](0030-portas-fisicas-subdivisao-de-enderecamento.md).
-Não substitui nenhuma decisão deste ADR; regista por que uma delas **não** foi violada.
+**Estado:** **implementada** (2026-09-01), junto com o
+[ADR-0030](0030-portas-fisicas-subdivisao-de-enderecamento.md) — `Capabilities.ports` vive em
+`crates/led-hardware-profile/src/lib.rs:126` e **`Limits` não ganhou um único campo**, o que é
+guardado por destruturação exaustiva das duas structs (`lib.rs:227`: quem acrescentar um tecto
+por porta a `Limits` deixa de **compilar**, `E0027`). Não substitui nenhuma decisão deste ADR;
+regista por que uma delas **não** foi violada.
 
 O ADR-0030 acrescenta `ports` a `Capabilities` — quantas saídas físicas o hardware tem. O
 `falcon-f16v3-sacn` tem 16 e este schema só sabia dizer 1.
