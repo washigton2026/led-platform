@@ -1,8 +1,15 @@
 # ADR-0017 — Blackout intencional × invariante do heartbeat
 
-- **Status:** 🟢 **aceito (pré-implementação)** — decisão tomada, **nenhuma implementação existe
-  ainda**. Desbloqueia o D6.
+- **Status:** 🟢 **aceito** — a **máscara** está implementada
+  (`crates/led-daemon-bin/src/output.rs`, commit `1030a7e`): decisões **1–5, 7 e 8**, cada uma
+  com teste em `crates/led-daemon-bin/tests/blackout.rs`. ⬜ **Decisão 6 por implementar** —
+  exige `PROTOCOL_V = 2` (Emenda 3 do ADR-0027) e `PROTOCOL_V` é 1
+  (`crates/led-daemon-bin/src/proto.rs:17`); o ADR-0031, que faz a negociação descer
+  limpamente, está aceite e **não** implementado. ⬜ **Decisão 9.C por medir** — exige o rig.
+  O **D6** — o botão no console, tal como `docs/ROADMAP.md:328` o define — continua **aberto**:
+  o que aterrou é a **pré-condição** dele, não ele.
 - **Data original:** 2026-07-26 · **Decidido:** 2026-09-01 · **Revisão da decisão 9:** 2026-09-02
+  · **Máscara implementada:** 2026-09-04
 - **Fonte:** Revisão do plano de console do operador (regra: blackout requer decisão separada)
 - **Análise:** [anexo](0017-anexo-analise-e-proposta.md) (2026-08-05). O **P1** do anexo está
   **corrigido** por este ADR — ver decisão 2.
@@ -217,10 +224,10 @@ como não-conforme.
 
 - [x] Decisões 1–10 registadas · alternativas rejeitadas · critério de reversão escrito
 - [x] Decisão 9 separada em normativa (9.A) / evidência (9.B) / aceitação (9.C)
-- [ ] `docs/adr/README.md` — 0017 de `proposto (adiado)` para `aceito`
-- [ ] `docs/ROADMAP.md` — B1 de 🔴 para ✅ *(e as contagens de ADRs corrigidas)*
-- [ ] `docs/architecture/control-protocol.md` — blackout deixa de ser ⛔
-- [ ] Doc de operador — trajes autónomos + o que a decisão 9 garante **e o que não**
+- [x] `docs/adr/README.md` — 0017 de `proposto (adiado)` para `aceito` *(linha 30)*
+- [x] `docs/ROADMAP.md` — B1 de 🔴 para ✅ *(`:238` — «FECHADO em 2026-09-01»; contagens em `:103` e `:188` dizem **31 ADRs** e «nenhum ADR por decidir»)*
+- [x] `docs/architecture/control-protocol.md` — blackout deixa de ser ⛔ *(`:43` está 🟡; **zero** ocorrências de ⛔ no ficheiro)*
+- [x] Doc de operador — trajes autónomos + o que a decisão 9 garante **e o que não** *([blackout-operador.md](../runbooks/blackout-operador.md) §3 e §4, esta última partida em 4.1 ✅ POR CONSTRUÇÃO e 4.2 ⚠ NÃO VALIDADO EM HARDWARE)*
 - [ ] **Plano de validação física (9.C)** — medir o estado das saídas do controlador após
       perda de link, antes de declarar a garantia operacional comprovada
 - [ ] Implementação (D6) — não faz parte deste ADR

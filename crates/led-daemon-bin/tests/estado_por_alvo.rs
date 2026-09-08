@@ -95,6 +95,7 @@ fn o_status_distingue_o_no_morto_dos_que_acenderam() {
             first_universe: 1,
             pixel_offset: 0,
             pixel_count: 8,
+            escapa_blackout: false,
         },
         // O nó morto: porta local sem ouvinte. Ver [`ALVO_MORTO`].
         Alvo {
@@ -102,12 +103,14 @@ fn o_status_distingue_o_no_morto_dos_que_acenderam() {
             first_universe: 1,
             pixel_offset: 8,
             pixel_count: 8,
+            escapa_blackout: false,
         },
         Alvo {
             addr: vivo2.local_addr().unwrap(),
             first_universe: 1,
             pixel_offset: 16,
             pixel_count: 8,
+            escapa_blackout: false,
         },
     ];
 

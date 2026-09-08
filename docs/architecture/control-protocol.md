@@ -40,7 +40,7 @@ Levantei o que existe hoje como comandável. O resultado é pequeno, e isso muda
 | carregar/trocar show sem reiniciar | ✅ | `Cmd::Load { path, assume_integrity }` / `Cmd::Unload` (`proto.rs:61-62`), na UI desde 2026-08-14. `assume_integrity` é afirmação do operador, **nunca verificação** |
 | mudar calibração ao vivo | ❌ | `Hal::with_calibration` é **construtor**; não há setter em runtime |
 | grand master / intensidade global | ❌ | não existe |
-| blackout | 🟡 | **decidido** ([ADR-0017](../adr/0017-blackout-intencional-vs-heartbeat.md), 2026-09-01): a máscara vive no `OutputManager`, **a jusante** de `heartbeat.record()` — o preto persiste sem ser gravado. **Falta implementar:** é o D6, e não landa sem o escape por device |
+| blackout | 🟡 | **decidido** ([ADR-0017](../adr/0017-blackout-intencional-vs-heartbeat.md), 2026-09-01): a máscara vive no `OutputManager`, **a jusante** de `heartbeat.record()` — o preto persiste sem ser gravado. **Máscara implementada** em 2026-09-04 (`1030a7e`), com o escape por device. **Falta o comando de operador:** é o D6 (botão + duas fases + log), e a decisão 6 exige `PROTOCOL_V = 2` — ver ADR-0031, aceite e não implementado |
 
 **Consequência para o roadmap — atualizada em 2026-09-02.** A versão anterior desta secção
 dizia que a superfície de transporte *"ainda não foi projetada"* e que *"deve virar ADR próprio"*.

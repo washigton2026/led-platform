@@ -41,8 +41,17 @@ impl Pacer for VPacer {
     }
 }
 
+/// Escreve um `.lumyx` real num ficheiro temporário e devolve o caminho.
+///
+/// **O pid no nome não é decoração** — é a mesma correcção que o `pipeline.rs:33-47`
+/// documenta em detalhe. Com um nome fixo, duas execuções concorrentes de `cargo test`
+/// são dois processos a escrever o MESMO ficheiro em `temp_dir()`, e o `.lumyx` truncado
+/// dá `UnexpectedEof` — uma falha que parece regressão do loader e não é. Dentro de uma
+/// execução os seis chamadores já usam nomes distintos entre si, portanto o pid é
+/// suficiente e não esconde nada. É também o padrão que a linha 418 deste ficheiro já usa
+/// para o socket.
 fn escrever(nome: &str, frames: u32, passo: u64, px: u32) -> String {
-    let path = std::env::temp_dir().join(nome);
+    let path = std::env::temp_dir().join(format!("{}-{nome}", std::process::id()));
     let f = std::fs::File::create(&path).unwrap();
     let mut w = ShowWriter::new(f, px).unwrap();
     for i in 0..frames {

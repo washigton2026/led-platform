@@ -164,6 +164,20 @@ pub struct Alvo {
     pub pixel_offset: u32,
     /// Quantos pixels **deste** nó. A soma dos alvos é o show; nenhum deles é o show.
     pub pixel_count: usize,
+    /// **Escape do blackout** (ADR-0017 decisão 7) — requisito normativo, não recomendação.
+    ///
+    /// Vive aqui, no `Alvo`, e **não** no `HardwareProfile`, porque é da **instância**: dois
+    /// nós do mesmo modelo podem ter estatutos diferentes no palco. É a mesma fronteira que o
+    /// ADR-0029 traça, e o contraste com a `Calibration` — que **não** está aqui, precisamente
+    /// por ser do *tipo* — é o que torna a distinção verificável em vez de convencional.
+    ///
+    /// Razão física, do ADR: **um traje de dança autónomo não pode ser apagado por um botão de
+    /// consola**, e um blackout que o operador julga total mas não é constitui falsa sensação
+    /// de segurança. O escape existe para que essa diferença seja **declarada**, em vez de
+    /// descoberta no palco.
+    ///
+    /// Por omissão é `false`: um nó só escapa se **alguém o declarar**, nunca por acidente.
+    pub escapa_blackout: bool,
 }
 
 /// Reparte `total` píxeis por `n` nós, cada um com `max_por_no` no máximo.
@@ -512,6 +526,7 @@ impl OutputConfig {
                 first_universe: *first_universe,
                 pixel_offset,
                 pixel_count,
+                escapa_blackout: false,
             })
             .collect();
 
@@ -725,6 +740,24 @@ pub struct OutputManager {
     /// guarda o último frame válido, e corrigi-lo em cada reenvio escureceria o palco a cada
     /// batida — o mesmo bug cumulativo que o ADR-0019 já tinha apanhado no HAL.
     corrigidos: std::sync::Mutex<Vec<led_core::PixelColor>>,
+    /// **A máscara de blackout** (ADR-0017 decisões 1, 2, 5 e 8).
+    ///
+    /// **Latching** (decisão 5): mantém-se até ser levantada. Um blackout que se desfaz
+    /// sozinho é indistinguível de uma falha — por isso não há temporizador aqui.
+    ///
+    /// **Instantânea** (decisão 8): é um `bool` lido por frame, não uma rampa. Um mecanismo
+    /// de segurança não pode ter uma janela em que o palco ainda ilumina.
+    ///
+    /// Vive **a jusante de `record()`** por construção: quem grava é o `Stage`
+    /// (`stage.rs:92`), e a máscara só existe dentro do `send`, que é o passo seguinte
+    /// (`stage.rs:93`). O `Heartbeat` reenvia o último frame **real** por este mesmo
+    /// `OutputManager`, logo passa pela **mesma** máscara — que é exactamente o desenho da
+    /// decisão 1, e a razão de o §4-#9 continuar literalmente verdadeiro: quem zera é a
+    /// máscara, e a máscara é comandada.
+    blackout: std::sync::atomic::AtomicBool,
+    /// Preto, dimensionado no arranque pelo maior alvo. Existe para que apagar o palco **não
+    /// aloque no hot path** — a mesma disciplina do `corrigidos` e do `fatia`.
+    preto: Vec<led_core::PixelColor>,
 }
 
 impl OutputManager {
@@ -793,7 +826,47 @@ impl OutputManager {
             led_core::PixelColor { r: 0, g: 0, b: 0 };
             cfg.pixel_count
         ]);
-        Ok(Self { saidas, cfg, stats: OutputStats::default(), lut, corrigidos })
+        // Dimensionado pelo MAIOR consumidor possível: o caminho rápido do alvo único envia o
+        // frame inteiro, e os outros enviam a sua fatia. Tomar o máximo dos dois evita que
+        // apagar o palco precise de alocar — que é o que o gate de hot-path proíbe.
+        let maior_fatia = saidas.iter().map(|s| s.alvo.pixel_count).max().unwrap_or(0);
+        let preto =
+            vec![led_core::PixelColor { r: 0, g: 0, b: 0 }; maior_fatia.max(cfg.pixel_count)];
+        Ok(Self {
+            saidas,
+            cfg,
+            stats: OutputStats::default(),
+            lut,
+            corrigidos,
+            blackout: std::sync::atomic::AtomicBool::new(false),
+            preto,
+        })
+    }
+
+    /// Aciona o blackout. **Latching** — mantém-se até `blackout_levantar` (decisão 5).
+    ///
+    /// Devolve `true` se **mudou** o estado. Um segundo accionamento devolve `false`: o
+    /// chamador consegue distinguir *"apaguei agora"* de *"já estava apagado"* sem manter
+    /// contabilidade própria, e é isso que o log auditável da decisão 6 precisa de saber.
+    ///
+    /// **Não** grava nada: o `record()` do heartbeat continua a ver só frames reais
+    /// (decisão 3). Apagar é uma máscara de saída, não conteúdo.
+    pub fn blackout_accionar(&self) -> bool {
+        !self.blackout.swap(true, Ordering::SeqCst)
+    }
+
+    /// Levanta o blackout. O `restore` é **trivial** e não precisa de rastrear nada: o último
+    /// frame não-preto é o único que alguma vez foi gravado (decisão 1, Q4 do ADR).
+    ///
+    /// Devolve `true` se mudou o estado.
+    pub fn blackout_levantar(&self) -> bool {
+        self.blackout.swap(false, Ordering::SeqCst)
+    }
+
+    /// O estado **visível** exigido pela decisão 5. Sem isto, o latching seria invisível — e
+    /// um palco apagado sem indicação é indistinguível de um palco avariado.
+    pub fn blackout_activo(&self) -> bool {
+        self.blackout.load(Ordering::SeqCst)
     }
 
     pub fn config(&self) -> &OutputConfig {
@@ -851,12 +924,39 @@ impl OutputManager {
     /// conte frames e erros, calibrado ou não.
     fn enviar(&self, frame: &LogicalFrame) -> Result<(), OutputError> {
         let mut primeiro_erro: Option<OutputError> = None;
+        // Lido **uma vez por frame**, não por nó: os nós de um mesmo frame têm de partilhar o
+        // mesmo veredito, senão um blackout accionado a meio do fan-out apagaria metade do
+        // rig e deixaria a outra metade acesa — indistinguível de uma falha parcial.
+        let apagar_palco = self.blackout.load(Ordering::SeqCst);
 
         for s in &self.saidas {
+            // **O escape é por nó** (decisão 7): um traje autónomo declarado não é apagado
+            // por um botão de consola. É aqui — e só aqui — que a decisão 7 se exerce.
+            let apagar = apagar_palco && !s.alvo.escapa_blackout;
             // **Caminho rápido do alvo único**: um nó que começa em 0 e cobre o show inteiro
             // recebe o frame tal como veio, sem cópia. É o caminho validado em hardware
             // (94/94 frames, 2026-07-20), e esta fatia não pode torná-lo mais caro.
-            let r = if self.saidas.len() == 1 && s.alvo.pixel_offset == 0 {
+            let r = if apagar {
+                // **A máscara.** Preto pré-alocado, fatiado ao tamanho que este nó receberia
+                // — o mesmo tamanho, para que o blackout não mude o enquadramento no fio.
+                //
+                // O `to_vec` custa uma alocação por nó, e isso é declarado em vez de
+                // escondido: `LogicalFrame` **possui** o `Vec` e não há construtor por
+                // empréstimo; dar-lhe um seria mexer no `led-core`, que é contrato canónico.
+                // É a mesma ordem de grandeza da LUT de calibração que a Emenda 1 do ADR-0019
+                // já aceitou nesta exacta fronteira — e, ao contrário dela, só acontece
+                // enquanto o palco está apagado, que não é o regime do show.
+                //
+                // Com o blackout **desligado** este ramo nem é tocado: o custo de a
+                // funcionalidade existir é um load atómico por frame.
+                let n = if self.saidas.len() == 1 && s.alvo.pixel_offset == 0 {
+                    frame.pixels.len()
+                } else {
+                    s.alvo.pixel_count
+                }
+                .min(self.preto.len());
+                s.out.send_frame(&LogicalFrame::new(self.preto[..n].to_vec(), frame.timestamp_ms))
+            } else if self.saidas.len() == 1 && s.alvo.pixel_offset == 0 {
                 s.out.send_frame(frame)
             } else {
                 // Cada nó recebe a **sua fatia**; o `pixel_offset` diz ao destino onde ela
@@ -1142,6 +1242,7 @@ mod tests {
                 first_universe: 1,
                 pixel_offset: (i * POR_NO) as u32,
                 pixel_count: POR_NO,
+                escapa_blackout: false,
             })
             .collect();
 
@@ -1222,6 +1323,7 @@ mod tests {
                 first_universe: 1,
                 pixel_offset: 0,
                 pixel_count: 8,
+                escapa_blackout: false,
             },
             // O nó morto. Ver [`ALVO_MORTO`] e a doc deste teste.
             Alvo {
@@ -1229,12 +1331,14 @@ mod tests {
                 first_universe: 1,
                 pixel_offset: 8,
                 pixel_count: 8,
+                escapa_blackout: false,
             },
             Alvo {
                 addr: vivo2.local_addr().unwrap(),
                 first_universe: 1,
                 pixel_offset: 16,
                 pixel_count: 8,
+                escapa_blackout: false,
             },
         ];
 

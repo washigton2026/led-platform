@@ -211,7 +211,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 | 0014 | IPC e segurança UI↔engine | ✅ aceito, **UDS implementado** (GS3); auth de LAN continua vazia |
 | 0015 | preview lossy fora do hot-path | ✅ aceito, ⬜ **não implementado** |
 | 0016 | stack do console | ✅ **aceito (2026-08-09)** — **React + TypeScript**, com os tipos GERADOS do Rust |
-| 0017 | blackout × heartbeat | ✅ **aceito (2026-09-01)** — máscara no `OutputManager`, a jusante de `record()`; ⬜ **não implementado** (é o D6) |
+| 0017 | blackout × heartbeat | ✅ **aceito (2026-09-01)**, ✅ **máscara implementada (2026-09-04, `1030a7e`)** no `OutputManager`, a jusante de `record()` — decisões 1–5, 7 e 8, cada uma com teste; ⬜ decisão **6 por implementar** (exige `PROTOCOL_V = 2`; ver ADR-0031); ⬜ **9.C por medir** (rig). O **D6** — o botão no console — continua aberto |
 | 0018 | HardwareProfile | ✅ implementado (5 slices) |
 | 0019 | calibração por-output no HAL | ✅ |
 | 0020 | `WhiteMode::MinSubtract` | ✅ |
@@ -325,7 +325,7 @@ verdade) e o contrato de tipos em [ADR-0027](adr/0027-contrato-tipos-rust-typesc
 | D3 | **Shell do console**: HTTP + SSE + AppShell + design system + transporte + `load`/`unload` | ✅ **feito** |
 | D4 | **Preview WebGPU**: cópia downsampled, rate-limited, **lossy por contrato** (ADR-0015) | ⬜ depende de D3 |
 | D5 | **Timeline visual**: waveform de áudio, clips, keyframes — o `led-sequencer` já tem o modelo | ⬜ depende de D3 |
-| D6 | **Blackout**: botão + confirmação em duas fases + log auditável. **Sem atalho de teclado nesta fatia** (ADR-0017, decisão 10) | ⬜ **desbloqueado** — o B1 fechou a 2026-09-01. Não landa sem o **escape por device** |
+| D6 | **Blackout**: botão + confirmação em duas fases + log auditável. **Sem atalho de teclado nesta fatia** (ADR-0017, decisão 10) | ⬜ **desbloqueado, não landado** — o B1 fechou a 2026-09-01. A pré-condição **escape por device** deixou de faltar: aterrou com a máscara em `1030a7e` (2026-09-04). O bloqueio actual é outro — a decisão 6 (duas fases) exige `PROTOCOL_V = 2` e `PROTOCOL_V` é 1; ver ADR-0031, aceite e não implementado |
 | D7 | **Editor de layout**: desenhar modelos, posicionar no palco | ⬜ depende de D3 |
 | D8 | **Empacotamento**: app desktop com webview do SO | ⬜ depende de D3, D4 |
 

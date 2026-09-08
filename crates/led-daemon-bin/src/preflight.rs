@@ -317,12 +317,14 @@ mod tests {
                 first_universe: 1,
                 pixel_offset: 0,
                 pixel_count: 360,
+                escapa_blackout: false,
             },
             crate::output::Alvo {
                 addr: "192.168.2.156:4048".parse().unwrap(),
                 first_universe: 1,
                 pixel_offset: 360,
                 pixel_count: 360,
+                escapa_blackout: false,
             },
         ];
         assert!(!cfg.todos_loopback(), "um alvo de rede basta para NAO ser tudo loopback");
@@ -358,12 +360,14 @@ mod tests {
                 first_universe: 1,
                 pixel_offset: 0,
                 pixel_count: 360,
+                escapa_blackout: false,
             },
             crate::output::Alvo {
                 addr: "127.0.0.2:4048".parse().unwrap(),
                 first_universe: 1,
                 pixel_offset: 360,
                 pixel_count: 360,
+                escapa_blackout: false,
             },
         ];
         assert!(cfg.todos_loopback());
@@ -392,12 +396,14 @@ mod tests {
                 first_universe: 1,
                 pixel_offset: 0,
                 pixel_count: 360,
+                escapa_blackout: false,
             },
             crate::output::Alvo {
                 addr: "192.168.2.157:4048".parse().unwrap(),
                 first_universe: 1,
                 pixel_offset: 360,
                 pixel_count: 360,
+                escapa_blackout: false,
             },
         ];
 

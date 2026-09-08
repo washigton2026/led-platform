@@ -31,7 +31,20 @@ fn perfil_de(proto: &str) -> led_hardware_profile::HardwareProfile {
 }
 
 fn escrever(nome: &str, frames: &[(u64, u8)], px: u32) -> String {
-    let path = std::env::temp_dir().join(nome);
+    // **O pid no nome não é decoração.** Com um nome fixo, duas execuções concorrentes de
+    // `cargo test --workspace` são dois processos a escrever o MESMO ficheiro em
+    // `temp_dir()`: uma trunca o que a outra está a ler, e o desfecho é `UnexpectedEof` a
+    // meio do `.lumyx` — uma falha que parece regressão do loader e não é. Aconteceu, e
+    // está registado na FASE C.
+    //
+    // O discriminante certo é o **processo**, porque é essa a unidade que colide: dois
+    // `cargo test` são dois pids. Dentro de uma execução os chamadores já usam nomes
+    // distintos entre si, portanto o pid é suficiente e não esconde nada.
+    //
+    // Reutiliza o padrão que o repositório já usa para o mesmo fim — `sse_reconnect.rs:108`,
+    // `estado_por_alvo.rs:32`, `e2e_output.rs:418` — em vez de acrescentar `tempfile`, que
+    // seria uma segunda maneira de resolver um problema já resolvido.
+    let path = std::env::temp_dir().join(format!("{}-{nome}", std::process::id()));
     let f = std::fs::File::create(&path).unwrap();
     let mut w = ShowWriter::new(f, px).unwrap();
     for &(ts, v) in frames {

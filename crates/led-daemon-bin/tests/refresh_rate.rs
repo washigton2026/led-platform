@@ -26,7 +26,7 @@ impl Pacer for VPacer {
 }
 
 fn escrever(nome: &str) -> String {
-    let path = std::env::temp_dir().join(nome);
+    let path = std::env::temp_dir().join(format!("{}-{nome}", std::process::id()));
     let f = std::fs::File::create(&path).unwrap();
     let mut w = ShowWriter::new(f, 4).unwrap();
     for i in 0..4u32 {
