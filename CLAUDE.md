@@ -136,6 +136,55 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-09-08 — F7.2/Ubuntu RESOLVIDA: o gate media o processo, não o caminho de envio
+
+**Zero linhas de produção.** Só `crates/led-protocols/tests/no_alloc.rs`. A dívida estava aberta
+desde 2026-08-10c e a causa nunca tinha sido encontrada — porque não havia Linux nesta máquina
+para a provocar, e a única via honesta era **esperar pela próxima falha**. Ela chegou.
+
+**A regra de decisão estava escrita ANTES de haver dados, e é isso que dá valor ao veredito.**
+O instrumento de 2026-08-13d registou por escrito: `N > 0` ⇒ contaminação do processo, o defeito
+é do gate; `N == 0` ⇒ alocação real no DDP e o tamanho nomeia o culpado. Run **34193510776**,
+job `test (ubuntu-latest)`, passo **`Test`** (o `Clippy` ficou `skipped` — **não foi o clippy**):
+
+```
+DDP send path allocated 4 time(s) over 10000 frames
+  — tamanhos=[148, 608, 48, 96] bytes · fora da thread do teste=4 de 4
+```
+
+**`4 de 4`.** Nenhuma da thread do teste. **O `led-protocols` está limpo** — o caminho de envio
+DDP é livre de alocação, como o C2 (2026-07-25) o deixou. O que reprovava era o `ALLOCS` a
+incrementar em *toda* alocação do processo: o alocador é global, a janela media o que qualquer
+thread fizesse lá dentro, e o harness do `libtest` também corre. No macOS isso media zero; no
+Linux, quatro. **A hipótese estava medida a 0 em macOS e marcada como «por testar onde importa»** —
+foi testada onde importa.
+
+**A correcção atribui por thread, e FORTALECE a asserção em vez de a afrouxar.** A propriedade
+afirmada é *"o caminho de envio não aloca"*, e `send_universe` é síncrono e não gera threads: por
+construção, nada do caminho sob teste pode alocar noutra thread. O que sai da conta é ruído
+alheio. As de fora continuam **contadas e reportadas** como contexto — foi esse número que
+resolveu a investigação, e apagá-lo cegaria a próxima.
+
+**Falsificado 2×, e a assimetria da primeira é o argumento inteiro.** (A) a atribuição a devolver
+`false` sempre — o **teste principal PASSA** e só o controlo negativo reprova: sem ele, «filtrar
+por thread» e «desligar o contador» seriam indistinguíveis, e o gate ficaria vacuoso para sempre.
+(B) `vec![7u8; 900]` plantado no laço medido → o principal reprova com
+`tamanhos=[900, 900, …] · na thread do teste=10000`. **É o contraste empírico que fecha o
+diagnóstico:** uma alocação real tem a forma do payload; a do Ubuntu era `[148, 608, 48, 96]`.
+
+O segundo `#[test]` obrigou a serializar o ficheiro — os dois partilham a janela e os estáticos.
+Reusa o `static ALLOC_GATE: Mutex<()>` do `led-hal/tests/no_alloc.rs:37`, com
+`unwrap_or_else(|e| e.into_inner())` para um pânico não cascatear. **Não** um segundo mecanismo.
+
+**Invariants verified.** `led-protocols` **101 passed · 0 failed · 2 ignored**, exit lido sem pipe
+(KB-013). Clippy `-p led-protocols --all-targets -D warnings` exit 0. **Zero produção tocada** —
+`src/` intacto.
+
+**Pending, e é a fronteira honesta desta fatia.** **Verde local é NECESSÁRIO, não SUFICIENTE:**
+o macOS media 0 mesmo com o defeito, portanto não reproduz o flake. O veredito vinculante é o job
+`test (ubuntu-latest)` na CI — só ele exercita a plataforma onde a contaminação existe. Toolchain
+local **1.96.0** contra **1.98.1** na CI, e essa deriva já mordeu este repo uma vez.
+
 ### 2026-09-01 — FASE C: a porta física entra no schema, ganha um dono, e chega ao endereçamento
 
 **Sete commits, e os três primeiros não têm uma linha de Rust.** A ordem foi contrato primeiro,
