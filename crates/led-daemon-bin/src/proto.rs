@@ -12,9 +12,42 @@
 
 use crate::json::{escape, parse, Json};
 
+/// **Fonte única** das versões que este daemon fala (ADR-0031, decisão 2).
+///
+/// `PROTOCOL_V` e o `accepts` do `hello` **derivam daqui** — nenhum dos dois volta a ser um
+/// literal independente. É o precedente do `OutputProtocol::ALL` (ADR-0024): a lista deriva do
+/// sítio que já define o comportamento, e por isso **não pode divergir dele**. O `accepts:"[1]"`
+/// escrito à mão que vivia em `server.rs` era exactamente o defeito que isto fecha — um literal
+/// **sem um único leitor**, como o ADR o nomeou.
+///
+/// **Continua com um só elemento.** Esta fatia fixa a *derivação*, não o *conteúdo*: não cria a
+/// v2, não a torna operacional, e não implementa a negociação por ligação (decisão 3).
+pub const SUPORTADAS: &[u64] = &[1];
+
 /// Versão do protocolo. Uma versão desconhecida é **recusada explicitamente**, nunca
 /// degradada — a mesma regra que o `schema_version` do ADR-0018 já aplica.
-pub const PROTOCOL_V: u64 = 1;
+///
+/// Derivada de [`SUPORTADAS`]: enquanto houver uma só versão suportada, ela **é** o dialecto.
+/// No dia em que houver duas, esta constante deixa de poder significar «a versão da ligação» e
+/// é aí que a decisão 3 do ADR-0031 tem de ser implementada — o que **não** acontece aqui.
+pub const PROTOCOL_V: u64 = SUPORTADAS[0];
+
+/// Lista de versões suportadas, em JSON, derivada **exclusivamente** de [`SUPORTADAS`].
+///
+/// Existe para que a lista não volte a ser escrita à mão no sítio onde é emitida. Um literal ali
+/// é indistinguível do valor correcto enquanto houver uma só versão — e passa a estar errado,
+/// **em silêncio**, no dia em que houver duas.
+pub fn accepts_json() -> String {
+    let mut s = String::from("[");
+    for (i, v) in SUPORTADAS.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&v.to_string());
+    }
+    s.push(']');
+    s
+}
 
 // ── Códigos de erro (enumerados, do control-protocol.md) ─────────────────────
 

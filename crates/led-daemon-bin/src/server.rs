@@ -302,7 +302,8 @@ fn handle_connection(stream: UnixStream, cp: Arc<ControlPlane>) -> std::io::Resu
                 hello_done = true;
                 Ok(vec![
                     ("engine", jstr(concat!("lumyx-daemon/", env!("CARGO_PKG_VERSION")))),
-                    ("accepts", "[1]".to_string()),
+                    // ADR-0031 decisão 2: derivado de `proto::SUPORTADAS`, nunca literal.
+                    ("accepts", crate::proto::accepts_json()),
                     ("client", jstr(client)),
                 ])
             }

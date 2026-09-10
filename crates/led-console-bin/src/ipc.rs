@@ -75,7 +75,19 @@ impl Ligacao {
             stream.try_clone().map_err(|e| Erro::Offline(e.to_string()))?,
         );
         let mut l = Ligacao { stream, leitor, proximo_id: 1 };
-        l.pedir("hello", &format!(r#","client":"{}""#, json::escape(cliente)))?;
+        // ADR-0031 decisão 2: `accepts` é **bilateral** — o cliente também declara o que fala,
+        // e a lista é **derivada**, nunca escrita à mão. Reusa `proto::accepts_json()` em vez de
+        // um segundo `SUPORTADAS` aqui: o gate `os_limites_sao_os_do_gs3_e_nao_copias` já fixa
+        // que este crate não guarda cópias próprias das constantes do protocolo.
+        // O `v` da linha continua **1** (decisão 1: o `hello` é o chão, e é permanente).
+        l.pedir(
+            "hello",
+            &format!(
+                r#","client":"{}","accepts":{}"#,
+                json::escape(cliente),
+                led_daemon_bin::proto::accepts_json()
+            ),
+        )?;
         Ok(l)
     }
 
