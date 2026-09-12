@@ -992,3 +992,92 @@ closure_criteria: |
   `closed` deste ledger.
 review_by: "antes de qualquer trabalho que dependa de sincronizacao multi-no (net_time / SyncedCluster), e antes do G4 com mais de um controlador energizado."
 ```
+
+## TD-021 — O `led-console-bin` nao compila em Windows: importa um modulo `#[cfg(unix)]` do daemon
+
+```yaml
+td_id:     TD-021
+title:     "`limits.rs` deriva `MAX_BODY` e `BACKOFF_MAX` de `led_daemon_bin::server`, que so existe em unix (IPC sobre UDS) — E0433 no Windows"
+severity:  Medium
+status:    open
+origin:    "Observado no job `windows (allow-failure)` do PR #5, run 34683654404 (SHA 51d8241, 2026-09-12). NAO e regressao desse PR — ver PROVA DE ALHEAMENTO."
+context: |
+  SINTOMA, lido do log da CI e nao inferido:
+
+      error[E0433]: cannot find `server` in `led_daemon_bin`
+      crates/led-console-bin/src/limits.rs:8, :36, :47
+
+  CAUSA, lida no codigo. `crates/led-daemon-bin/src/lib.rs:37-38`:
+
+      #[cfg(unix)]
+      pub mod server;
+
+  e o mesmo gate no re-export da linha 48. As duas constantes que o console consome vivem
+  DENTRO desse modulo — `MAX_LINE` em `server.rs:35` e `REPLY_TIMEOUT` em `server.rs:42` —
+  e nenhuma tem `cfg` proprio: herdam o do modulo. O gate e correcto na origem: o `server`
+  e o IPC sobre **UDS**, que nao existe em Windows. O que nao e cross-plataforma e o
+  **consumidor**: o `led-console-bin` nao declara gate nenhum e e compilado em todas as
+  plataformas da matriz.
+
+  EXTENSAO MEDIDA (grep, nao estimada). Cinco referencias a `led_daemon_bin::server` em
+  `limits.rs`, das quais o compilador nomeia **tres** — `:8`, `:36`, `:47`. As outras duas
+  (`:74`, `:88`) estao dentro do `mod tests`, que comeca em `:67`. Mais **4 ficheiros de
+  teste** do mesmo crate importam `server::{ControlPlane, Server}` sem gate: `sse.rs`,
+  `http_server.rs`, `ipc_contra_o_daemon.rs`, `sse_reconnect.rs`. Total: **1 ficheiro de
+  producao + 4 de teste**.
+
+  IMPACTO. O crate do console nao compila em Windows, logo nada dele corre la: nem os
+  testes, nem o binario. Isso toca duas coisas ja escritas no roadmap — o **G5**
+  (determinismo Linux/Windows; o probe `scripts/determinism_probe.sh` existe e nunca correu
+  em Windows) e o **D8 / H1** (empacotamento desktop com webview do SO).
+
+  A RAIZ E O ADR-0014, NAO O `limits.rs` — e esta e a parte que nao pode ser arredondada.
+  O `E0433` e um **sintoma de superficie**: o import cruza um `cfg` que nao devia cruzar.
+  A causa a montante e a decisao de transporte do IPC — **UDS owner-only** (ADR-0014), que
+  o Windows nao tem. Prova de que o sintoma nao e o problema: o gate esta em
+  `led-daemon-bin`, e o proprio `led-daemon` **tambem nao serve** em Windows pela mesma
+  razao. Fazer o `led-console-bin` compilar la produziria **um crate que compila e um
+  console que nao fala com daemon nenhum**.
+
+  CONSEQUENCIA PARA O G5 E O D8/H1: os dois **herdam uma decisao de arquitectura de
+  transporte IPC**, nao um fix de import. Quem os abrir tem de decidir primeiro por onde
+  o console fala com o daemon numa plataforma sem UDS — e isso e emenda ao ADR-0014, com
+  o ADR-0026 §11-12 (limites **derivados**, nunca reescritos) como restricao a preservar.
+  Planear o G5 ou o D8 a contar com um fix de uma linha aqui seria planear contra o facto.
+
+  PROVA DE ALHEAMENTO ao PR #5 (tres factos independentes):
+
+  1. `git blame`: a linha `:8` e de `4455a908` (2026-08-09) e a `:36` de `ffd82774`
+     (2026-08-10). As duas nascem com a fundacao do `led-console-bin`, ha ~34 dias.
+  2. `git log -1 -- crates/led-console-bin/src/limits.rs` = `ffd82774`. O ficheiro **nao e
+     tocado** desde 2026-08-10; o PR #5 nao lhe mexeu numa linha.
+  3. O changelog de 2026-08-10c ja registava o job Windows vermelho, e o de 2026-09-08
+     nomeia esta causa por escrito. E defeito conhecido, nunca aberto como divida.
+
+  EVIDENCIA PARA A CLASSIFICACAO — os dois lados, e o veredito no fim.
+
+  Puxa para CIMA: o crate que nao compila e **o console**, que e exactamente o que o D8
+  empacota; o G5 exige correr em Windows e nao consegue; e a divida esta silenciosa ha 34
+  dias precisamente porque o job e `allow-failure` — um vermelho permanente ensina a nao
+  olhar, e foi o que aconteceu.
+
+  Puxa para BAIXO: o Windows e `continue-on-error` **por decisao de arquitectura**
+  (`ci.yml:3-4`, ADR-0013: *«Windows e suporte e NAO orienta a arquitectura»*); nada hoje
+  depende dele; e a raiz e o UDS do ADR-0014, portanto corrigir este E0433 **nao** daria um
+  LUMYX funcional em Windows — daria um crate que compila.
+
+  VEREDITO: **Medium** (decidido pelo responsavel em 2026-09-12, sobre esta evidencia).
+  Nao `High` porque a **alcancabilidade nao se cumpre** — e o mesmo argumento que derrubou
+  o `High` do TD-019, e aplica-lo aqui mantem a escala coerente. Nao `Low` porque o `Low`
+  deste ledger e o TD-018, uma lacuna de `--help` mitigada pela mensagem de recusa; isto e
+  uma plataforma inteira que nao compila, no caminho escrito do G5/D8. `Medium` e a forma
+  do TD-017 e do TD-014: defeito real e nomeado, sem consumidor bloqueado hoje, que exige
+  decisao **antes** do marco que depende dele.
+
+  NENHUM FIX PROPOSTO, por instrucao. Registo so a restricao que qualquer correccao futura
+  tera de respeitar, e que e o que a torna decisao e nao edicao: o ADR-0026 §11-12 exige que
+  estes limites sejam **derivados** do daemon, *«nunca reescritos»* — o proprio gate
+  `os_limites_sao_os_do_gs3_e_nao_copias` existe para impedir uma segunda copia. Qualquer
+  saida tem de preservar isso.
+review_by: "antes de abrir trabalho no G5 (determinismo Linux/Windows) ou no D8 (empacotamento desktop) — o que vier primeiro. Nao bloqueia nada antes disso."
+```
