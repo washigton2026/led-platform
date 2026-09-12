@@ -913,3 +913,82 @@ closure_criteria: |
   entrada `closed` deste ledger.
 review_by: "fatia de implementacao da FASE C (ADR-0030). NAO correr o daemon contra hardware com um preset de pixels_per_universe != 170 ou com RGBW em Art-Net/sACN antes disso."
 ```
+
+## TD-020 — A guarda de monotonia do `SharedClock` nao e atomica, e o relogio do show pode recuar
+
+```yaml
+td_id:     TD-020
+title:     "`now_ms` faz load-calcula-store em vez de `fetch_max`: uma perda de actualizacao deixa um leitor observar o relogio a andar para tras"
+severity:  High
+status:    open
+origin:    "Observado na fatia 1-A do ADR-0031 (2026-09-10). NAO e regressao dessa fatia — ver PROVA DE ALHEAMENTO."
+context: |
+  SINTOMA. `cargo test --workspace` reprovou numa de duas medicoes, em
+  `shared_clock::tests::concurrent_readers_never_see_rewind_during_correction`
+  (`crates/led-hal/src/shared_clock.rs:198`), com a mensagem
+  "a reader observed a backward jump under concurrency". A segunda medicao deu
+  1131 passed / 0 failed. Em isolamento: 10 execucoes, 10 verdes.
+
+  CAUSA, lida no codigo e nao inferida do sintoma. `crates/led-hal/src/shared_clock.rs`,
+  `pub fn now_ms` (linhas 78-81):
+
+      let prev = self.last_now.load(Ordering::Acquire);
+      let next = adjusted.max(prev);
+      self.last_now.store(next, Ordering::Release);
+      next
+
+  Sao tres operacoes atomicas separadas, nao um read-modify-write. E a perda de
+  actualizacao classica: a thread A le `prev`, a thread B le o MESMO `prev`, B calcula
+  um `next` maior e guarda-o, e A guarda por cima o seu `next` menor. Quem ja devolveu
+  o valor maior le na iteracao seguinte um `last_now` rebaixado e devolve um valor
+  MENOR que o anterior — o recuo que a assercao apanha.
+
+  `AtomicU64::fetch_max` (estavel desde o Rust 1.45) faz a mesma coisa num so RMW e
+  fecha a janela. NAO foi aplicado: e `led-hal`, e fora do escopo da fatia que o
+  encontrou.
+
+  PRECONDICAO DO DEFEITO, medida e nao suposta. O recuo exige que `adjusted` DESCA,
+  ou seja um `set_offset_ms` para tras concorrente com leituras. Sem isso `adjusted`
+  e monotono por thread e `max(adjusted, prev)` nunca regride, mesmo com o `store` a
+  ser pisado. Por isso o defeito e probabilistico e so aparece sob contencao — foi
+  visto sob `cargo test --workspace` (paralelo) e nunca em isolamento.
+
+  PROVA DE ALHEAMENTO a fatia 1-A do ADR-0031 (tres factos independentes):
+
+  1. O diff da fatia toca 0 ficheiros em `crates/led-hal/`.
+  2. `crates/led-hal/Cargo.toml` NAO declara `led-daemon-bin` nem `led-console-bin`
+     (grep exit 1). Nao existe caminho de dependencia por onde a alteracao pudesse
+     alcancar este crate.
+  3. O mesmo teste passou na baseline `e6096ed` (suite serial, 1128 passed).
+
+  POR QUE `High`, e o que baixaria a classificacao. A propriedade que o codigo declara
+  — o comentario diz "Monotonicity: never go backward", e o teste chama-lhe "the show
+  clock never rewinds" — NAO e garantida pela implementacao. `SharedClock` e o relogio
+  usado pelo `net_time` (sincronizacao multi-no) e pelo `Pacing::Absolute` do
+  `led-player`, e `net_time::sync_to` e exactamente o caminho que aplica correccoes
+  para tras. A correccao e de uma linha.
+
+  ALCANCABILIDADE EM PRODUCAO: **NAO MEDIDA**. O rig multi-no nunca foi energizado, e
+  num show de um so no `set_offset_ms` nao e chamado durante a reproducao. Se a
+  auditoria decidir que "declarado mas nao alcancavel hoje" pesa mais que "invariante
+  declarado e falso", isto desce a Medium. Registado a High para que a decisao seja
+  tomada por alguem e nao por omissao.
+
+closure_criteria: |
+  Fecha quando as tres se verificarem:
+
+  A) `now_ms` usa um read-modify-write atomico unico (`fetch_max`) em vez de
+     load/max/store.
+  B) CONTROLO NEGATIVO OBRIGATORIO: repor o `load`+`store` tem de REPROVAR
+     `concurrent_readers_never_see_rewind_during_correction`. Como o defeito e
+     probabilistico, o controlo tem de ser repetido N vezes e reprovar em pelo menos
+     uma — e o N usado tem de ficar escrito na evidencia. Um controlo que corra uma
+     vez e passe NAO prova nada (KB-012).
+  C) O teste corre em `cargo test --workspace` (paralelo, com contencao), nao so
+     isolado — foi a contencao que o revelou, e um gate que so corre sozinho voltaria
+     a nao o ver.
+
+  Mais `evidence_ref` e `negative_control` no schema de fecho, como qualquer entrada
+  `closed` deste ledger.
+review_by: "antes de qualquer trabalho que dependa de sincronizacao multi-no (net_time / SyncedCluster), e antes do G4 com mais de um controlador energizado."
+```

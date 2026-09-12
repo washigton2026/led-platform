@@ -12,9 +12,42 @@
 
 use crate::json::{escape, parse, Json};
 
+/// **Fonte única** das versões que este daemon fala (ADR-0031, decisão 2).
+///
+/// `PROTOCOL_V` e o `accepts` do `hello` **derivam daqui** — nenhum dos dois volta a ser um
+/// literal independente. É o precedente do `OutputProtocol::ALL` (ADR-0024): a lista deriva do
+/// sítio que já define o comportamento, e por isso **não pode divergir dele**. O `accepts:"[1]"`
+/// escrito à mão que vivia em `server.rs` era exactamente o defeito que isto fecha — um literal
+/// **sem um único leitor**, como o ADR o nomeou.
+///
+/// **Continua com um só elemento.** Esta fatia fixa a *derivação*, não o *conteúdo*: não cria a
+/// v2, não a torna operacional, e não implementa a negociação por ligação (decisão 3).
+pub const SUPORTADAS: &[u64] = &[1];
+
 /// Versão do protocolo. Uma versão desconhecida é **recusada explicitamente**, nunca
 /// degradada — a mesma regra que o `schema_version` do ADR-0018 já aplica.
-pub const PROTOCOL_V: u64 = 1;
+///
+/// Derivada de [`SUPORTADAS`]: enquanto houver uma só versão suportada, ela **é** o dialecto.
+/// No dia em que houver duas, esta constante deixa de poder significar «a versão da ligação» e
+/// é aí que a decisão 3 do ADR-0031 tem de ser implementada — o que **não** acontece aqui.
+pub const PROTOCOL_V: u64 = SUPORTADAS[0];
+
+/// Lista de versões suportadas, em JSON, derivada **exclusivamente** de [`SUPORTADAS`].
+///
+/// Existe para que a lista não volte a ser escrita à mão no sítio onde é emitida. Um literal ali
+/// é indistinguível do valor correcto enquanto houver uma só versão — e passa a estar errado,
+/// **em silêncio**, no dia em que houver duas.
+pub fn accepts_json() -> String {
+    let mut s = String::from("[");
+    for (i, v) in SUPORTADAS.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&v.to_string());
+    }
+    s.push(']');
+    s
+}
 
 // ── Códigos de erro (enumerados, do control-protocol.md) ─────────────────────
 
@@ -135,7 +168,12 @@ impl Request {
             return Err(bad(
                 id,
                 code::UNSUPPORTED_VERSION,
-                format!("v={v}; este daemon aceita [{PROTOCOL_V}]"),
+                // ADR-0031 decisão 2: a lista é **derivada** de `SUPORTADAS`, nunca escrita à
+                // mão. A forma anterior construía a lista a partir do **escalar** `PROTOCOL_V`
+                // — que é só `SUPORTADAS[0]` — e ficava desactualizada no instante em que
+                // houvesse uma segunda versão. Reusa `accepts_json()` em vez de um segundo
+                // formatador: é o mesmo texto que o `hello` já publica.
+                format!("v={v}; este daemon aceita {}", accepts_json()),
             ));
         }
         let id = id.ok_or_else(|| bad(None, code::BAD_REQUEST, "falta `id`"))?;
@@ -280,6 +318,66 @@ mod tests {
         let e = req(r#"{"v":99,"id":5,"cmd":"ping"}"#).unwrap_err();
         assert_eq!(e.err.code, code::UNSUPPORTED_VERSION);
         assert_eq!(e.id, Some(5), "o id tem de sobreviver para o cliente correlacionar");
+    }
+
+    /// **Fatia 1-B** — a recusa por versão nomeia a lista **derivada** de `SUPORTADAS`.
+    ///
+    /// *Que falsidade este teste impede?* Que a mensagem volte a construir a lista a partir de
+    /// `PROTOCOL_V` (um escalar) e fique a mentir sobre o que o daemon aceita no dia em que
+    /// `SUPORTADAS` ganhar uma versão.
+    ///
+    /// **Limite honesto:** com uma só versão suportada, «derivado» e «primeiro elemento escrito
+    /// à mão» produzem **o mesmo texto** — este teste só discrimina sob a mutação
+    /// `SUPORTADAS = &[1,2]`. É a mesma indistinguibilidade do ADR-0029 §8. O gate estrutural
+    /// abaixo é que fecha a janela no estado de repouso.
+    #[test]
+    fn a_recusa_de_versao_nomeia_a_lista_derivada_de_suportadas() {
+        assert!(!SUPORTADAS.is_empty(), "SUPORTADAS vazio tornaria este teste vacuoso");
+
+        // Construído AQUI a partir da fonte, e deliberadamente **não** por `accepts_json()`:
+        // chamá-la compararia a função consigo própria e passaria com qualquer valor.
+        let esperado = format!(
+            "[{}]",
+            SUPORTADAS.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+        );
+
+        // Uma versão garantidamente fora do conjunto, seja ele qual for — para o teste
+        // continuar a exercitar o ramo da recusa sob a mutação.
+        let fora = SUPORTADAS.iter().max().expect("não vazio") + 1;
+        let e = req(&format!(r#"{{"v":{fora},"id":7,"cmd":"ping"}}"#)).unwrap_err();
+
+        assert_eq!(e.err.code, code::UNSUPPORTED_VERSION);
+        assert!(
+            e.err.detail.contains(&esperado),
+            "a recusa tem de nomear a lista derivada de SUPORTADAS; detail={:?}, esperava conter {:?}",
+            e.err.detail,
+            esperado
+        );
+    }
+
+    /// **Fatia 1-B, gate estrutural** — ninguém volta a escrever a lista à mão no caminho da
+    /// recusa. Discrimina **sempre**, incluindo com uma só versão, que é onde o teste
+    /// comportamental acima é cego.
+    ///
+    /// Corta em `mod tests` pelo precedente de `led-console-bin` (`main.rs:254`,
+    /// `surface_gate.rs:51`): um gate não pode ser o sítio onde o proibido é escrito — e este
+    /// ficheiro escreve `[{PROTOCOL_V}]` no doc-comment do teste anterior.
+    #[test]
+    fn a_lista_de_versoes_nao_e_construida_a_mao_em_producao() {
+        const FONTE: &str = include_str!("proto.rs");
+        let producao = FONTE.split("mod tests").next().expect("há código antes dos testes");
+
+        assert!(
+            producao.contains("accepts_json()"),
+            "extração vazia seria um gate vacuoso (KB-012): a produção tem de chamar accepts_json()"
+        );
+
+        let proibido = format!("[{{{}}}]", "PROTOCOL_V");
+        assert!(
+            !producao.contains(&proibido),
+            "a produção de proto.rs constrói a lista de versões à mão ({proibido}); \
+             deriva-a de SUPORTADAS via accepts_json()"
+        );
     }
 
     #[test]

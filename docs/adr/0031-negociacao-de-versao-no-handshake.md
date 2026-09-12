@@ -1,6 +1,12 @@
 # ADR-0031 — Negociação de versão no handshake: o `hello` é o chão, e a ligação tem um dialecto
 
-- **Estado:** aceito (pré-implementação — fecha o contrato antes do código)
+- **Estado:** 🟢 **aceito** — a **derivação** do `accepts` está implementada (decisão 2, metade
+  emissora): no `hello` (`crates/led-daemon-bin/src/server.rs:306`, fatia 1-A, `3da3b8a`) e na
+  recusa por versão (`crates/led-daemon-bin/src/proto.rs:176`, fatia 1-B, `b1dbac3`), as duas
+  derivadas de `proto::SUPORTADAS`. 🟡 **A decisão 2 está incompleta:** o daemon **não lê** o
+  `accepts` do pedido — a metade bilateral fecha com a decisão 3. ⬜ **Decisões 1, 3, 4, 5, 6 e
+  7 por implementar** — exigem estado de versão **por ligação** e uma segunda versão suportada;
+  `SUPORTADAS` tem um só elemento e `PROTOCOL_V` é 1.
 - **Data:** 2026-08-31
 - **Decide sobre:** o handshake do IPC (`led-daemon-bin`: `proto.rs`, `server.rs`) e os dois
   clientes (`ledctl`, `led-console-bin`). **Não** toca `led-daemon` (ADR-0023, congelado),
@@ -188,7 +194,9 @@ exprimível. A lista não custa mais e não fecha essa porta.
 
 ## Invariantes que precisam de teste novo na implementação
 
-Listados, **não implementados**:
+**Estado por invariante (2026-09-11).** O **3** está implementado e com gate; o **6** já era
+verdade e continua a valer; o **2** tem teste, mas a semântica fica vacuosa enquanto nada ler o
+`accepts` do pedido. Os **1**, **4** e **5** continuam **sem código**:
 
 1. **`hello` a `v:1` é aceite por qualquer versão do daemon** — incluindo um daemon que já não
    tenha a v1 no `accepts`. O chão não é negociável.

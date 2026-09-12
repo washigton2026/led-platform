@@ -341,3 +341,84 @@ fn um_passo_de_cada_lado_do_teto_muda_o_veredito() {
     let n = c2.r.read_line(&mut sobra).unwrap_or(0);
     assert_eq!(n, 0, "a ligação devia ter fechado; o resto da linha voltou como pedido: {sobra}");
 }
+
+// ── ADR-0031, fatia 1-A: `accepts` derivado da fonte única ───────────────────
+//
+// O que estes três testes **não** provam, escrito para não ser arredondado: não há v2, não há
+// estado de versão por ligação, e a decisão 3 (`max(∩)`) continua por implementar. O invariante
+// 4 do ADR — resposta na versão *da ligação* — é **NOT MEASURED**, e não pode deixar de o ser
+// com uma só versão suportada: com um elemento, «versão da ligação» e «versão do daemon» são
+// indistinguíveis. É a lição do ADR-0029 §8, onde com um alvo «por nó» e «agregado» eram iguais.
+
+/// **I1** — o `hello` em `v:1` continua a ser aceite. É o chão da decisão 1 do ADR-0031, e o
+/// chão não é negociável: nenhuma mudança em `SUPORTADAS` o pode derrubar.
+#[test]
+fn o_hello_em_v1_continua_a_ser_aceite() {
+    let f = subir("adr0031-i1");
+    let mut c = Cliente::ligar(&f).expect("ligar");
+    let r = c.hello();
+    assert!(r.contains(r#""ok":true"#), "o hello em v:1 tem de ser aceite; linha: {r}");
+}
+
+/// **I2** — `accepts` **ausente** no pedido continua a ser lido como `[1]` (decisão 2).
+///
+/// Um cliente v1 literal, que nunca ouviu falar do campo, não pode passar a ser recusado por
+/// esta fatia. Duas asserções, porque a primeira sozinha não chega: além de o `hello` ser
+/// aceite, a ligação tem de ficar mesmo **estabelecida** — se o handshake fosse aceite mas
+/// não marcasse `hello_done`, o comando seguinte levaria `unauthenticated` e o campo ausente
+/// teria partido a ligação num sítio diferente daquele onde se olha.
+#[test]
+fn accepts_ausente_no_pedido_continua_a_ser_lido_como_v1() {
+    let f = subir("adr0031-i2");
+    let mut c = Cliente::ligar(&f).expect("ligar");
+
+    let r = c.envia(r#"{"v":1,"id":1,"cmd":"hello","client":"cliente-v1-literal"}"#);
+    assert!(
+        r.contains(r#""ok":true"#),
+        "um cliente sem o campo `accepts` tem de continuar a ser aceite; linha: {r}"
+    );
+
+    let p = c.envia(r#"{"v":1,"id":2,"cmd":"ping"}"#);
+    assert!(
+        p.contains(r#""pong":true"#),
+        "a ligação tinha de ficar estabelecida pelo hello sem `accepts`; linha: {p}"
+    );
+}
+
+/// **I3** — o `accepts` da resposta é **derivado** de `proto::SUPORTADAS`, nunca um literal.
+///
+/// O esperado é construído **aqui**, a partir da fonte única, e deliberadamente **não** por
+/// chamada a `accepts_json()` — isso compararia a função consigo própria e passaria com
+/// qualquer valor. Assim:
+///
+/// - um literal plantado no `server.rs` (`"[1,2]"`) faz o observado divergir do derivado → reprova;
+/// - acrescentar uma versão a `SUPORTADAS` move **os dois lados juntos** → continua verde, que
+///   é exactamente a propriedade que o ADR-0031 decisão 2 exige («não pode divergir dele»).
+#[test]
+fn o_accepts_do_hello_e_derivado_da_fonte_unica() {
+    // Sem esta guarda o teste seria vacuoso com `SUPORTADAS` vazio: o esperado seria `[]` e
+    // qualquer coisa que também fosse `[]` passaria. Zero extracções é FALHA, nunca "nada a
+    // verificar" (KB-012).
+    assert!(
+        !led_daemon_bin::proto::SUPORTADAS.is_empty(),
+        "SUPORTADAS vazio tornaria este teste vacuoso"
+    );
+
+    let esperado = format!(
+        "[{}]",
+        led_daemon_bin::proto::SUPORTADAS
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+
+    let f = subir("adr0031-i3");
+    let mut c = Cliente::ligar(&f).expect("ligar");
+    let r = c.hello();
+
+    assert!(
+        r.contains(&format!(r#""accepts":{esperado}"#)),
+        "o `accepts` do hello tem de ser {esperado}, derivado de SUPORTADAS; linha: {r}"
+    );
+}
