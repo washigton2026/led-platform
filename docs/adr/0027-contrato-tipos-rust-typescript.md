@@ -107,6 +107,10 @@ O contrato atravessa o IPC v1, que tem `v` negociado. Portanto:
 - **Vocabulário** (um **comando novo** no `enum Cmd`): **incompatível**, e exige
   `PROTOCOL_V` novo. Ver **Emenda 3** — esta classe faltava, e a sua ausência produziu uma
   divergência entre este ADR e o ADR-0026 §9-quater.
+- **Evento novo** (um **tipo de evento novo** no canal `subscribe` existente — payload de
+  evento, **não** variante do `enum Cmd`): **aditivo**. Regenerar e commitar o `.ts`, **sem
+  bump de `PROTOCOL_V`**. Ver **Emenda 4** — a direcção do fluxo é o que separa esta classe
+  da anterior.
 - **Nunca** se remove um código de erro para "limpar" o contrato: `no_show_loaded` significa o
   mesmo dos dois lados desde a GS1.6, e foi para isso que o contrato foi congelado.
 
@@ -284,6 +288,73 @@ novo, não capacidade nova. Isso é trabalho da implementação, não desta emen
 **Não implementado.** Nenhuma linha de Rust foi escrita. `PROTOCOL_V` continua **1**, o
 `enum Cmd` continua com 12 comandos, e não existe v2.
 
+## Emenda 4 (2026-09-13) — **um tipo de evento novo é aditivo, e a direcção do fluxo é a razão**
+
+**Estado:** decisão do operador. Fecha a lacuna que a Emenda 3 abriu ao nomear três classes e
+não a quarta.
+
+**A lacuna, e como apareceu.** A Emenda 3 fechou o vocabulário **de comandos** e a tabela
+ficou com quatro linhas — campo novo, variante nova, comando novo, remoção/renomeação.
+**Nenhuma nomeia um tipo de evento novo.** Um evento não é campo nem variante de uma união de
+respostas, e não é comando; caía **fora das quatro**, exactamente como o comando caía fora das
+duas antes da Emenda 3. A lacuna foi encontrada ao instruir o caminho de dados do preview
+(ADR-0015), cuja opção escolhida publica uma cópia lossy **como evento** — e a classificação
+decide se isso exige `PROTOCOL_V = 2` ou não.
+
+**A decisão: aditivo.** Um tipo de evento novo no canal `subscribe` existente regenera o
+contrato TypeScript e **não** faz bump da versão do protocolo.
+
+**A razão não é de forma — é a direcção do fluxo, e é o que impede esta emenda de contradizer
+a Emenda 3.** O argumento da Emenda 3 foi **operacional**: sob a alternativa aditiva, um
+cliente que conhece o comando **mostra-o na superfície**, o daemon antigo responde
+`unknown_command`, e o resultado é *«uma resposta correcta que descreve um efeito
+inexistente»*. Essa falha exige que o **cliente** seja quem ganha a capacidade e o **daemon**
+quem é antigo — porque só o cliente tem superfície onde prometer.
+
+Um evento corre no sentido oposto: quem ganha a capacidade é o **daemon**, e quem pode estar
+atrasado é o cliente. **Não há botão que prometa.** Os três skews, medidos e não presumidos:
+
+| Skew | Comportamento | Classe de falha |
+|---|---|---|
+| Cliente novo, **daemon antigo** | o evento **nunca chega**; a superfície que o consome fica vazia | **ausência**, não falsa promessa |
+| **Cliente antigo** (bundle em cache), daemon novo | `descreveEvento` (`console-web/src/eventos.ts:17-34`) é um `switch` exaustivo **sem `default`**: cai fora do fim e devolve `undefined` em runtime, apesar de o tipo declarar `string` | defeito **visível** no registo de eventos |
+| Ambos novos | funciona | — |
+
+A falsa promessa que a Emenda 3 recusou é **estruturalmente impossível** aqui. É por isso que
+a mesma política dá respostas opostas para as duas direcções, sem inconsistência.
+
+**O mecanismo aditivo já está montado, e é verificável.** `EventoPayload` é uma união
+discriminada no contrato **gerado**
+(`crates/led-console-bin/contract/lumyx-contract.generated.ts:155`), e o `switch` sem
+`default` do `eventos.ts` **deixa de compilar** quando ela ganha um membro. É literalmente o
+efeito que o §6 declara desejado para a classe «variante nova»: o gate obriga alguém a decidir
+o que mostrar, em vez de o evento cair num ramo genérico e desaparecer do ecrã. Esta emenda
+não cria mecanismo — reconhece que o que existe já é o da classe aditiva.
+
+**Precedente, com a distinção que ele não cobre.** O `outputs` do ADR-0029 §8 (2026-08-16)
+entrou como **campo numa resposta que já existia**, e o registo dessa fatia é explícito: *«o
+IPC v1 não foi tocado, e isso é a decisão»*. É o precedente de disciplina — dado novo não é
+vocabulário novo — mas **não** é o análogo exacto: aquele era um campo, este é um membro de
+união. O análogo exacto é a **segunda linha** da tabela da Emenda 3, e é dela que esta classe
+herda o custo.
+
+**Custo residual aceite, e nomeado em vez de arredondado.** O `undefined` do cliente em cache
+é real. Não é crash e não é silêncio — é uma linha errada no registo até o browser recarregar,
+e o próprio comentário do `eventos.ts` explica que o alarme foi desenhado para compilação, não
+para runtime. Endurecê-lo (um ramo `never` com fallback legível) é **melhoria própria**, não
+condição desta emenda, porque vale para os sete eventos que já existem e não só para o
+próximo.
+
+**Uma questão que esta emenda NÃO resolve, e não deve.** No primeiro skew, a superfície que
+consome o evento fica vazia — e uma área de preview permanentemente preta **sem dizer porquê**
+é a classe do ADR-0026 §9 (*observabilidade não é evidência física*), agora por ausência. Se
+isso exige um indicador é **desenho da superfície**, não política de contrato. Fica nomeado
+para quem construir o preview.
+
+**Não implementado.** Nenhuma linha de Rust ou de TypeScript foi escrita. `PROTOCOL_V`
+continua **1**, o `enum Cmd` continua com 12 comandos, e `EventoPayload` continua com os sete
+membros que já tinha.
+
 ## Critério de reversão
 
 Se o repo alguma vez adotar `serde` por outra razão de peso, geração por schema passa a ser
@@ -294,3 +365,9 @@ mais barata que esta e este ADR deve ser revisitado. Enquanto o JSON for escrito
 de um daemon bilingue exceder o benefício num transporte que é owner-only e same-host — a
 alternativa não é «voltar ao aditivo em silêncio»: é uma decisão nova, com a mesma
 formalidade, que tem de dizer **onde** a incompatibilidade passa a aparecer ao operador.
+
+**Da Emenda 4:** o argumento inteiro é *«não há botão que prometa»*. Ele cai no dia em que um
+evento passar a **habilitar** um controlo na superfície — aí o cliente volta a prometer com
+base numa capacidade que o daemon antigo não tem, a assimetria desaparece, e a classe desse
+evento é **vocabulário**, não aditivo. O gatilho não é o número de eventos: é o primeiro
+evento cuja ausência mude o que o operador **pode clicar**.
