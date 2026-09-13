@@ -459,10 +459,37 @@ fn o_sacn_rgbw_honra_os_128_px_por_universo_e_os_quatro_canais() {
 
     assert_eq!(dg.len(), 3, "300 px a 128/universo são 3 universos; a 170 seriam 2");
 
-    // Cada datagrama sACN leva um universo; o maior payload tem de caber em 128 × 4 = 512
-    // canais, e não em 170 × 3 = 510.
-    for d in &dg {
-        assert!(d.len() >= 126, "datagrama sACN demasiado curto: {}", d.len());
+    // ── Os quatro canais, medidos no fio ───────────────────────────────────────────────
+    //
+    // ATENÇÃO ao que **não** discrimina, porque foi assim que este teste passou a mentir:
+    // os três datagramas medem **638 B** (126 de cabeçalho + 512 canais **preenchidos**)
+    // com 4 canais *e* com 3 — medido, não deduzido. Qualquer asserção sobre `d.len()`,
+    // exacta ou por limite, é **cega** a um colapso de formato. A versão anterior
+    // (`d.len() >= 126`) passava com o `ColorFormat` reduzido a `Rgb`, e o nome do teste
+    // prometia uma propriedade que ele não verificava (KB-012).
+    //
+    // O que discrimina é o **período** do padrão de pixel. `branco(300)` é
+    // `(r=200, g=100, b=50)`. Com `Rgbw(Grb, MinSubtract)` (ADR-0020): `W = min = 50`, o
+    // resíduo é `(150, 50, 0)`, e em ordem GRB seguido do branco sai `[50, 150, 0, 50]` —
+    // **quatro** bytes. Colapsado para `Rgb(Grb)` sairia `[100, 200, 50]` — **três** — e o
+    // desalinhamento já se vê no pixel 0.
+    const CANAIS: usize = 126; // primeiro byte de canal no datagrama sACN, medido
+    const PIXEL: [u8; 4] = [50, 150, 0, 50]; // resíduo em GRB + branco subtraído
+
+    for (i, d) in dg.iter().enumerate() {
+        assert_eq!(d.len(), 638, "datagrama {i}: 126 de cabeçalho + 512 canais");
+        // Oito pixels chegam para fixar o período: um formato de três canais desalinha
+        // logo no primeiro e nunca mais volta a coincidir.
+        for p in 0..8 {
+            let o = CANAIS + p * 4;
+            assert_eq!(
+                &d[o..o + 4],
+                &PIXEL[..],
+                "datagrama {i}, pixel {p}: esperava os 4 canais {:?}, veio {:?}",
+                PIXEL,
+                &d[o..o + 4]
+            );
+        }
     }
 }
 
