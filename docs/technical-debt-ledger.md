@@ -461,12 +461,21 @@ review_by: "proxima fatia do F2 — bloqueia qualquer uso do modo fluxo em traje
 | TD-009  | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
 | TD-010  | (alias de TD-002)                     | 2026-06-19 | 2f80574  |
 
-## Open items — priority order
+## Open items — a fonte é o ficheiro, não uma tabela
 
-| TD-ID  | Severity | Title (short)                 | Milestone |
-|--------|----------|-------------------------------|-----------|
-| TD-004 | High     | wgpu→Metal block on startup   | MEDIUM-1  |
-| TD-013 | High     | artefato de bake não autenticado | F2 fatia 2 |
+Havia aqui uma tabela mantida à mão. Foi **apagada em 2026-09-13**, e a razão é medida:
+listava `TD-004` como `High/open` quando o ficheiro diz `status: closed`, e continha **2**
+entradas quando o ficheiro tinha **7** `status: open` (TD-013, TD-014, TD-017, TD-018,
+TD-019, TD-020, TD-021) — errava nos dois sentidos, e só o TD-013 estava certo.
+
+Era uma **vista derivada** de dados que o `scripts/audit_gate.py` já imprime, entrada a
+entrada e com o status de cada uma, em **cada commit**. Reconciliá-la seria reiniciar o
+relógio até apodrecer outra vez. A regra da casa é *reutilizar, não duplicar* — e uma
+segunda fonte de verdade que diverge em silêncio é precisamente o que este ficheiro existe
+para registar, não para praticar.
+
+**Para ver o que está aberto:** `python3 scripts/audit_gate.py`, ou
+`grep -B4 '^status:    open' docs/technical-debt-ledger.md`.
 
 ## Note — tokio async sleeps in led-protocols (NOT part of TD-003)
 
@@ -790,12 +799,79 @@ review_by: "fatia do TD-017"
 
 ```yaml
 td_id:     TD-019
-title:     "O daemon endereca Art-Net/sACN por uma funcao que ignora `pixels_per_universe` e colapsa RGBW em RGB"
-severity:  High
+title:     "O `led-player` sem `--profile` ainda endereca com `170`/`x3` e RGB a mao — e o fecho do lado do daemon (C2b) nunca foi capturado como evidencia"
+severity:  Low
 status:    open
 origin:    "Inspeccao para o ADR-0030 (portas fisicas), 2026-08-30. Registado como DL-2 nesse ADR."
 adr:       "ADR-0030 §Dividas registadas / DL-2"
 context: |
+  RECONCILIACAO 2026-09-13 — LEIA ISTO ANTES DO CORPO HISTORICO ABAIXO.
+
+  O corpo original (preservado a partir de "SINTOMA") descreve o mundo ANTES do C2b da
+  FASE C (2026-09-01). Foi medido hoje, ponto a ponto, e a maior parte ja nao se aplica.
+  O historico fica porque explica PORQUE foi classificado High; o que muda e o presente.
+
+  MEDIDO HOJE:
+
+  a) Ponto 3 do corpo — FALSO hoje. `grep linear_assignments crates/led-daemon-bin/src/output.rs`
+     devolve UMA linha, e e um COMENTARIO (`output.rs:599`) que documenta o proprio fecho:
+     "Ate ao C2b o daemon chamava `led_player::linear_assignments`...". O daemon deixou de
+     chamar a funcao; o endereçamento e pedido ao `led-hardware-profile` (ADR-0030 §8).
+
+  b) Ponto 4 — a funcao sobrevive, o defeito nao. `rgb_order()` ainda faz
+     `Rgbw(o, _) => o` (`output.rs:629-634`), mas tem ZERO chamadores em producao: o unico
+     e `output.rs:1249`, e o `mod tests` abre em `:1031`. O colapso RGBW->RGB nao pode
+     acontecer no fio por esta rota.
+
+  c) Ponto 5 — a assimetria "a tres linhas de distancia" foi resolvida pelo C2b: os tres
+     protocolos pedem o endereçamento ao dono. O SEGUNDO EIXO do `severity_rationale`
+     ("os dois binarios passam a ter semanticas diferentes") caiu com ela.
+
+  d) Ponto 6 — a alcancabilidade via `generic-sk6812-rgbw-sacn` dependia do
+     `linear_assignments` no arm do sACN. Removido esse, o mecanismo desapareceu.
+
+  e) Ponto 7 — a FASE C afirma que o gate passou a cobrir, COM falsificacao medida
+     (reintroduziu o defeito; reprovaram dois testes, incluindo o gate estrutural da GS4.4).
+     Nao verificado hoje: e afirmacao do changelog, nao artefacto.
+
+  O QUE CONTINUA ABERTO, e e outra coisa: o ramo `None` do `led-player`
+  (`main.rs:303-308`) — sem `--profile`, ainda usa
+  `linear_assignments(px, 0, first_universe, RgbOrder::Rgb)`, ou seja `170`/`x3` a mao e
+  RGB forcado. O changelog da FASE C ja o tinha nomeado como "fora do que o TD-019
+  descreve". A entrada passa a descrever ISTO.
+
+  E UMA CORRECCAO A DUAS FONTES: o changelog da FASE C escreve "TD-019 no `led-player`
+  SEM `--profile`" — a flag EXISTE (`main.rs:158`) e o ramo `Some` honra-a ponta a ponta
+  (`:303` devolve `(layout, calibration, profile_color)`, `:310` usa `led_hardware_profile`,
+  `:322` valida, `:333` chama `hwp::compile_layout`). O que nao honra e o ramo `None`.
+
+  PORQUE CONTINUA `open` E NAO `closed`: o `audit_gate.py` exige, para `closed`, um
+  `evidence_ref` que aponte para um ficheiro EXISTENTE com `N passed; 0 failed` e `N > 0`
+  (`scripts/audit_gate.py:163-185`), mais um `git-hash:` de frescura (`:83`). Nao existe
+  `docs/evidence/td-019-*.txt` — a serie salta do `td-016` para nada. A correccao aterrou
+  em codigo; a PROVA nunca foi capturada. Isto e o gate a funcionar, nao uma omissao:
+  neste repositorio `closed` significa "provado fechado com artefacto", nao "acreditamos
+  que esta corrigido".
+
+  ESTADO DOS CAMPOS ABAIXO — todos escritos pre-C2b, e nenhum reescrito de propósito
+  (o historico explica o raciocinio; este bloco diz o que dele caiu):
+
+  - `mitigation_now`: descreve quando o defeito "acorda" NO DAEMON — caminho que ja nao
+    existe. A mitigacao real hoje e outra: o daemon recusa arrancar sem `--profile`.
+  - `not_fixed_because` (c): dizia que a correccao certa era consequencia do ADR-0030 §6,
+    "quando a reparticao tiver um so dono". SATISFEITO — o C2a poe o nucleo em
+    `led-hardware-profile::reparticao` e o daemon passa a chamador.
+  - `required_fix` 1: SATISFEITO (§6 implementado). `required_fix` 2: satisfeito PARA O
+    DAEMON (deixou de chamar a funcao); a funcao continua no `led-player` com a mesma
+    assinatura. `required_fix` 3: NAO FEITO — o gate textual da GS4.4 continua a ler tres
+    ficheiros (`output.rs`, `stage.rs`, `run.rs`) e `led-player/src/lib.rs` fica de fora.
+    E este o unico item do `required_fix` que sobrevive inteiro.
+  - `closure_criteria` A–D: continuam validos como critérios, mas foram escritos contra o
+    defeito do daemon. O (C) — comparar o endereçamento do player com o do daemon para o
+    mesmo profile — foi coberto pela mutacao cruzada do C2a, sem artefacto capturado.
+
+  ---- CORPO HISTORICO (pre-C2b, 2026-08-30) — preservado, ja nao descreve o presente ----
+
   SINTOMA. O `led-player` tem valores fisicos escritos a mao no caminho de saida, e o
   daemon usa esse caminho para Art-Net e sACN. Dois campos que o `HardwareProfile`
   declara — `pixels_per_universe` e `color` — nao chegam ao fio por esta rota.
@@ -849,6 +925,31 @@ impact: |
   `ColorFormat` e o `pixels_per_universe`; o Art-Net/sACN nao. Divergencias entre
   caminhos apodrecem em silencio — cada metade, lida sozinha, parece deliberada.
 severity_rationale: |
+  RECLASSIFICADO 2026-09-13: High -> Low. Os DOIS eixos do argumento original cairam,
+  e nao por opiniao — por medicao (ver RECONCILIACAO em `context`).
+
+  - Eixo 1 ("valor fisico a mao num caminho de saida do daemon"): o daemon deixou de
+    chamar `linear_assignments` (`output.rs:599` e so um comentario), e `rgb_order()`
+    tem zero chamadores em producao. O caminho descrito nao existe.
+  - Eixo 2 ("os dois binarios com semanticas diferentes para o mesmo profile"): resolvido
+    pelo C2b — os tres protocolos pedem o endereçamento ao dono.
+
+  Comparado pelo mesmo metodo do ledger, contra o que RESTA (o ramo `None` do
+  `led-player`):
+
+  = TD-018 (Low), e na verdade MELHOR mitigado. O TD-018 e Low porque a mensagem de
+    recusa ensina o operador. Aqui a mitigacao e mais forte: o `led-daemon` — o binario
+    que faz show — RECUSA ARRANCAR sem `--profile` desde a GS4.4 (exit 2). Chegar ao
+    defeito exige usar o binario legado E omitir a flag.
+  < TD-017 (Medium): la a divergencia daemon/player esta VIVA. Aqui o lado do daemon
+    esta corrigido em codigo; sobra o fallback opcional do binario legado.
+
+  NAO e zero, e e por isso que nao proponho `closed` nem apagar: um `RgbOrder` errado e
+  SILENCIOSO — vermelho acende verde, sem erro nenhum. E a classe que a FASE C encontrou,
+  agora reduzida a um caminho que o operador tem de escolher explicitamente.
+
+  ---- ARGUMENTO ORIGINAL (pre-C2b) — preservado, sustentava o High que ja nao se aplica ----
+
   Classificado por comparacao com o ledger, nao por intuicao.
 
   = TD-016 (High): valor fisico escrito a mao num caminho de saida, num parametro que a
@@ -911,7 +1012,25 @@ closure_criteria: |
 
   Mais `evidence_ref` e `negative_control` no schema de fecho (KB-012), como qualquer
   entrada `closed` deste ledger.
-review_by: "fatia de implementacao da FASE C (ADR-0030). NAO correr o daemon contra hardware com um preset de pixels_per_universe != 170 ou com RGBW em Art-Net/sACN antes disso."
+review_by: |
+  ACTUALIZADO 2026-09-13 — a proibicao anterior mudou de NATUREZA, nao caiu.
+
+  Dizia: "NAO correr o daemon contra hardware com um preset de pixels_per_universe != 170
+  ou com RGBW em Art-Net/sACN". A razao era que o daemon produziria bytes errados. Essa
+  razao acabou: o C2b poe o endereçamento no `led-hardware-profile` e o daemon honra
+  `pixels_per_universe` e `ColorFormat` nos tres protocolos.
+
+  O que RESTA nao e um defeito de software, e a AUSENCIA DE VALIDACAO FISICA — e a FASE C
+  diz isso por escrito: "NAO esta provado que um controlador real os aceita... Validacao
+  fisica PENDENTE", com o rig offline. Portanto:
+
+  - `pixels_per_universe != 170` e RGBW sobre Art-Net/sACN passam a ser SUPORTADOS EM
+    SOFTWARE e NUNCA OBSERVADOS EM HARDWARE. Correr isso contra o rig e uma PRIMEIRA VEZ,
+    com o risco de uma primeira vez — nao a repeticao de um defeito conhecido.
+  - Continua PROIBIDO usar o `led-player` sem `--profile` contra uma fita GRB ou RGBW: e o
+    ramo `None` (`main.rs:303-308`), que forca `RgbOrder::Rgb`, e a falha e SILENCIOSA.
+  - O gate da GS4.4 continua a nao cobrir `led-player/src/lib.rs` (`required_fix` 3), logo
+    nada impede a reincidencia nesse ficheiro.
 ```
 
 ## TD-020 — A guarda de monotonia do `SharedClock` nao e atomica, e o relogio do show pode recuar
