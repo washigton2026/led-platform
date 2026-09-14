@@ -804,6 +804,15 @@ severity:  Low
 status:    open
 origin:    "Inspeccao para o ADR-0030 (portas fisicas), 2026-08-30. Registado como DL-2 nesse ADR."
 adr:       "ADR-0030 §Dividas registadas / DL-2"
+evidence_ref: docs/evidence/td-019-enderecamento-no-fio-2026-09-13.md
+negative_control: |
+  M2 (output.rs:615 `color: ColorFormat::Rgb(self.rgb_order())`) reprova o teste no pixel 0:
+  "esperava os 4 canais [50, 150, 0, 50], veio [100, 200, 50, 100]". ANTES do commit 09c135e
+  a mesma mutacao passava os 18 testes — a assercao era `d.len() >= 126`, cega ao formato.
+  M1 (output.rs:611 `pixels_per_universe: 170`) reprova na fronteira de universo.
+  ATENCAO: o criterio B do closure_criteria abaixo esta STALE — manda repor PX_PER_UNIVERSE
+  no led-player, constante que o daemon deixou de usar no C2b; mutar essa constante NAO pode
+  reprovar este teste. Os controlos validos sao o M1/M2 acima.
 context: |
   RECONCILIACAO 2026-09-13 — LEIA ISTO ANTES DO CORPO HISTORICO ABAIXO.
 
@@ -1001,9 +1010,20 @@ closure_criteria: |
      `generic-sk6812-rgbw-sacn` e afirma QUATRO canais por pixel e 128 pixels por
      universo. Contar so canais nao chega — tem de afirmar tambem a fronteira do
      universo, senao passa com o 170 ainda la.
-  B) CONTROLO NEGATIVO OBRIGATORIO: repor o `PX_PER_UNIVERSE = 170` (ou o `* 3`) tem de
-     REPROVAR esse teste. Um teste que so afirmasse "sai RGBW" passaria com a fronteira
-     de universo errada.
+  B) CONTROLO NEGATIVO OBRIGATORIO: uma mutacao no ponto que o daemon REALMENTE usa tem de
+     REPROVAR esse teste. Dois, ambos medidos em 2026-09-13 (ver `evidence_ref`):
+       M1 · output.rs:611 `pixels_per_universe: 170`        -> reprova na fronteira
+       M2 · output.rs:615 `color: Rgb(self.rgb_order())`    -> reprova no pixel 0
+     Um teste que so afirmasse "sai RGBW" passaria com a fronteira de universo errada; um
+     que so afirmasse a fronteira passa com o formato colapsado — foi esse o falso-verde
+     fechado no commit 09c135e. Sao precisos os dois.
+
+     REENDERECADO 2026-09-13, e a exigencia NAO foi baixada. A redaccao anterior mandava
+     repor o `PX_PER_UNIVERSE = 170` (ou o `* 3`) do `led-player`. Depois do C2b o daemon
+     deixou de chamar `linear_assignments`, logo essa mutacao NAO pode reprovar o teste do
+     daemon: um controlo negativo que nao reprova nao e um controlo, e seguir a instrucao a
+     letra produzia um verde vazio (KB-012) — a forma exacta do defeito que este TD regista.
+     O `led-player` continua coberto, pelo criterio (D), que e onde essa constante vive.
   C) Um teste que compare o enderecamento produzido pelo `led-player` e pelo
      `led-daemon-bin` para o MESMO profile e o MESMO show, e que reprove se divergirem.
      E o gate do ADR-0030 §8, e e o que impede a divergencia de voltar.
