@@ -7,6 +7,10 @@ description = "The render core: effects → per-pixel colors in logical space, w
 
 [dependencies]
 led-core = { path = "../led-core" }
+# O triple buffer vive num leaf próprio (`led-triple`) para as suas 5 `unsafe` ficarem
+# sob Miri isoladas do resto do crate. Aqui é RE-EXPORTADO como `triple`, por isso
+# `crate::triple::…` continua a resolver e nenhum consumidor muda.
+led-triple = { path = "../led-triple" }
 # RT-LOCK-RENDER-001 (TD-002): scalars() on the render hot-path needs lock-free
 # reads AND a coherent snapshot of AudioScalars (all fields from the same publish).
 # arc-swap provides ArcSwap<T> — store() is one atomic pointer swap; load() is

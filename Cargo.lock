@@ -900,6 +900,7 @@ dependencies = [
  "led-audio",
  "led-core",
  "led-hal",
+ "led-triple",
  "pollster",
  "wgpu",
 ]
@@ -948,6 +949,10 @@ dependencies = [
  "ed25519-dalek",
  "led-core",
 ]
+
+[[package]]
+name = "led-triple"
+version = "0.1.0"
 
 [[package]]
 name = "led-xlights"

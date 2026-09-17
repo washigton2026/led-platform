@@ -5,6 +5,7 @@ members = [
     "crates/led-hal",
     "crates/led-protocols",
     "crates/led-layout",
+    "crates/led-triple",
     "crates/led-pixel-engine",
     "crates/led-sequencer",
     "crates/led-audio",
