@@ -74,11 +74,21 @@ impl SharedClock {
         } else {
             wall.saturating_sub((-offset) as u64)
         };
-        // Monotonicity: never go backward
-        let prev = self.last_now.load(Ordering::Acquire);
-        let next = adjusted.max(prev);
-        self.last_now.store(next, Ordering::Release);
-        next
+        // Monotonicity: never go backward.
+        //
+        // TD-020 — isto era `load` / `max` / `store`, TRÊS operações. Entre o load e o
+        // store, outra thread podia publicar um valor mais alto, e o store desta repunha
+        // o `prev` obsoleto: `last_now` RECUAVA, e o leitor seguinte via o relógio do show
+        // andar para trás. Medido, não deduzido — o detector concorrente deste ficheiro
+        // reprova 10/10 com a versão de três operações.
+        //
+        // `fetch_max` é UMA operação read-modify-write atómica: o máximo é calculado
+        // dentro dela, portanto não há janela onde uma actualização se perca. Devolve o
+        // valor ANTERIOR, logo o valor novo — o que este `now_ms` deve devolver — é
+        // `max(anterior, adjusted)`. Semântica idêntica à de antes; só a atomicidade muda.
+        // Continua livre de alocação: uma instrução, sem lock e sem heap.
+        let anterior = self.last_now.fetch_max(adjusted, Ordering::AcqRel);
+        anterior.max(adjusted)
     }
 
     /// Update the offset (can be called between shows or during calibration).
@@ -172,30 +182,93 @@ mod tests {
             "guarded now_ms must not rewind even on a -1000s offset");
     }
 
-    /// Concurrent readers during a backward correction never observe a rewind.
+    /// Concurrent readers during a correction never observe a rewind.
+    ///
+    /// **ENDURECIDO (TD-020).** A versão anterior aplicava uma correcção de −500 ms **uma
+    /// vez**, a meio do laço, e reprovava em ~**1 de 30** execuções. Uma amostra verde não
+    /// provava nada — é o KB-012 na forma mais cara, porque o defeito é real e o gate
+    /// deixava-o passar 29 vezes em 30.
+    ///
+    /// **A razão da fraqueza foi medida, não suposta:** `wall` avança em **milissegundos**.
+    /// Num laço apertado, dois `adjusted` calculados concorrentemente diferem por ~0, logo
+    /// uma perda de actualização repunha `last_now` praticamente no mesmo sítio e nenhum
+    /// leitor tinha o que observar.
+    ///
+    /// **O que a torna visível é o offset a ALTERNAR** — e o mecanismo foi medido, não
+    /// suposto. Com offset constante, `adjusted` acompanha o `wall` e **volta sempre a
+    /// dominar** `prev`: a escrita obsoleta existe mas é imediatamente mascarada, e nenhum
+    /// leitor a chega a ver. Quando o offset cai para `0`, `adjusted` deixa de dominar e é o
+    /// **`prev` obsoleto** que é devolvido — é aí, e só aí, que a perda aflora:
+    ///
+    /// ```text
+    /// offset alto:  T1 calcula a1 = W+A ; carrega prev = W+A       (preemptada antes do store)
+    ///               T2 calcula a2 = W+1+A ; store ⇒ last_now = W+1+A ; devolve W+1+A
+    ///               T1 store  ⇒ last_now RECUA para W+A
+    /// offset baixo: T2 calcula a2 = W+1 (não domina) ; prev = W+A  ⇒ devolve W+A
+    ///               ...que é 1 ms MENOS do que o W+1+A que ela própria já devolveu
+    /// ```
+    ///
+    /// **Controlo negativo medido:** com `AMPLITUDE_MS = 0` (o corretor continua a girar,
+    /// o offset nunca muda) o detector fica **0/10 vermelho**; com a alternância, **10/10**.
+    /// A thread de correcção ganha o seu lugar por medição — não está ali por decoração.
+    ///
+    /// O recuo observado é de **1 ms** (a granularidade de `wall`), não de `AMPLITUDE_MS`.
+    /// O teste afirma o **maior recuo observado == 0** e imprime-o quando falha — um número,
+    /// não um booleano, para a próxima pessoa ver a grandeza em vez de adivinhar.
     #[test]
     fn concurrent_readers_never_see_rewind_during_correction() {
+        use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
-        let clock = Arc::new(SharedClock::with_offset(0));
-        std::thread::sleep(Duration::from_millis(2));
 
-        let mut handles = Vec::new();
-        for _ in 0..8 {
-            let c = clock.clone();
-            handles.push(std::thread::spawn(move || {
-                let mut last = 0u64;
-                let mut ok = true;
-                for i in 0..5000 {
-                    if i == 2500 { c.set_offset_ms(-500); } // correction mid-loop
-                    let now = c.now_ms();
-                    if now < last { ok = false; }
-                    last = now;
+        const RONDAS: usize = 20;
+        const LEITORES: usize = 8;
+        const ITERACOES: usize = 20_000;
+        const AMPLITUDE_MS: i64 = 1_000_000;
+
+        for ronda in 0..RONDAS {
+            let clock = Arc::new(SharedClock::with_offset(0));
+            let parar = Arc::new(AtomicBool::new(false));
+
+            let c_corr = clock.clone();
+            let p_corr = parar.clone();
+            let corretor = std::thread::spawn(move || {
+                let mut alto = true;
+                while !p_corr.load(Ordering::Relaxed) {
+                    c_corr.set_offset_ms(if alto { AMPLITUDE_MS } else { 0 });
+                    alto = !alto;
                 }
-                ok
-            }));
-        }
-        for h in handles {
-            assert!(h.join().unwrap(), "a reader observed a backward jump under concurrency");
+            });
+
+            let mut handles = Vec::new();
+            for _ in 0..LEITORES {
+                let c = clock.clone();
+                handles.push(std::thread::spawn(move || {
+                    let mut last = 0u64;
+                    let mut pior = 0u64; // maior recuo observado por esta leitora
+                    for _ in 0..ITERACOES {
+                        let now = c.now_ms();
+                        if now < last {
+                            pior = pior.max(last - now);
+                        }
+                        last = now;
+                    }
+                    pior
+                }));
+            }
+
+            let mut pior_global = 0u64;
+            for h in handles {
+                pior_global = pior_global.max(h.join().unwrap());
+            }
+            parar.store(true, Ordering::Relaxed);
+            corretor.join().unwrap();
+
+            assert_eq!(
+                pior_global, 0,
+                "ronda {ronda}: um leitor viu o relógio RECUAR {pior_global} ms sob correcção \
+                 concorrente ({LEITORES} leitoras × {ITERACOES} leituras). A guarda de \
+                 monotonia não é atómica — load/calcula/store perde actualizações (TD-020)."
+            );
         }
     }
 
