@@ -1059,7 +1059,32 @@ review_by: |
 td_id:     TD-020
 title:     "`now_ms` faz load-calcula-store em vez de `fetch_max`: uma perda de actualizacao deixa um leitor observar o relogio a andar para tras"
 severity:  High
-status:    open
+status:    closed
+closed_by: "13d2f41 (2026-09-17) — `load`/`max`/`store` substituido por `fetch_max(AcqRel)`; detector endurecido no mesmo ficheiro."
+evidence_ref: docs/evidence/td-020-relogio-monotonico-2026-09-17.md
+required_test: concurrent_readers_never_see_rewind_during_correction
+source_files: crates/led-hal/src/shared_clock.rs
+negative_control: |
+  DOIS controlos, e o segundo e o que impede o detector de ser teatro.
+
+  A) O DEFEITO REPOSTO. Com a versao de tres operacoes (`load`/`max`/`store`) e o detector
+     endurecido: 10 execucoes, 10 VERMELHAS. Mensagem verbatim —
+     "ronda 2: um leitor viu o relogio RECUAR 1 ms sob correccao concorrente
+     (8 leitoras x 20000 leituras)". Com `fetch_max`: 10 execucoes, 10 VERDES, mesmos
+     parametros. Isto satisfaz o criterio A do `review_by` (o teste tem de reprovar de
+     forma FIAVEL com o defeito presente — 1-em-30 nao serve).
+
+  B) A AMPLITUDE DESLIGADA, COM O DEFEITO PRESENTE. Com a versao de tres operacoes E
+     `AMPLITUDE_MS = 0` (a thread de correccao continua a girar, mas o offset nunca muda):
+     10 execucoes, **0 vermelhas**. Sem este controlo, "o detector dispara" e "o detector
+     tem 3,2 milhoes de iteracoes" seriam indistinguiveis, e ninguem saberia se a thread de
+     correccao faz trabalho ou e decoracao. Ela faz: e a alternancia do offset que impede
+     `adjusted` de voltar a dominar `prev` e mascarar a escrita obsoleta.
+
+  UMA PREVISAO MINHA FALSIFICADA, registada em vez de apagada: eu previa que o recuo teria
+  a magnitude de `AMPLITUDE_MS`. O recuo medido e de **1 ms** — a granularidade de `wall`.
+  A amplitude nao cria magnitude; cria a condicao em que a perda aflora. O comentario do
+  codigo foi reescrito para o mecanismo medido ANTES de o fix ser aplicado.
 origin:    "Observado na fatia 1-A do ADR-0031 (2026-09-10). NAO e regressao dessa fatia — ver PROVA DE ALHEAMENTO."
 context: |
   SINTOMA. `cargo test --workspace` reprovou numa de duas medicoes, em
