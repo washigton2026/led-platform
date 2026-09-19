@@ -19,9 +19,9 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (1131 tests)
+cargo test --workspace                  # all suites (1135 tests)
 cargo build --workspace --all-targets   # must be warning-free
-cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
+cargo +nightly miri test -p led-triple   # lock-free unsafe under Miri (5 unsafe; led-pixel-engine has 0)
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
 ~/lumyx-e2e.sh --miri                   # + Miri on all unsafe crates
 ./scripts/tsc_gate.sh                   # gate de compilacao do contrato TS (ADR-0027)
@@ -35,7 +35,8 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-hal` | `Hal` (sole `ProtocolOutput`), `SimulatorDevice`, `Heartbeat`, `Core` | led-hal |
 | `led-layout` | `PixelLogical`/`Layout`, prop generators, `LayoutMapper` | led-layout |
 | `led-protocols` | `SacnDevice` (E1.31, unicast + per-universe multicast) + ArtPoll source-conflict detection | led-protocols |
-| `led-pixel-engine` | `Effect`s, HSV/gamma, lock-free triple buffer, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL) | led-pixel-engine |
+| `led-triple` | **leaf, zero dependencies** — the wait-free `triple` buffer for the render→send handoff (`triple_buffer`/`Producer`/`Consumer`). Holds **all 5 `unsafe`** of this path; the permutation invariant of its 3 slots is the whole safety argument. Extracted so those `unsafe` sit under Miri in isolation | led-pixel-engine |
+| `led-pixel-engine` | `Effect`s, HSV/gamma, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL). **Re-exports `led-triple` as `triple`** (`pub use led_triple as triple`), so `crate::triple::…` still resolves — it no longer owns the buffer, and has **0 `unsafe`** | led-pixel-engine |
 | `led-sequencer` | non-destructive `Timeline`/`Track`/`Clip`/keyframes + `TempoMap` beat-sync; **a `Timeline` is an `Effect`** | led-sequencer |
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
 | `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
@@ -74,8 +75,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 - **Heartbeat resends the last valid frame, never zeros**; max gap to any device **2.4 s**
   (Warning 2.0 s, Critical 2.4 s). **WiFi is forbidden for live shows** (cabled only).
 - **No allocation on the hot path** (`led-hal/tests/no_alloc.rs`, counting allocator).
-- **Render and send never share a mutable buffer** — the `triple` buffer (Miri-clean,
-  incl. many-seeds). The permutation invariant of its 3 slots is the whole safety argument.
+- **Render and send never share a mutable buffer** — the `triple` buffer, which lives in the
+  `led-triple` leaf crate (Miri-clean, incl. many-seeds). The permutation invariant of its
+  3 slots is the whole safety argument — and breaking it is the negative control: forcing
+  producer and consumer onto the same slot makes Miri report a data race.
 - **Per-universe wrapping sequence** in sACN; one universe per datagram; per-universe
   multicast group (239.255.hi.lo) — and **one sender per universe** (ArtPoll detects a
   conflict and names the other IP before starting). Multicast needs IGMP on the path (`/security`).
@@ -89,12 +92,13 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (1131 tests)
+cargo test --workspace                  # all suites (1135 tests)
 ```
 
-16 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1131 tests green** · zero warnings.
+17 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1135 tests green** · zero warnings.
+(20 workspace members; the 17 is that total minus the three named separately.)
 
-Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
+Miri clean: `audio-core/ring_buffer` (5, SPSC unsafe), **`led-triple`** (7 tests, 0 UB — the crate that now holds the triple buffer's `unsafe`; 24 scheduler seeds in a prior session), `led-bridge/adapter` (6, 1M iter).
 Governance: `scripts/audit_gate.py` (KB-012) — 18 TD entries, all **10** closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
 
 | Crate | Status |
@@ -103,7 +107,8 @@ Governance: `scripts/audit_gate.py` (KB-012) — 18 TD entries, all **10** close
 | `led-hal` | HAL + mapping + heartbeat + NetworkGuard (integrated into `Hal::new`/`with_guard`) |
 | `led-layout` | MegaTree + matrix-serpentine generators + LayoutMapper |
 | `led-protocols` | sACN (unicast + multicast) + ArtPoll + DDP + RouterDevice (sACN/DDP fan-out by universe) |
-| `led-pixel-engine` | effects (**13**: 5 base + biblioteca `Chase`/`Twinkle`/`Fire`/`ColorWash`/`Strobe`/`Meteor`/`Lightning`/`Ripple`, ADR-0021) + `noise` sem estado + triple buffer + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
+| `led-triple` | **NEW** — leaf std-only, zero deps: o `triple` buffer wait-free do handoff render→send. Os **5 `unsafe`** desta fatia vivem aqui, sob Miri (7 testes, 0 UB) |
+| `led-pixel-engine` | effects (**13**: 5 base + biblioteca `Chase`/`Twinkle`/`Fire`/`ColorWash`/`Strobe`/`Meteor`/`Lightning`/`Ripple`, ADR-0021) + `noise` sem estado + **re-export do `led-triple` como `triple`** + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
 | `led-sequencer` | Timeline/Track/Clip/Keyframe + TempoMap + LiveTempoMap (real-time beat accumulator) |
 | `led-audio` | Hann FFT + band energy + spectral-flux beat |
 | `led-bridge` | adapt v1→v0 + BridgeHandle + SimLoop |
@@ -135,6 +140,65 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-09-19 — D4 Fatia 1(b): o triple buffer vira crate leaf, e dois gates de Miri deixam de ser encenação
+
+**Done.** `crates/led-pixel-engine/src/triple.rs` passou a **`crates/led-triple`**, um leaf
+std-only com **zero dependências**. `led-pixel-engine` ganha a dep e **re-exporta**
+(`pub use led_triple as triple`), por isso `pipeline.rs:13` e `:55` não mudaram uma letra.
+Integrado no baseline por `merge --no-ff` (`b2f4fca`), preservando `a1059d0` — o hash sobre
+o qual os gates correram. Um rebase teria reescrito esse hash e a prova ficaria a apontar
+para um commit inexistente.
+
+**O achado que justifica a extracção, medido e não suposto:**
+`grep -rn unsafe crates/led-pixel-engine/src/` → **zero**. A extracção levou **toda** a
+superfície `unsafe` do crate, não uma parte. Consequência directa: o comando que este
+ficheiro documentava como *"lock-free unsafe under Miri"*
+(`cargo +nightly miri test -p led-pixel-engine --lib`) passou a correr sobre um crate **sem
+uma única `unsafe`** — um falso-verde documental, corrigido nesta sessão.
+
+**Dois testes guardados sob `cfg!(miri)`, e a razão é diferente em cada um.** Nenhum é
+cosmético: sem eles o gate do Miri é inexecutável.
+- `triple_buffer_1m_cycles_no_torn_frame`: 1M ciclos × ~1 KiB = ~10⁹ operações interpretadas.
+  **Não terminava** — abortado aos 19 min de relógio / 16 min de CPU. Reduzido a 500 ciclos
+  sob Miri; a propriedade é **por-ciclo**, logo menos ciclos ainda a exercitam.
+- `triple_buffer_publish_latency_sub_microsecond`: sob Miri, `Instant::elapsed` mede o
+  **interpretador**, não o swap atómico — medido `avg 355000ns`, um **falso-vermelho** num
+  crate limpo. O laço continua a correr (é o que exercita o `unsafe` do publish) e só o
+  **veredito** de tempo é saltado. **Nenhum limiar foi inventado para o Miri**: um orçamento
+  arbitrário é o erro do TD-006.
+Ambas usam `cfg!(…)` como **expressão**, no molde do irmão `no_tearing_under_threads:111`, e
+não `#[cfg]` — nada sai da compilação, logo nada deixa de ser verificado. Zero `#[allow]`.
+
+**Invariants verified.** Miri `-p led-triple`: **7 passed · 0 failed · 0 ignored**, exit do
+processo **0**, **0 UB**. **Falsificado (KB-012):** mutar `Consumer{idx:1}` → `idx:0` quebra a
+invariante de permutação que o comentário do `unsafe impl Sync` invoca como argumento de
+segurança, e o Miri responde `error: Undefined Behavior: Data race detected`. Sem esse
+controlo, *"o Miri correu"* e *"o Miri apanharia"* seriam indistinguíveis.
+Fora do Miri nada foi enfraquecido: `cargo test -p led-triple` → 7 passed, **0 ignored**.
+`cargo test --workspace` → **1135 · 0 · 9**, exit 0; clippy `--all-targets --locked
+-D warnings` exit 0.
+
+**A aritmética da integração foi PREVISTA antes de correr, e fechou dos dois lados:**
+`d4fe5b7` → 1135/0/9 com **103** linhas `test result:`; `b2f4fca` → 1135/0/9 com **105**.
+**Testes +0, binários +2** (`unittests` e `Doc-tests` de `led_triple`, este com 0 testes) —
+os 7 testes do triple **mudaram de binário, não de existência**. E isso corrigiu uma
+premissa: supunha-se que o TD-020 tivesse acrescentado testes, mas
+`git diff 54b9fa8..d4fe5b7` toca 1 `.rs` + 2 `.md` com **zero `#[test]` adicionados**
+(`shared_clock.rs`: 16 antes, 16 depois). **Endurecer um detector não é acrescentar testes.**
+
+**Pending — e é a mesma classe do defeito que esta sessão fechou.** `~/lumyx-e2e.sh:197`
+(Invariante 4) ainda corre `cargo test -p led-pixel-engine --lib triple_buffer`, que agora
+casa **zero** testes: `0 passed; 72 filtered out`, exit 0, e o `grep -q "test result: ok"`
+do gate **casa na mesma** ⇒ imprime `✅ triple buffer no torn frames` sem executar nada.
+Medido, **não corrigido** — o ficheiro vive fora do repositório e a decisão é do operador.
+Também **não há Miri no `ci.yml`**: toda esta cobertura depende de um script opt-in e
+não-versionado. E o `b2f4fca` **não foi empurrado** — `origin` continua em `d4fe5b7`.
+
+**Decisions.** Leaf com **zero dependências** de propósito: é o que permite pôr as 5 `unsafe`
+sob Miri isoladas do resto do workspace. O `led-pixel-engine` re-exporta em vez de os
+consumidores mudarem de caminho — a superfície não mudou, só o crate. E as guardas vivem no
+**corpo do teste**, nunca na `unsafe`: o que foi ajustado é a medição, não a coisa medida.
 
 ### 2026-09-08 — F7.2/Ubuntu RESOLVIDA: o gate media o processo, não o caminho de envio
 
