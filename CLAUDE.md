@@ -37,7 +37,7 @@ cargo +nightly miri test -p led-triple   # lock-free unsafe under Miri (5 unsafe
 | `led-hal` | `Hal` (sole `ProtocolOutput`), `SimulatorDevice`, `Heartbeat`, `Core` | led-hal |
 | `led-layout` | `PixelLogical`/`Layout`, prop generators, `LayoutMapper` | led-layout |
 | `led-protocols` | `SacnDevice` (E1.31, unicast + per-universe multicast) + ArtPoll source-conflict detection | led-protocols |
-| `led-triple` | **leaf, zero dependencies** — the wait-free `triple` buffer for the render→send handoff (`triple_buffer`/`Producer`/`Consumer`). Holds **all 5 `unsafe`** of this path; the permutation invariant of its 3 slots is the whole safety argument. Extracted so those `unsafe` sit under Miri in isolation (exercisable in isolation; run manually — see :24) | led-pixel-engine |
+| `led-triple` | **leaf, zero dependencies** — the wait-free `triple` buffer for the render→send handoff (`triple_buffer`/`Producer`/`Consumer`). Holds **all 5 `unsafe`** of this path; the permutation invariant of its 3 slots is the whole safety argument. Extracted so those `unsafe` sit under Miri in isolation — now enforced by the blocking CI job `miri (led-triple)` | led-pixel-engine |
 | `led-pixel-engine` | `Effect`s, HSV/gamma, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL). **Re-exports `led-triple` as `triple`** (`pub use led_triple as triple`), so `crate::triple::…` still resolves — it no longer owns the buffer, and has **0 `unsafe`** | led-pixel-engine |
 | `led-sequencer` | non-destructive `Timeline`/`Track`/`Clip`/keyframes + `TempoMap` beat-sync; **a `Timeline` is an `Effect`** | led-sequencer |
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
@@ -101,7 +101,7 @@ cargo test --workspace                  # all suites (1135 tests)
 (20 workspace members; the 17 is that total minus the three named separately.)
 
 Miri clean: `audio-core/ring_buffer` (5, SPSC unsafe), **`led-triple`** (7 tests, 0 UB — the crate that now holds the triple buffer's `unsafe`; 24 scheduler seeds in a prior session), `led-bridge/adapter` (6, 1M iter).
-Miri: job de CI `miri` (led-triple, `nightly-2026-06-02` pinado, `continue-on-error` no 1.º run) **AINDA POR EXECUTAR**. As 5 construções `unsafe` do `led-triple` estão provadas **localmente** (7/0/0, 0 UB); os restantes crates com `unsafe` só têm o `e2e.sh` opt-in.
+Miri **corre na CI**: job `miri (led-triple)`, ubuntu-latest, `nightly-2026-06-02` pinado, **bloqueante** (promovido depois de observado a passar). Cobre as **5 construções `unsafe`** do `led-triple` (3 `unsafe impl` + 2 blocos `unsafe {}`). O step **exige `N > 0`** testes executados — `test result: ok` sozinho é satisfeito por `0 passed; N filtered out`, e sem essa exigência um filtro errado daria verde sem correr nada (KB-012). Execução observada (run 35501292968, `deeaa61`): **7 passed · 0 failed · 0 ignored · 0 UB**, 203,77 s, com `miri: 7 testes executados, exit 0` no log. Os restantes crates com `unsafe` (`audio-core`, `led-bridge`) continuam **só** com o `e2e.sh` opt-in — não têm gate de CI.
 Governance: `scripts/audit_gate.py` (KB-012) — 18 TD entries, all **10** closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
 
 | Crate | Status |
@@ -110,7 +110,7 @@ Governance: `scripts/audit_gate.py` (KB-012) — 18 TD entries, all **10** close
 | `led-hal` | HAL + mapping + heartbeat + NetworkGuard (integrated into `Hal::new`/`with_guard`) |
 | `led-layout` | MegaTree + matrix-serpentine generators + LayoutMapper |
 | `led-protocols` | sACN (unicast + multicast) + ArtPoll + DDP + RouterDevice (sACN/DDP fan-out by universe) |
-| `led-triple` | **NEW** — leaf std-only, zero deps: o `triple` buffer wait-free do handoff render→send. Os **5 `unsafe`** desta fatia vivem aqui; última corrida **LOCAL** do Miri: 7 testes, 0 UB, com controlo negativo (`Data race detected`). Job de CI (`miri`) configurado, **ainda por exercitar** |
+| `led-triple` | **NEW** — leaf std-only, zero deps: o `triple` buffer wait-free do handoff render→send. As **5 construções `unsafe`** desta fatia vivem aqui, sob o job de CI **bloqueante** `miri (led-triple)`: 7 testes, 0 failed, 0 ignored, 0 UB (run `deeaa61`), com `N > 0` exigido. Controlo negativo local: forçar produtor e consumidor ao mesmo slot dá `Data race detected` |
 | `led-pixel-engine` | effects (**13**: 5 base + biblioteca `Chase`/`Twinkle`/`Fire`/`ColorWash`/`Strobe`/`Meteor`/`Lightning`/`Ripple`, ADR-0021) + `noise` sem estado + **re-export do `led-triple` como `triple`** + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
 | `led-sequencer` | Timeline/Track/Clip/Keyframe + TempoMap + LiveTempoMap (real-time beat accumulator) |
 | `led-audio` | Hann FFT + band energy + spectral-flux beat |

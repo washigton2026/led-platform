@@ -135,11 +135,14 @@ jobs:
   miri:
     name: miri (led-triple)
     runs-on: ubuntu-latest
-    continue-on-error: true   # TEMP: 1.º run observável; promover a bloqueante após verde
     steps:
       - uses: actions/checkout@v4
-      # Nightly PINADO, e não `@nightly`. É o toolchain exacto que produziu a evidência
-      # local (rustc 1.98.0-nightly d595fce01, miri d595fce010). O nightly muda todos os
+      # Nightly PINADO, e não `@nightly`. CORRECÇÃO (run #82): a versão anterior deste
+      # comentário dizia que o pino era "o toolchain exacto que produziu a evidência local".
+      # Era FALSO — o canal datado `nightly-2026-06-02` empacota o master de 2026-06-01
+      # (`rustc 1.98.0-nightly 6bdf43094`, lido no log do #82), enquanto o local é
+      # `d595fce01` de 2026-06-02. A data no `rustc --version` é a do COMMIT, não a do canal.
+      # O gate passou nos DOIS, o que é evidência mais forte do que num só. O nightly muda todos os
       # dias e este repo JÁ foi partido por drift de toolchain (`chunks_exact_to_as_chunks`
       # deixou a baseline vermelha sem regressão nenhuma). Um gate de segurança de memória
       # que fica vermelho por razão alheia é um gate que a equipa aprende a ignorar.
