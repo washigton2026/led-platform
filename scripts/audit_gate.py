@@ -145,7 +145,16 @@ class Gate:
                             f"debt rotting. Complete the evidence gate or reopen as open.")
                         return
                 except ValueError:
-                    pass
+                    # NAO engolir. Um review_by ilegivel nao e "sem prazo": e um prazo
+                    # que o autor pediu e que o gate deixou cair em silencio, desligando
+                    # o detector de apodrecimento (KB-012). Causa habitual: aspas — o
+                    # parse_ledger guarda o valor verbatim, e o ledger cita escalares de
+                    # uma linha, logo '"2026-10-07"' chega assim a fromisoformat().
+                    self.report(CRITICAL, td_id,
+                        f"review_by {review_by!r} nao e uma data ISO (YYYY-MM-DD) — "
+                        f"o prazo nao e verificavel e a verificacao nao faz nada. "
+                        f"Escrever sem aspas: review_by: 2026-10-07")
+                    return
             # Within review_by (or no deadline) — valid transient state
             gate_desc = td.get('pending_gate', '(not specified)')
             self.ok(td_id, f"pending-verification (valid) — gate: {gate_desc}")

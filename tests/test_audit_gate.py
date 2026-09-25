@@ -195,6 +195,40 @@ def test_pending_verification_past_deadline_is_critical():
         tmp.unlink()
 
 
+def test_pending_verification_malformed_review_by_is_critical():
+    """Um review_by ilegivel NAO pode passar como 'sem prazo'.
+
+    A data e FUTURA de proposito: se a verificacao so disparasse por o prazo ter
+    passado, este caso ficaria verde. O que tem de a fazer disparar e a data ser
+    ILEGIVEL, independentemente do que ela diria.
+
+    E citada de proposito, porque e a forma que o ledger real escreve — as duas
+    auto-testes vizinhas usam datas sem aspas, e era so essa forma que o gate
+    alguma vez tinha visto. Medido em 2026-09-23: com aspas, date.fromisoformat
+    levantava ValueError, o `except` engolia-o, e um TD-022 com prazo vencido
+    teria ficado OK para sempre.
+    """
+    quoted_future = '"2099-12-31"'
+    ledger_text = textwrap.dedent(f"""
+    ```yaml
+    td_id:      TD-PENDING-MALFORMED
+    status:     pending-verification
+    review_by:  {quoted_future}
+    pending_gate: some gate
+    ```
+    """)
+    tmp = make_ledger(ledger_text)
+    try:
+        g = audit_gate.Gate(WORKSPACE)
+        tds = audit_gate.parse_ledger(tmp)
+        g.check(tds[0])
+        criticals = [f for f in g.findings if f[0] == audit_gate.CRITICAL]
+        assert len(criticals) >= 1, "review_by ilegivel tem de ser Critical"
+        print("✅ test_pending_verification_malformed_review_by_is_critical: PASS")
+    finally:
+        tmp.unlink()
+
+
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
 TESTS = [
@@ -206,6 +240,7 @@ TESTS = [
     test_gate_rejects_full_bad_ledger_exit_1,
     test_pending_verification_within_deadline_is_ok,
     test_pending_verification_past_deadline_is_critical,
+    test_pending_verification_malformed_review_by_is_critical,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 

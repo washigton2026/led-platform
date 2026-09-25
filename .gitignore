@@ -31,3 +31,6 @@ show_drone.json
 # `tsconfig.json` e o `verifica.ts` SÃO fonte e vão versionados; o `node_modules`
 # é artefacto de instalação e não entra no baseline.
 node_modules/
+
+# Bytecode do Python gerado ao correr scripts/audit_gate.py e tests/ — artefacto, nao fonte.
+__pycache__/
