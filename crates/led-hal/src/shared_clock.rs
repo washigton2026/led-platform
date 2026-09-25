@@ -111,11 +111,18 @@ impl Default for SharedClock {
     fn default() -> Self { Self::new() }
 }
 
-// Safety: SharedClock uses atomics only — no UnsafeCell, no raw pointers.
-// The `Instant` epoch is read-only after construction.
-// SAFETY: Instant is Send+Sync on all tier-1 targets.
-unsafe impl Send for SharedClock {}
-unsafe impl Sync for SharedClock {}
+// `Send + Sync` sao DERIVADOS pelo compilador, nunca afirmados a mao: todos os campos
+// ja os sao (`Instant`, `AtomicI64`, `AtomicU64`). O `unsafe impl Send/Sync` que aqui
+// estava nao acrescentava capacidade nenhuma — e RETIRAVA a guarda.
+//
+// Medido em 2026-09-23, nos dois sentidos, plantando um campo
+// `PhantomData<*const u8>` (!Send + !Sync) nesta struct:
+//   com o `unsafe impl`  -> `cargo build -p led-hal` exit 0, ZERO avisos
+//   sem o `unsafe impl`  -> exit 101, `error[E0277]: *const u8 cannot be shared
+//                           between threads safely`
+// Ele atestava em silencio um tipo que nao e thread-safe, e o `clock_is_send_sync`
+// deste ficheiro passava na mesma — um gate incapaz de falhar (KB-012). Sem ele,
+// essa assercao passa a ser verificavel de verdade.
 
 // ── ClockSync: simple NTP-style round-trip calibration ────────────────────────
 
