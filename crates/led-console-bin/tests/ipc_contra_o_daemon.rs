@@ -175,9 +175,33 @@ fn o_daemon_recusa_a_linha_longa_por_si_proprio() {
     r.read_line(&mut _h).unwrap();
 
     let enorme = "x".repeat(led_console_bin::MAX_BODY + 10);
-    writeln!(w, r#"{{"v":1,"id":2,"cmd":"load","args":{{"path":"{enorme}"}}}}"#).unwrap();
+    // EPIPE aqui é o daemon a fazer o que deve, não uma falha (TD-022). Ele impõe
+    // `MAX_LINE` **durante** a leitura e, mal o teto estoura, escreve a recusa, faz
+    // `flush` e FECHA sem drenar (`server.rs:264-274`) — enquanto esta escrita de 64 KiB+
+    // ainda vai a meio. Quem chega primeiro ao fim depende do escalonador: isolado o teste
+    // ganha, sob a carga do workspace o daemon ganha. Um `unwrap()` aqui mede essa corrida,
+    // não o daemon.
+    // A recusa já está no buffer de recepção quando o EPIPE chega (é escrita e flushed
+    // ANTES do fecho), por isso o `read_line` abaixo continua a devolvê-la — e são as duas
+    // asserções seguintes, não esta escrita, que provam o que o teste afirma.
+    // Só `BrokenPipe` é tolerado: qualquer outro erro de I/O continua a reprovar, senão
+    // "tolerar o fecho" e "ignorar erros de escrita" ficariam indistinguíveis (KB-012).
+    if let Err(e) = writeln!(w, r#"{{"v":1,"id":2,"cmd":"load","args":{{"path":"{enorme}"}}}}"#) {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "so o fecho do daemon e esperado nesta escrita, e este erro nao e um: {e:?}"
+        );
+    }
     let mut linha = String::new();
-    r.read_line(&mut linha).unwrap();
+    // `read_line` num socket ja fechado devolve `Ok(0)`, nao `Err` — logo o `unwrap()`
+    // PASSA e a assercao seguinte reprova com `&linha[..0]`, isto e, mensagem VAZIA.
+    let lidos = r.read_line(&mut linha).unwrap();
+    assert!(
+        lidos > 0,
+        "EOF antes da recusa: server.rs:266-267 escreve e faz flush antes do break; \
+         se isto dispara, a premissa de ordenacao do TD-022 caiu — nao alargar errno."
+    );
     assert!(linha.contains("bad_request"), "{}", &linha[..linha.len().min(200)]);
     assert!(linha.contains("demasiado longa"), "{}", &linha[..linha.len().min(200)]);
 }

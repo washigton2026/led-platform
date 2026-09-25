@@ -1245,3 +1245,119 @@ context: |
   saida tem de preservar isso.
 review_by: "antes de abrir trabalho no G5 (determinismo Linux/Windows) ou no D8 (empacotamento desktop) — o que vier primeiro. Nao bloqueia nada antes disso."
 ```
+
+---
+
+## TD-022 — `o_daemon_recusa_a_linha_longa_por_si_proprio` faz `unwrap()` numa escrita que o daemon esta correcto em interromper
+
+```yaml
+td_id:     TD-022
+title:     "O teste mede uma corrida entre a sua propria escrita de 64 KiB e o fecho do daemon; o `unwrap()` do `writeln!` transforma o comportamento DESEJADO da F1-B num vermelho intermitente do gate"
+severity:  Medium
+status:    pending-verification
+origin:    "Primeira observacao 2026-08-13c (CLAUDE.md:629), segunda 2026-09-01 (CLAUDE.md:346), terceira 2026-09-22 com o panic capturado inteiro. Diagnosticado desde a primeira, NUNCA promovido a TD — por isso o audit_gate nunca o viu e foi redescoberto do zero tres vezes."
+context: |
+  MEDIDO HOJE, nao inferido. `scripts/baseline_watch.sh` (instrumento novo, escreve o
+  output para ficheiro e le o `$?` sem pipe — KB-013) apanhou-o a primeira passagem:
+
+      EXIT_CARGO=101
+      thread 'o_daemon_recusa_a_linha_longa_por_si_proprio' (89574) panicked at
+      crates/led-console-bin/tests/ipc_contra_o_daemon.rs:178:82:
+      called `Result::unwrap()` on an `Err` value:
+        Os { code: 32, kind: BrokenPipe, message: "Broken pipe" }
+      test result: FAILED. 7 passed; 1 failed
+
+  Prova preservada em /tmp/baseline_RED_20260922_140420.log (21321 bytes).
+
+  LOCALIZACAO REAL: `ipc_contra_o_daemon.rs:178`. O changelog de 2026-08-13c diz `:177`
+  — a citacao DERIVOU uma linha em cinco semanas. E o caso exacto que a lumyx-next-steps
+  §2 avisa: `file:line` envelhece, reverificar antes de afirmar.
+
+  CAUSA, lida no codigo dos dois lados:
+
+  1. `led-daemon-bin/src/server.rs:264-274` — assim que `n > MAX_LINE` e a linha nao
+     termina em `\n`, o daemon escreve a recusa (`:266`), faz `flush` (`:267`) e
+     `break` (`:274`), FECHANDO sem drenar. O comentario in-loco explica porque:
+     drenar e ler uma quantidade que o atacante escolhe, e prosseguir sem drenar
+     deixaria o resto da linha gigante ser analisado como pedido novo. **Fechar e a
+     decisao correcta da F1-B, e esta documentada como tal.**
+
+  2. `ipc_contra_o_daemon.rs:178` — o teste ainda esta a escrever `MAX_BODY + 10` bytes
+     quando esse fecho acontece, e o `writeln!(...).unwrap()` apanha EPIPE.
+
+  O teste e o daemon estao numa corrida: quem chega primeiro ao fim da escrita. Sob
+  carga (suite completa do workspace, 4 cores) o daemon ganha e o teste entra em panico.
+  Isolado, o teste ganha — medido: 0 falhas em 54 execucoes apos um vermelho.
+
+  O QUE O TESTE QUER PROVAR, lido do doc-comment `:164-166`: *«O daemon tambem recusa —
+  a guarda do console nao e a unica defesa»*. Isso esta nas assercoes `:181-182`
+  (`bad_request` + `demasiado longa`), e **essas nunca chegam a correr** quando o panic
+  dispara. O `unwrap()` da linha 178 nao afirma nada sobre o daemon: afirma que a
+  escrita do proprio teste coube antes do fecho, que e ruido de escalonador.
+impact: |
+  E um FALSO-VERMELHO, nunca um falso-verde: quando dispara, dispara alto, e nenhum
+  defeito real fica escondido por ele. E isso que limita a severidade a Medium.
+
+  O custo e outro e e de processo: `cargo test --workspace` e o gate de entrada de toda
+  a missao neste repositorio, e um gate que falha 1-em-N e passa no rerun ensina a
+  re-executar em vez de ler. No dia em que uma regressao a serio aparecer, o primeiro
+  reflexo treinado sera correr outra vez. Ja aconteceu uma vez em 2026-09-01: duas
+  falhas da suite foram reportadas como possivel regressao e a causa era carga.
+
+  Custo medido nesta sessao: um turno inteiro gasto a re-diagnosticar do zero um defeito
+  que ja estava escrito no CLAUDE.md, porque prosa de changelog nao tem `td_id` e o
+  `scripts/audit_gate.py` so ve o ledger.
+mitigation_now: |
+  Nenhuma automatica. Na pratica, quem apanha o vermelho re-executa e passa — que e
+  exactamente o habito que esta entrada existe para nomear como custo.
+required_fix: |
+  DO LADO DO TESTE, nunca do daemon. O daemon esta correcto e o ADR da F1-B fixa esse
+  fecho como decisao; mexer em `server.rs` para acomodar um teste seria inverter a
+  hierarquia (a lumyx-next-steps §3 regra 4 proibe).
+
+  Tolerar EPIPE — e SO EPIPE — no `writeln!` da linha 178, mantendo intactas as duas
+  asserçoes que provam a recusa. E seguro porque o daemon escreve a recusa e faz `flush`
+  ANTES de fechar (`server.rs:266-267`), logo a resposta ja esta no buffer de recepcao
+  do teste quando o EPIPE acontece: `read_line` continua a devolve-la.
+
+  PROIBIDO: apagar as asserçoes `:181-182`; marcar o teste `#[ignore]`; tolerar qualquer
+  `io::Error` em vez de so `BrokenPipe` (mascararia um erro de transporte a serio);
+  drenar ou adiar o fecho no daemon.
+
+  RISCO CONHECIDO E DELIBERADAMENTE NAO MITIGADO — a assercao fixa o errno.
+  `assert_eq!(e.kind(), BrokenPipe)` afirma um valor que o kernel escolhe. Este
+  repositorio ja mediu divergencia macOS/Linux desta classe exacta: 2026-08-17 (C0)
+  encontrou o mesmo alvo a falhar no `connect` em Linux e no `send` em macOS, e o mesmo
+  endereco a dar `PermissionDenied` numa plataforma e `BrokenPipe` na outra — e concluiu
+  por escrito que *«nenhum teste pode afirmar o errno»*. A falsificacao determinista
+  desta correcao correu SO em macOS.
+
+  Alargar o conjunto aceite (p.ex. incluir `ConnectionReset`) foi CONSIDERADO E
+  REJEITADO: seria escolher um errno que nao consigo observar — nao ha Linux nesta
+  maquina (medido em 2026-08-13d: sem docker/colima/podman/lima/vagrant/multipass) — e
+  acrescentaria um ramo que nenhum teste alcanca. Preferir o estrito: se o Linux
+  divergir, a mensagem `:193` imprime `{e:?}` e NOMEIA o errno real. Falha ruidosa e
+  diagnostica vale mais que tolerancia especulativa. E por isso que o status e
+  `pending-verification` e nao `closed`.
+pending_gate: |
+  O job `test (ubuntu-latest)` verde num PR que contenha esta correcao, LIDO NO LOG e
+  nao no simbolo de check — o precedente e a F7.2 (PR #4, 2026-09-08), onde o veredito
+  vinculante foi a linha `test result` do log.
+
+  O que o gate tem de decidir: se o `writeln!` interrompido em Linux devolve `BrokenPipe`
+  (⇒ a correcao esta completa, promover a `closed` com este run como `evidence_ref`) ou
+  outro errno (⇒ a mensagem de `:193` nomeia-o, e SO entao se decide o conjunto aceite,
+  com o valor medido em vez de adivinhado).
+
+  No log do ubuntu, distinguir panico em :190 (errno do writeln!) de reprovacao em :198
+  (recusa ausente) — correccoes diferentes.
+falsification_required: |
+  Repor o `unwrap()` cru na escrita tem de reproduzir o vermelho com `BrokenPipe` sob
+  carga de workspace. Controlo negativo obrigatorio: um erro de I/O que NAO seja EPIPE
+  tem de continuar a reprovar — sem isso, "tolerar EPIPE" e "ignorar erros de escrita"
+  ficam indistinguiveis, que e a forma do KB-012.
+
+  E a asserçao de recusa tem de continuar a discriminar: um daemon que aceitasse a linha
+  longa tem de reprovar em `:181`.
+review_by: 2026-10-07
+```
