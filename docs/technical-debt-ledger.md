@@ -1254,7 +1254,23 @@ review_by: "antes de abrir trabalho no G5 (determinismo Linux/Windows) ou no D8 
 td_id:     TD-022
 title:     "O teste mede uma corrida entre a sua propria escrita de 64 KiB e o fecho do daemon; o `unwrap()` do `writeln!` transforma o comportamento DESEJADO da F1-B num vermelho intermitente do gate"
 severity:  Medium
-status:    pending-verification
+status:    closed
+closed_on: 2026-09-26
+closed_by: "3c60ab8 (correcao do lado do teste) + sonda Linux run 36245228354: o writeln! interrompido devolve BrokenPipe (errno 32) em Linux, 3/3 — o mesmo que em macOS. Conjunto aceite NAO alargado."
+evidence_ref: docs/evidence/td-022-brokenpipe-linux-2026-09-26.md
+required_test: o_daemon_recusa_a_linha_longa_por_si_proprio
+source_files: crates/led-console-bin/tests/ipc_contra_o_daemon.rs
+negative_control: |
+  As tres falsificacoes do `falsification_required`, RE-EXECUTADAS em 2026-09-26 sobre
+  57cf21d (3 execucoes cada, exit lido sem pipe, vermelhos de TESTE — 0 `error[E`):
+  F1) interrupcao FORCADA + `unwrap()` cru reposto -> 101 x3, panico com BrokenPipe.
+      Controlo F1c: a mesma interrupcao forcada com o codigo actual -> 0 x3 (verde).
+  F2) o `writeln!` trocado por um erro ConnectionReset -> 101 x3: um erro nao-EPIPE
+      continua a reprovar ("tolerar EPIPE" != "ignorar erros de escrita").
+  F3) daemon mutado para NAO recusar a linha longa -> 101 x3, reprovado em `:206`.
+      Achado: a resposta do daemon mutado AINDA traz `bad_request`; quem discrimina e a
+      assercao "demasiado longa". A sonda tem o seu proprio controlo (fase 3 anulada ->
+      INTERRUPCAO_NAO_OBSERVADA, vermelho).
 origin:    "Primeira observacao 2026-08-13c (CLAUDE.md:629), segunda 2026-09-01 (CLAUDE.md:346), terceira 2026-09-22 com o panic capturado inteiro. Diagnosticado desde a primeira, NUNCA promovido a TD — por isso o audit_gate nunca o viu e foi redescoberto do zero tres vezes."
 context: |
   MEDIDO HOJE, nao inferido. `scripts/baseline_watch.sh` (instrumento novo, escreve o
