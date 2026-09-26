@@ -37,11 +37,24 @@ fn perfil_com(preset: &str, gamma: f32, brightness: f32) -> HardwareProfile {
     p
 }
 
+/// A especificação que cada preset exige (ADR-0029 §7): Art-Net e sACN levam `@UNIVERSO`,
+/// o DDP recusa-o. `0` é o universo que a bancada de 2026-07-23 confirmou alinhado com o
+/// `dmx.uni` do WLED — e este ficheiro isola a **calibração**, não o endereçamento.
+fn spec_de(perfil: &HardwareProfile, addr: std::net::SocketAddr) -> String {
+    // O mínimo da faixa do protocolo (ADR-0029 §7.1): `0` no Art-Net, `1` no sACN — o
+    // E1.31 não define o universo 0. Derivar em vez de escrever mantém uma só fonte.
+    let proto = led_daemon_bin::OutputProtocol::from_profile(perfil.capabilities.protocol);
+    match proto.faixa_de_universos() {
+        Some((min, _)) => format!("{addr}@{min}"),
+        None => addr.to_string(),
+    }
+}
+
 /// Envia um frame e devolve os **bytes de payload** do primeiro datagrama.
 fn payload(perfil: &HardwareProfile, px: usize, cor: PixelColor, offset: usize) -> Vec<u8> {
     let sock = socket();
     let addr = sock.local_addr().unwrap();
-    let cfg = OutputConfig::resolve(perfil, &addr.to_string(), px, 1).expect("resolver");
+    let cfg = OutputConfig::resolve(perfil, &spec_de(perfil, addr), px).expect("resolver");
     let om = OutputManager::open(cfg).expect("abrir saída");
     om.send(&LogicalFrame::new(vec![cor; px], 0)).expect("enviar");
     let mut buf = [0u8; 4096];
@@ -167,7 +180,7 @@ fn a_fragmentacao_e_o_mtu_sobrevivem_a_calibracao() {
             let p = perfil_com(preset, g, b);
             let sock = socket();
             let addr = sock.local_addr().unwrap();
-            let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+            let cfg = OutputConfig::resolve(&p, &spec_de(&p, addr), px).unwrap();
             let previsto = cfg.datagrams_per_frame();
             let om = OutputManager::open(cfg).unwrap();
             om.send(&LogicalFrame::new(vec![PixelColor { r: 128, g: 64, b: 32 }; px], 0))

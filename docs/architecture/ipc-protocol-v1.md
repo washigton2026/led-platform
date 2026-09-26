@@ -19,6 +19,19 @@ Uma mensagem **por linha** (`\n`), JSON. `id` correlaciona pedido e resposta; re
 de ordem são permitidas. Linha acima de **64 KiB** é recusada — sem esse limite, um cliente
 que nunca envie `\n` faz o daemon crescer sem limite.
 
+O teto é imposto **durante** a leitura, não depois dela: o daemon lê no máximo 64 KiB + 1
+byte de cada vez, portanto um cliente que abra o socket e nunca envie `\n` **não** faz a
+memória crescer com o que escreve. Verificar o comprimento na linha já lida seria tarde
+demais — para a verificação correr, a linha teria de estar inteiramente em memória, que é
+exatamente o cenário contra o qual o limite existe.
+
+**Ao exceder o teto, o daemon responde uma vez e fecha a ligação.** Não drena o resto da
+linha: drenar até ao próximo `\n` seria ler uma quantidade que o **cliente** escolhe — a
+mesma negação de serviço noutro sítio. E prosseguir sem drenar seria pior, porque a leitura
+seguinte retomaria a meio da linha gigante e o resto seria analisado como um pedido novo.
+Depois de um corte a meio de uma linha, o enquadramento desta ligação não é recuperável; o
+cliente deve reconectar e repetir o pedido dentro do limite.
+
 ## Handshake — obrigatório
 
 ```jsonc
@@ -75,8 +88,8 @@ confirmação existe contra o **engano**, não contra quem já tem a credencial 
 
 ## Eventos assíncronos
 
-Só para quem fez `subscribe`. **Não têm `id`** — não respondem a nada, e é por isso que um
-cliente os distingue de uma resposta:
+Só para quem fez `subscribe`. **Não têm o campo `id`** — não respondem a nada, e é por isso
+que um cliente os distingue de uma resposta:
 
 ```jsonc
 {"v":1,"async":true,"payload":{"t_ms":1200,"event":"position_changed","ms":1180,"cause":"advanced"}}
@@ -99,6 +112,23 @@ GS1.6** — `no_show_loaded` significa o mesmo dos dois lados.
 
 O `id` sobrevive a **qualquer** erro analisável: é extraído antes de validar o resto, para
 que o cliente nunca fique à espera de uma resposta que não vem.
+
+### `id: null` — o erro que não se consegue atribuir
+
+Quando o pedido **não chega a ser analisável**, não há `id` de onde o extrair. Nesse caso a
+resposta leva `"id": null` — hoje, apenas a recusa por **linha demasiado longa**.
+
+A distinção que importa, e que os clientes já implementam: um evento **não tem a chave**
+`id`; uma resposta não-atribuível **tem a chave com o valor `null`**. O critério é a
+*presença da chave*, não a verdade do valor — `{"id":null,…}` é uma resposta, e é lida como
+tal pelo `ledctl` e pelo `led-console-bin`. Um cliente que testasse "o `id` é um número"
+em vez de "a chave existe" trataria esta recusa como evento e ficaria à espera para sempre.
+
+**Este `id` não é recuperável, e não se tenta recuperá-lo.** O `id` pode estar para lá do
+byte 65 536, e adivinhá-lo a partir de um prefixo truncado exigiria um analisador de JSON
+incompleto — mais superfície, para um caso em que a ligação vai fechar de qualquer maneira.
+Como só pode haver **um** destes por ligação (o que se segue é o fecho), o cliente pode
+atribuí-lo com segurança ao pedido que tinha em curso.
 
 ## Isolamento: **um só aplicador**
 

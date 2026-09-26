@@ -281,18 +281,11 @@ impl std::fmt::Debug for DdpDevice {
 impl DdpDevice {
     /// Create a new DDP device targeting `addr`. `pixel_offset` is the number of
     /// pixels (not bytes) before this segment in the destination's pixel buffer.
+    ///
+    /// The sending socket takes the **wildcard** bind: the routing table picks the egress
+    /// interface. To choose it, use [`DdpDevice::bound`].
     pub fn new(addr: SocketAddr, pixel_offset: u32) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.connect(addr)?;
-        Ok(Self {
-            socket,
-            target: addr,
-            seq: 0,
-            format: ColorFormat::Rgb(led_core::RgbOrder::Rgb),
-            buf: Box::new([0u8; 10 + DDP_MAX_PAYLOAD]),
-            pixel_offset,
-            max_px_override: None,
-        })
+        Self::bound(addr, pixel_offset, ColorFormat::Rgb(led_core::RgbOrder::Rgb), None)
     }
 
     /// Cria um device com um [`ColorFormat`] explícito — é assim que o caminho pixel-nativo
@@ -303,9 +296,50 @@ impl DdpDevice {
         pixel_offset: u32,
         format: ColorFormat,
     ) -> std::io::Result<Self> {
-        let mut d = Self::new(addr, pixel_offset)?;
-        d.format = format;
-        Ok(d)
+        Self::bound(addr, pixel_offset, format, None)
+    }
+
+    /// **The full constructor** — [`DdpDevice::new`] and [`DdpDevice::with_format`] are its
+    /// wildcard-bound shorthands, so there is exactly one place in this type that opens a
+    /// socket.
+    ///
+    /// `bind` is the **local** address the datagrams leave from. `None` keeps the historical
+    /// behaviour (`0.0.0.0:0` — the routing table chooses); `Some(local)` fixes the source
+    /// address, and with it the interface, for every datagram this device sends.
+    ///
+    /// # Why this is a parameter and not a field of the `HardwareProfile`
+    ///
+    /// `Capabilities::output_interface` (ADR-0018) declares a *kind* of interface — `Ethernet`
+    /// or `WiFi` — because the profile describes a **type of hardware**, and five nodes of the
+    /// same preset share it by construction. Which local address reaches a given node is a
+    /// property of **this host's** path to **that instance**, exactly like `address` and
+    /// `first_universe`, which the same ADR kept out of the profile. It arrives here as data,
+    /// from the caller — this crate keeps no dependency on `led-hardware-profile`.
+    pub fn bound(
+        addr: SocketAddr,
+        pixel_offset: u32,
+        format: ColorFormat,
+        bind: Option<SocketAddr>,
+    ) -> std::io::Result<Self> {
+        let socket = crate::bind::bind_sender(bind)?;
+        socket.connect(addr)?;
+        Ok(Self {
+            socket,
+            target: addr,
+            seq: 0,
+            format,
+            buf: Box::new([0u8; 10 + DDP_MAX_PAYLOAD]),
+            pixel_offset,
+            max_px_override: None,
+        })
+    }
+
+    /// O endereço local de onde este device envia. Depois do `connect`, um socket com bind
+    /// wildcard já mostra aqui a origem que o *routing table* escolheu — por isso este valor
+    /// diagnostica, mas **não** distingue "declarado" de "escolhido". Quem prova a distinção é
+    /// o endereço de origem lido no receptor (`tests/bind_source.rs`).
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.socket.local_addr()
     }
 
     /// O formato de cor deste device.

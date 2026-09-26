@@ -8,6 +8,8 @@
 # - `audio-core` usa `cpal` → o runner Linux precisa de `libasound2-dev` (ALSA).
 # - Toolchain = `stable` (o repo não pina). Clippy pode acusar lints novos num bump de
 #   toolchain (drift já observado com rust-1.96.0) — isso é sinal real, não falso-vermelho.
+# - EXCEPÇÃO ao ponto acima: o job `miri` pina o nightly. Ali o drift NÃO é sinal — é ruído
+#   sobre um gate de segurança de memória, e um gate ruidoso é um gate ignorado.
 name: CI
 
 on:
@@ -65,6 +67,133 @@ jobs:
           exit $code
       - name: Clippy (-D warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # ── Bloqueante: o contrato TypeScript tem de COMPILAR ────────────────────────
+  #
+  # Job próprio, e não um step do `test`, por duas razões:
+  #
+  # 1. **É independente do SO.** `tsc` produz o mesmo veredito em Linux e macOS; correr na
+  #    matriz duplicaria o custo sem acrescentar sinal.
+  # 2. **É uma propriedade diferente.** O `test` já corre o gate Rust↔TS
+  #    (`contract_gate.rs`), que prova que o `.ts` **corresponde** ao Rust. Este prova que
+  #    ele **compila**. São independentes: um ficheiro pode bater byte a byte com o gerador
+  #    e não compilar (ADR-0027, Emenda 1). Duas propriedades, dois jobs.
+  #
+  # Node **não** entra no job do Rust de propósito: `cargo test` não pode passar a depender
+  # de um segundo toolchain, senão a suíte falha em máquinas que só têm Rust.
+  contract:
+    name: contrato TS (tsc --noEmit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Node 22 (LTS) explícito
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          # OS DOIS lockfiles. Com só um, a chave de cache ignoraria mudanças nas
+          # dependências do `console-web` e o runner podia restaurar um cache desatualizado.
+          cache-dependency-path: |
+            crates/led-console-bin/contract/package-lock.json
+            console-web/package-lock.json
+      # `npm ci` e não `npm install`: instala **exatamente** o lockfile e falha se ele
+      # divergir do `package.json`. `install` poderia resolver uma versão diferente da
+      # pinada, e o gate deixaria de correr contra o que está versionado.
+      - name: npm ci (lockfile exato) — contrato
+        working-directory: crates/led-console-bin/contract
+        run: npm ci
+      # A app entra no MESMO job: `tsc` produz o mesmo veredito em qualquer SO, e o gate
+      # exige os dois projectos. Instalar aqui é o que torna o `tsc_gate.sh` reproduzível
+      # sem ele ter de instalar nada por sua conta durante a CI.
+      - name: npm ci (lockfile exato) — console-web
+        working-directory: console-web
+        run: npm ci
+      # O **mesmo** comando que corre localmente. Se a CI corresse um comando próprio, a
+      # reprodução local deixaria de provar o que a CI prova.
+      #
+      # O script invoca o binário de `node_modules/typescript` diretamente — nunca
+      # `npx tsc`, porque no registo npm o pacote `tsc` é um stub antigo (2.0.4) que não é
+      # o TypeScript. Verificado, não presumido.
+      - name: Gate de compilação do contrato
+        run: ./scripts/tsc_gate.sh
+
+  # ── Bloqueante: as construções `unsafe` do triple buffer, sob Miri ───────────
+  #
+  # Job próprio, e não um step da matriz `test`, pela MESMA razão que o `contract`:
+  # a matriz corre `@stable` e o Miri exige `nightly`. Enxertá-lo ali poria um segundo
+  # toolchain no caminho do `cargo test`, que é precisamente o que o comentário do job
+  # `contract` (acima) recusa fazer com o Node.
+  #
+  # O que este job protege, e porque é bloqueante: `led-triple` concentra as **5
+  # construções `unsafe`** do handoff render→send (3 `unsafe impl` + 2 blocos `unsafe {}`).
+  # Elas sustentam o invariante do `CLAUDE.md` *"render and send never share a mutable
+  # buffer"*. Uma regressão ali é UB em produção, não um lint — e `cargo test` não a vê.
+  # Antes deste job, a cobertura vivia só no `~/lumyx-e2e.sh --miri`, opt-in e fora do repo.
+  #
+  # `led-triple` tem ZERO dependências (`cargo tree -p led-triple` é uma linha), por isso
+  # este job não precisa do `libasound2-dev` que o job `test` instala no Linux.
+  miri:
+    name: miri (led-triple)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Nightly PINADO, e não `@nightly`. CORRECÇÃO (run #82): a versão anterior deste
+      # comentário dizia que o pino era "o toolchain exacto que produziu a evidência local".
+      # Era FALSO — o canal datado `nightly-2026-06-02` empacota o master de 2026-06-01
+      # (`rustc 1.98.0-nightly 6bdf43094`, lido no log do #82), enquanto o local é
+      # `d595fce01` de 2026-06-02. A data no `rustc --version` é a do COMMIT, não a do canal.
+      # O gate passou nos DOIS, o que é evidência mais forte do que num só. O nightly muda todos os
+      # dias e este repo JÁ foi partido por drift de toolchain (`chunks_exact_to_as_chunks`
+      # deixou a baseline vermelha sem regressão nenhuma). Um gate de segurança de memória
+      # que fica vermelho por razão alheia é um gate que a equipa aprende a ignorar.
+      # Subir o pino é uma decisão deliberada, com re-execução — nunca um acidente de data.
+      - name: Rust nightly PINADO + miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-02
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Chave própria: este job usa outro toolchain e outro target-dir (`target/miri`).
+          key: miri
+      # Evidência do toolchain NO LOG. O §10 do protocolo exige registar plataforma e
+      # toolchain; lê-los do log é mais forte do que confiar no que o YAML pediu.
+      - name: Toolchain efetivo (evidência, não suposição)
+        run: rustc --version && cargo miri --version
+      - name: Miri — led-triple
+        # `bash {0}` (sem -e), pela mesma razão do job `test`: o default do GitHub é
+        # `bash -eo pipefail`, que mata o step no pipeline e leva o diagnóstico com ele.
+        shell: bash {0}
+        run: |
+          # Toolchain EXPLÍCITO no `+`, e não herdado do default que a action define: o
+          # veredito não deve depender de um efeito colateral da instalação. É o mesmo
+          # comando do `CLAUDE.md:24` (`cargo +nightly miri test -p led-triple`), com o
+          # selector resolvido para a data pinada — localmente o default é `stable`, aqui
+          # não há default em que confiar.
+          cargo +nightly-2026-06-02 miri test -p led-triple 2>&1 | tee miri-output.txt
+          code=${PIPESTATUS[0]}   # o exit do CARGO, nunca o do `tee` (KB-013)
+
+          # KB-012 — o gate tem de saber reprovar. `test result: ok` é satisfeito por
+          # "ok. 0 passed; N filtered out", portanto um filtro errado (ou um crate
+          # renomeado) daria VERDE sem executar uma única construção `unsafe`. Foi
+          # exactamente essa a falha encontrada em 2026-09-19 no Invariante 4 do
+          # `lumyx-e2e.sh`. Aqui exigimos N > 0, extraído do agregado.
+          passed=$(grep -aoE 'test result: ok\. [0-9]+ passed' miri-output.txt \
+                   | grep -aoE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          if [ "$code" -eq 0 ] && [ "$passed" -eq 0 ]; then
+            echo "::error::Miri saiu 0 mas executou 0 testes — falso-verde (KB-012)."
+            exit 1
+          fi
+
+          if [ "$code" -ne 0 ]; then
+            echo "::group::miri"
+            grep -aE 'Undefined Behavior|data race|test result: FAILED|^error' miri-output.txt | head -40
+            echo "::endgroup::"
+            grep -aoE 'Undefined Behavior: [^\n]+' miri-output.txt | head -5 | \
+              while IFS= read -r ub; do printf '::error::%s\n' "$ub"; done
+          fi
+          echo "miri: ${passed} testes executados, exit ${code}"
+          exit $code
 
   # ── Não-bloqueante: Windows é suportado, mas não conduz o design ─────────────
   windows:

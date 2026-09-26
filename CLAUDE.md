@@ -19,11 +19,17 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (964 tests)
+cargo test --workspace                  # all suites (1135 tests)
 cargo build --workspace --all-targets   # must be warning-free
-cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Miri
+cargo +nightly miri test -p led-triple   # lock-free unsafe under Miri (5 constructs; led-pixel-engine/src has 0)
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
-~/lumyx-e2e.sh --miri                   # + Miri on all unsafe crates
+~/lumyx-e2e.sh --miri                   # + Miri on the crates hand-listed in the script — today
+                                        #   `led-triple audio-core`. NOT auto-derived — today it happens
+                                        #   to cover every crate with unsafe in src/ (led-triple 5 +
+                                        #   audio-core 3 = 8; led-hal has 0 since its 4 redundant
+                                        #   unsafe impls were removed). A new unsafe crate must
+                                        #   be added by hand, here and/or in ci.yml.
+./scripts/tsc_gate.sh                   # gate de compilacao do contrato TS (ADR-0027)
 ```
 
 ## Crate map (dependency DAG: everything depends on `led-core`, never the reverse)
@@ -34,13 +40,16 @@ cargo +nightly miri test -p led-pixel-engine --lib   # lock-free unsafe under Mi
 | `led-hal` | `Hal` (sole `ProtocolOutput`), `SimulatorDevice`, `Heartbeat`, `Core` | led-hal |
 | `led-layout` | `PixelLogical`/`Layout`, prop generators, `LayoutMapper` | led-layout |
 | `led-protocols` | `SacnDevice` (E1.31, unicast + per-universe multicast) + ArtPoll source-conflict detection | led-protocols |
-| `led-pixel-engine` | `Effect`s, HSV/gamma, lock-free triple buffer, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL) | led-pixel-engine |
+| `led-triple` | **leaf, zero dependencies** — the wait-free `triple` buffer for the render→send handoff (`triple_buffer`/`Producer`/`Consumer`). Holds **all 5 `unsafe`** of this path; the permutation invariant of its 3 slots is the whole safety argument. Extracted so those `unsafe` sit under Miri in isolation — now enforced by the blocking CI job `miri (led-triple)` | led-pixel-engine |
+| `led-pixel-engine` | `Effect`s, HSV/gamma, render→send `Pipeline`, audio-reactive bridge, GPU-style compute kernels (`Plasma` + WGSL). **Re-exports `led-triple` as `triple`** (`pub use led_triple as triple`), so `crate::triple::…` still resolves — it no longer owns the buffer, and has **0 `unsafe`** | led-pixel-engine |
 | `led-sequencer` | non-destructive `Timeline`/`Track`/`Clip`/keyframes + `TempoMap` beat-sync; **a `Timeline` is an `Effect`** | led-sequencer |
 | `led-audio` | Hann-windowed FFT, band energy, spectral-flux beat detection → `led-core::AudioFeatures` (Phase-1 contract) | led-audio |
 | `led-demo` *(bin)* | renders a show to `show.gif` (matrix + sequencer + Plasma + beat-sync); uses the `gif` crate | — |
 | `audio-core` | **leaf, outside this DAG** — CPAL capture → Hann window → rustfft → its own `AudioFeatures` v1.0 (lumyx-system-architect §3/§11), published via `tokio::sync::watch` | lumyx-system-architect |
 | `led-daemon-bin` | **NEW** — o **processo** (GS2): laço, pacer injetável, journal JSONL, loader `.lumyx`. Bin `led-daemon`. **Sem saída** — nenhum frame deixa o processo | — |
 | `led-daemon` | **NEW** — a superfície de transporte do engine (ADR-0023): `State` (8 estados), `Command`, `Event`, `ShowRuntime`. **Zero dependências** — nem `led-core`; o pré-voo chega como dado | — |
+| `led-console-bin` | **NEW** — a ponte console↔daemon (ADR-0026): **cliente** do IPC v1, processo separado. Traduz transporte e **não** reimplementa domínio — um gate estrutural reprova se máquina de estados, MTU, `refresh_hz`, `Calibration` ou `HardwareProfile` aparecerem aqui. Loopback-only enquanto o ADR-0014 não der auth. **Binário `led-console`** (ADR-0028 D6): `--bind` e `--socket` obrigatórios, sem porta por omissão |
+| `console-web` *(fora de `crates/`)* | **NEW** — a Application Shell (ADR-0028 D1). React + TS + Vite, Node 22. Consome `/api/state` e **só** o que ele prova; os tipos vêm do contrato **gerado**, nunca copiados. `src/transport/api.ts` é o único sítio com `fetch`. O proxy do Vite mantém a mesma origem — o console não emite CORS, por decisão |
 | `led-bridge` | **integration seam** — the only crate that imports both `audio-core` (v1) and `led-pixel-engine` (v0). Owns: `adapt`/`adapt_into` (v1→v0 adapter), `BridgeHandle` (watch→AudioShare thread), `SimLoop` (hardware-free end-to-end live loop) | — |
 
 Data flow: `led-layout` compiles the mapping → `led-sequencer` composes effects over time
@@ -71,8 +80,10 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 - **Heartbeat resends the last valid frame, never zeros**; max gap to any device **2.4 s**
   (Warning 2.0 s, Critical 2.4 s). **WiFi is forbidden for live shows** (cabled only).
 - **No allocation on the hot path** (`led-hal/tests/no_alloc.rs`, counting allocator).
-- **Render and send never share a mutable buffer** — the `triple` buffer (Miri-clean,
-  incl. many-seeds). The permutation invariant of its 3 slots is the whole safety argument.
+- **Render and send never share a mutable buffer** — the `triple` buffer, which lives in the
+  `led-triple` leaf crate (Miri-clean, incl. many-seeds). The permutation invariant of its
+  3 slots is the whole safety argument — and breaking it is the negative control: forcing
+  producer and consumer onto the same slot makes Miri report a data race.
 - **Per-universe wrapping sequence** in sACN; one universe per datagram; per-universe
   multicast group (239.255.hi.lo) — and **one sender per universe** (ArtPoll detects a
   conflict and names the other IP before starting). Multicast needs IGMP on the path (`/security`).
@@ -86,13 +97,15 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (964 tests)
+cargo test --workspace                  # all suites (1135 tests)
 ```
 
-15 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **964 tests green** · zero warnings.
+17 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1135 tests green** · zero warnings.
+(20 workspace members; the 17 is that total minus the three named separately.)
 
-Miri clean: `ring_buffer` (5, SPSC unsafe), `triple` buffer (24 seeds), `led-bridge/adapter` (6, 1M iter).
-Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence gate. `tests/test_audit_gate.py` 9/9. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
+Miri clean (contagens = **testes**, não construções `unsafe`): `audio-core/ring_buffer` (5 testes), **`led-triple`** (7 testes, 0 UB — o crate que hoje detém o `unsafe` do triple buffer; 24 scheduler seeds numa sessão anterior), `led-bridge/adapter` (6 testes, 1M iter — **histórico**: o `led-bridge` já não tem `unsafe` em `src/`).
+Miri **corre na CI**: job `miri (led-triple)`, ubuntu-latest, `nightly-2026-06-02` pinado, **bloqueante** (promovido depois de observado a passar). Cobre as **5 construções `unsafe`** do `led-triple` (3 `unsafe impl` + 2 blocos `unsafe {}`). O step **exige `N > 0`** testes executados — `test result: ok` sozinho é satisfeito por `0 passed; N filtered out`, e sem essa exigência um filtro errado daria verde sem correr nada (KB-012). Execução observada **já com o job bloqueante** (run 35536724237, `2e603c9`): **7 passed · 0 failed · 0 ignored · 0 UB**, 203,77 s, com `miri: 7 testes executados, exit 0` no log. **O que NÃO está coberto** (medido em 2026-09-20 com `rg -n 'unsafe (impl|fn)|unsafe \{' crates/`, triado `src/` vs `tests/`): em produção havia **12 construções `unsafe`** no workspace e **há agora 8** — `led-triple` **5**, `audio-core` **3** (`ring_buffer.rs:24,55,75`). O `led-hal` tinha **4** (`metrics.rs:183,184` + `shared_clock.rs:117,118`, todas `unsafe impl Send/Sync`) e passou a **0**: eram redundantes (os campos já são `Send + Sync`, o compilador deriva-os) e tapavam o `assert_send_sync` dos próprios ficheiros. O mesmo `rg` ainda devolve 12 linhas, porque apanha 4 comentários do `led-hal` que citam o `unsafe impl` — a contagem de construções é 8. Destas, **só as 5 do `led-triple` têm gate de CI**. O `audio-core` corre apenas no `~/lumyx-e2e.sh --miri`, que é opt-in e **não versionado**. O `led-hal` deixou de ter `unsafe` próprio, logo não precisa de Miri por essa razão. `led-bridge` e `led-pixel-engine` **não têm `unsafe` em `src/`** (as suas construções vivem em `tests/no_alloc.rs` e são o alocador contador `GlobalAlloc`).
+Governance: `scripts/audit_gate.py` (KB-012) — 20 TD entries, all **11** closed TDs pass evidence gate. `tests/test_audit_gate.py` 10/10. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
 
 | Crate | Status |
 |---|---|
@@ -100,16 +113,17 @@ Governance: `scripts/audit_gate.py` (KB-012) — all 9 closed TDs pass evidence 
 | `led-hal` | HAL + mapping + heartbeat + NetworkGuard (integrated into `Hal::new`/`with_guard`) |
 | `led-layout` | MegaTree + matrix-serpentine generators + LayoutMapper |
 | `led-protocols` | sACN (unicast + multicast) + ArtPoll + DDP + RouterDevice (sACN/DDP fan-out by universe) |
-| `led-pixel-engine` | effects (**13**: 5 base + biblioteca `Chase`/`Twinkle`/`Fire`/`ColorWash`/`Strobe`/`Meteor`/`Lightning`/`Ripple`, ADR-0021) + `noise` sem estado + triple buffer + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
+| `led-triple` | **NEW** — leaf std-only, zero deps: o `triple` buffer wait-free do handoff render→send. As **5 construções `unsafe`** desta fatia vivem aqui, sob o job de CI **bloqueante** `miri (led-triple)`: 7 testes, 0 failed, 0 ignored, 0 UB (run `2e603c9`), com `N > 0` exigido. Controlo negativo local: forçar produtor e consumidor ao mesmo slot dá `Data race detected` |
+| `led-pixel-engine` | effects (**13**: 5 base + biblioteca `Chase`/`Twinkle`/`Fire`/`ColorWash`/`Strobe`/`Meteor`/`Lightning`/`Ripple`, ADR-0021) + `noise` sem estado + **re-export do `led-triple` como `triple`** + pipeline + reactive bridge + GPU compute (wgpu 22.1.0, `gpu` feature) |
 | `led-sequencer` | Timeline/Track/Clip/Keyframe + TempoMap + LiveTempoMap (real-time beat accumulator) |
 | `led-audio` | Hann FFT + band energy + spectral-flux beat |
 | `led-bridge` | adapt v1→v0 + BridgeHandle + SimLoop |
 | `audio-core` | CPAL → SPSC ring → Hann FFT → bands/beat/BPM/harmonic + **SectionDetector** (musical section detection: Intro/Verse/Chorus/Build/Bridge/Drop/Outro) |
 | `led-show-recorder` | **NEW** — `.lumyx` binary format: write/read `LogicalFrame` + `AudioSnapshot` streams; `pixel_hash` for regression replay comparison |
 | `led-readmodel` | read-only snapshot the operator UI polls: `ReadModel` (DeviceStatus + HealthStatus + MetricsView + discovery) + loopback-only serve (ADR-0013/0014) |
-| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. **+`Transport` (GS4.3): MTU declarado, fragmentação DERIVADA dele.** Leaf: depends only on `led-core` |
+| `led-hardware-profile` | **NEW** — design-time capability descriptor (ADR-0018): schema, validator, `const` preset table, `HardwareRegistry`, compile → `CompiledLayout` + `DriverConfig`. **+`Transport` (GS4.3): MTU declarado, fragmentação DERIVADA dele.** **+FASE C (ADR-0030): `Capabilities.ports` — uma contagem, não um limite — e `reparticao`, o DONO ÚNICO da aritmética de repartição (§6). `compile_layout` alinha cada porta numa fronteira de universo (§4-bis).** Leaf: depends only on `led-core` |
 | `led-daemon` | **NEW** — máquina de estados do transporte (ADR-0023, contrato **congelado** na GS1.6). Matriz exaustiva 8×10 = 80 pares; `PositionChanged` carrega `cause`; `Transitioned` só quando o estado muda; `no_show_loaded` por guarda única |
-| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN), `FrameSource` e `Stage` — **ligados ao laço**, com pré-voo real (WifiBlockGuard + ArtPoll) e heartbeat conduzido pelo tick. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede |
+| `led-daemon-bin` | **NEW** — processo daemon (GS2) + **IPC UDS owner-only (GS3)** + **camada de saída (GS4.1/4.2)**: `OutputManager` (DDP/Art-Net/sACN), `FrameSource` e `Stage` — **ligados ao laço**, com pré-voo real (WifiBlockGuard + ArtPoll) e heartbeat conduzido pelo tick. Protocolo v1, `ledctl`, um só aplicador. Carrega `.lumyx` em **fluxo**, tica em cadência absoluta, emite JSONL, encerra limpo. Pacer injetável ⇒ laço testável sem relógio de parede. **+FASE C (ADR-0030 §8): os três protocolos pedem o endereçamento ao `led-hardware-profile` — Art-Net e sACN deixaram de usar `linear_assignments`, e o `170`/`× 3` escritos à mão saíram do caminho do daemon (TD-019)** |
 | `led-demo` | show.gif renderer |
 
 **TD-004 CLOSED** (2026-06-26): wgpu 22.1.0 — Metal headless no longer hangs. Real GPU executor implemented (`crates/led-pixel-engine/src/gpu_executor.rs`): `GpuContext::try_init()` + `GpuPlasmaExecutor` (pre-allocated buffers, per-frame dispatch, readback). 3 GPU tests pass (init_does_not_hang, parity_with_cpu, deterministic). Paridade CPU/GPU validada com tolerance ≤ 1 LSB per channel.
@@ -132,6 +146,831 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-09-19 — D4 Fatia 1(b): o triple buffer vira crate leaf, e dois gates de Miri deixam de ser encenação
+
+**Done.** `crates/led-pixel-engine/src/triple.rs` passou a **`crates/led-triple`**, um leaf
+std-only com **zero dependências**. `led-pixel-engine` ganha a dep e **re-exporta**
+(`pub use led_triple as triple`), por isso `pipeline.rs:13` e `:55` não mudaram uma letra.
+Integrado no baseline por `merge --no-ff` (`b2f4fca`), preservando `a1059d0` — o hash sobre
+o qual os gates correram. Um rebase teria reescrito esse hash e a prova ficaria a apontar
+para um commit inexistente.
+
+**O achado que justifica a extracção, medido e não suposto:**
+`grep -rn unsafe crates/led-pixel-engine/src/` → **zero**. A extracção levou **toda** a
+superfície `unsafe` do crate, não uma parte. Consequência directa: o comando que este
+ficheiro documentava como *"lock-free unsafe under Miri"*
+(`cargo +nightly miri test -p led-pixel-engine --lib`) passou a correr sobre um crate **sem
+uma única `unsafe`** — um falso-verde documental, corrigido nesta sessão.
+
+**Dois testes guardados sob `cfg!(miri)`, e a razão é diferente em cada um.** Nenhum é
+cosmético: sem eles o gate do Miri é inexecutável.
+- `triple_buffer_1m_cycles_no_torn_frame`: 1M ciclos × ~1 KiB = ~10⁹ operações interpretadas.
+  **Não terminava** — abortado aos 19 min de relógio / 16 min de CPU. Reduzido a 500 ciclos
+  sob Miri; a propriedade é **por-ciclo**, logo menos ciclos ainda a exercitam.
+- `triple_buffer_publish_latency_sub_microsecond`: sob Miri, `Instant::elapsed` mede o
+  **interpretador**, não o swap atómico — medido `avg 355000ns`, um **falso-vermelho** num
+  crate limpo. O laço continua a correr (é o que exercita o `unsafe` do publish) e só o
+  **veredito** de tempo é saltado. **Nenhum limiar foi inventado para o Miri**: um orçamento
+  arbitrário é o erro do TD-006.
+Ambas usam `cfg!(…)` como **expressão**, no molde do irmão `no_tearing_under_threads:111`, e
+não `#[cfg]` — nada sai da compilação, logo nada deixa de ser verificado. Zero `#[allow]`.
+
+**Invariants verified.** Miri `-p led-triple`: **7 passed · 0 failed · 0 ignored**, exit do
+processo **0**, **0 UB**. **Falsificado (KB-012):** mutar `Consumer{idx:1}` → `idx:0` quebra a
+invariante de permutação que o comentário do `unsafe impl Sync` invoca como argumento de
+segurança, e o Miri responde `error: Undefined Behavior: Data race detected`. Sem esse
+controlo, *"o Miri correu"* e *"o Miri apanharia"* seriam indistinguíveis.
+Fora do Miri nada foi enfraquecido: `cargo test -p led-triple` → 7 passed, **0 ignored**.
+`cargo test --workspace` → **1135 · 0 · 9**, exit 0; clippy `--all-targets --locked
+-D warnings` exit 0.
+
+**A aritmética da integração foi PREVISTA antes de correr, e fechou dos dois lados:**
+`d4fe5b7` → 1135/0/9 com **103** linhas `test result:`; `b2f4fca` → 1135/0/9 com **105**.
+**Testes +0, binários +2** (`unittests` e `Doc-tests` de `led_triple`, este com 0 testes) —
+os 7 testes do triple **mudaram de binário, não de existência**. E isso corrigiu uma
+premissa: supunha-se que o TD-020 tivesse acrescentado testes, mas
+`git diff 54b9fa8..d4fe5b7` toca 1 `.rs` + 2 `.md` com **zero `#[test]` adicionados**
+(`shared_clock.rs`: 16 antes, 16 depois). **Endurecer um detector não é acrescentar testes.**
+
+**Pending — e é a mesma classe do defeito que esta sessão fechou.** `~/lumyx-e2e.sh:197`
+(Invariante 4) ainda corre `cargo test -p led-pixel-engine --lib triple_buffer`, que agora
+casa **zero** testes: `0 passed; 72 filtered out`, exit 0, e o `grep -q "test result: ok"`
+do gate **casa na mesma** ⇒ imprime `✅ triple buffer no torn frames` sem executar nada.
+Medido, **não corrigido** — o ficheiro vive fora do repositório e a decisão é do operador.
+Também **não há Miri no `ci.yml`**: toda esta cobertura depende de um script opt-in e
+não-versionado. E o `b2f4fca` **não foi empurrado** — `origin` continua em `d4fe5b7`.
+
+**Decisions.** Leaf com **zero dependências** de propósito: é o que permite pôr as 5 `unsafe`
+sob Miri isoladas do resto do workspace. O `led-pixel-engine` re-exporta em vez de os
+consumidores mudarem de caminho — a superfície não mudou, só o crate. E as guardas vivem no
+**corpo do teste**, nunca na `unsafe`: o que foi ajustado é a medição, não a coisa medida.
+
+### 2026-09-08 — F7.2/Ubuntu RESOLVIDA: o gate media o processo, não o caminho de envio
+
+**Zero linhas de produção.** Só `crates/led-protocols/tests/no_alloc.rs`. A dívida estava aberta
+desde 2026-08-10c e a causa nunca tinha sido encontrada — porque não havia Linux nesta máquina
+para a provocar, e a única via honesta era **esperar pela próxima falha**. Ela chegou.
+
+**A regra de decisão estava escrita ANTES de haver dados, e é isso que dá valor ao veredito.**
+O instrumento de 2026-08-13d registou por escrito: `N > 0` ⇒ contaminação do processo, o defeito
+é do gate; `N == 0` ⇒ alocação real no DDP e o tamanho nomeia o culpado. Run **34193510776**,
+job `test (ubuntu-latest)`, passo **`Test`** (o `Clippy` ficou `skipped` — **não foi o clippy**):
+
+```
+DDP send path allocated 4 time(s) over 10000 frames
+  — tamanhos=[148, 608, 48, 96] bytes · fora da thread do teste=4 de 4
+```
+
+**`4 de 4`.** Nenhuma da thread do teste. **O `led-protocols` está limpo** — o caminho de envio
+DDP é livre de alocação, como o C2 (2026-07-25) o deixou. O que reprovava era o `ALLOCS` a
+incrementar em *toda* alocação do processo: o alocador é global, a janela media o que qualquer
+thread fizesse lá dentro, e o harness do `libtest` também corre. No macOS isso media zero; no
+Linux, quatro. **A hipótese estava medida a 0 em macOS e marcada como «por testar onde importa»** —
+foi testada onde importa.
+
+**A correcção atribui por thread, e FORTALECE a asserção em vez de a afrouxar.** A propriedade
+afirmada é *"o caminho de envio não aloca"*, e `send_universe` é síncrono e não gera threads: por
+construção, nada do caminho sob teste pode alocar noutra thread. O que sai da conta é ruído
+alheio. As de fora continuam **contadas e reportadas** como contexto — foi esse número que
+resolveu a investigação, e apagá-lo cegaria a próxima.
+
+**Falsificado 2×, e a assimetria da primeira é o argumento inteiro.** (A) a atribuição a devolver
+`false` sempre — o **teste principal PASSA** e só o controlo negativo reprova: sem ele, «filtrar
+por thread» e «desligar o contador» seriam indistinguíveis, e o gate ficaria vacuoso para sempre.
+(B) `vec![7u8; 900]` plantado no laço medido → o principal reprova com
+`tamanhos=[900, 900, …] · na thread do teste=10000`. **É o contraste empírico que fecha o
+diagnóstico:** uma alocação real tem a forma do payload; a do Ubuntu era `[148, 608, 48, 96]`.
+
+O segundo `#[test]` obrigou a serializar o ficheiro — os dois partilham a janela e os estáticos.
+Reusa o `static ALLOC_GATE: Mutex<()>` do `led-hal/tests/no_alloc.rs:37`, com
+`unwrap_or_else(|e| e.into_inner())` para um pânico não cascatear. **Não** um segundo mecanismo.
+
+**Invariants verified.** `led-protocols` **101 passed · 0 failed · 2 ignored**, exit lido sem pipe
+(KB-013). Clippy `-p led-protocols --all-targets -D warnings` exit 0. **Zero produção tocada** —
+`src/` intacto.
+
+**Pending, e é a fronteira honesta desta fatia.** **Verde local é NECESSÁRIO, não SUFICIENTE:**
+o macOS media 0 mesmo com o defeito, portanto não reproduz o flake. O veredito vinculante é o job
+`test (ubuntu-latest)` na CI — só ele exercita a plataforma onde a contaminação existe. Toolchain
+local **1.96.0** contra **1.98.1** na CI, e essa deriva já mordeu este repo uma vez.
+
+### 2026-09-01 — FASE C: a porta física entra no schema, ganha um dono, e chega ao endereçamento
+
+**Sete commits, e os três primeiros não têm uma linha de Rust.** A ordem foi contrato primeiro,
+código depois — e foi ela que evitou construir sobre uma decisão por tomar.
+
+**A cabeça do DAG estava mal descrita, e o repositório ganhou.** O briefing dizia *«contrato
+fechado, PASS»*; o ADR-0030 dizia `proposto`. Neste repositório `proposto (pré-impl.)` e
+`aceito (pré-impl.)` são vocabulários distintos — os ADRs 0013/0014/0015/0018 usam o segundo, e
+**nenhum ADR tem código por trás enquanto está `proposto`**. Escrever `ports` antes de o aceitar
+teria aberto uma excepção que ninguém decidiu. O ADR-0030 e a Emenda 1 do ADR-0018 passaram a
+`aceito (pré-implementação)`.
+
+**ADR-0031 — a negociação de versão do IPC, escrita antes de existir v2.** A Emenda 3 do
+ADR-0027 decidiu que um comando novo exige `PROTOCOL_V = 2`; a inspecção encontrou que **a
+negociação estava documentada e nunca implementada** — `from_line` recusa `v != PROTOCOL_V` no
+parser, antes de saber se a linha é um `hello`, e o `accepts:[1]` é um literal **sem um único
+leitor**. O ADR fixa: o `hello` viaja **sempre em `v:1`** (é o chão, e resolve o ovo-e-galinha
+sem tocar no parser), `accepts` passa a bilateral e **derivado**, a ligação fica com
+`max(∩)`, e sem intersecção é `unsupported_version` **não fatal**. Com isto um cliente v2 contra
+um daemon v1 **desce limpamente** em vez de levar recusa — melhor comportamento que o actual, com
+**zero** alterações do lado v1. **Não implementado**: `PROTOCOL_V` continua 1 e o `enum Cmd`
+continua com 12 comandos; o gatilho é o primeiro comando que exija v2.
+
+**C1 — `ports` em `Capabilities`, e o gate não é uma asserção.**
+`ports_vive_em_capabilities_e_limits_nao_ganhou_nada` **destrutura exaustivamente** as duas
+structs: quem acrescentar um tecto por porta a `Limits` deixa de **compilar**, em vez de criar um
+limite paralelo ao `max_pixels`. Falsificado com `max_pixels_per_port` plantado em `Limits` →
+`E0027: pattern does not mention field`. E digo-o com honestidade: os três `E0063` que o
+compilador também emite **não são o gate** — quem acrescenta o campo actualiza os construtores e
+o build volta ao verde; o `E0027` é o único que sobrevive a isso.
+
+**C3 — os dois presets multi-porta declaram as 16 portas que têm.** Falcon `16_384/16 = 1024`,
+Advatek `16_320/16 = 1020`, ambas exactas e **verificadas contra o `max_pixels` que já estava na
+tabela**. Os outros seis ficaram em `ports: 1` **não por omissão**: o repositório não determina a
+contagem deles, e inventá-la era o que estava proibido. Fica registado que o
+`raspberry-fpp-sacn` declara `max_pixels: 32_768` com `ports: 1` — quase de certeza falso, e sem
+fonte para corrigir.
+
+**`ports == 0` — variante própria, e a razão de não reusar o `ZeroLimit`.** Tornar o zero
+irrepresentável (`NonZeroU16`) é mais forte, e foi **rejeitado por três custos**:
+`#![forbid(unsafe_code)]` obrigaria a `NonZeroU16::new(16).unwrap()` **dentro da `const`** que o
+módulo declara ser só literais; muda tipos públicos; e — o que decide — `pixels_per_universe`,
+`max_pixels` e `refresh_hz` também não podem ser zero e já usam a regra 5 com `ZeroLimit`. Ter só
+o `ports` irrepresentável deixaria **dois mecanismos para a mesma classe**. `Finding::NoPhysicalPorts`
+é regra **3-bis**, entre as capacidades — reusar `ZeroLimit` rotularia `ports` como limite e
+contradiria o §5. Falsificado 2×, e a segunda mutação é essa simplificação exacta.
+
+**C4 — o 9.º check do guardião, e o scanner textual foi REJEITADO com razão medida.** Um `grep`
+por `port` daria falso BLOCK: `network_guard.rs` usa `Port` no sentido do `networksetup` do
+macOS, e os literais multi-linha desse ficheiro quebram remoção linha a linha. O gate ficou na
+**direcção da dependência** — nenhum crate do caminho de runtime declara `led-hardware-profile` —
+que é o **check 4 do guardião aplicado ao contrário**, não arquitectura nova. O lado do seam
+continua delegado ao SemVer Guardian (invariante 8), sem duplicar.
+
+**C2a — a repartição ganha dono único, e a prova é uma mutação CRUZADA.** O núcleo passou para
+`led-hardware-profile::reparticao`; o `repartir` do daemon virou **chamador**. Mutei o núcleo
+(`inicio = i*tecto + 1`) e reprovaram **quatro testes do `led-daemon-bin`** — se o daemon tivesse
+cópia própria, teriam passado. E os **8 testes de `repartir` do daemon, escritos contra a
+implementação antiga, passam inalterados**: assinatura e mensagens foram preservadas de
+propósito. O núcleo é **parametrizado** (`UnidadeVazia` entra como **dado**) porque duas regras
+não transferem: unidade vazia é **recusa** no nó e **válida** na porta (§4-ter).
+
+**C2b — Art-Net e sACN passam a pedir o endereçamento ao dono (§8), e o TD-019 fecha no fio.** Os
+dois arms chamavam `linear_assignments`, com `170` e `× 3` **escritos à mão** e `RgbOrder` em vez
+de `ColorFormat` — não é argumento esquecido, é parâmetro que a API não expõe. O arm DDP, no
+mesmo `match`, honrava os dois. **Alcançável e agora medido:** `generic-sk6812-rgbw-sacn` declara
+`ppu: 128` e RGBW, e o validador só recusa RGBW sobre DDP; 300 px dão **3 universos** a 128 e
+seriam **2** a 170.
+
+**A equivalência foi provada ANTES de migrar.** Com `ports = 1` — 6 dos 8 presets e **todos** os
+validados em hardware — a repartição dá uma só fatia e o endereçamento é **idêntico**. Prova: os
+**16 testes de bytes no fio** do `wled_driver.rs` passam **inalterados**.
+
+**A falsificação apanhou algo não previsto.** Reintroduzi o TD-019 e reprovaram **dois** testes: o
+novo (`left: 2, right: 3`) e o **gate estrutural da GS4.4**,
+`nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida`. O TD-019 registava que esse gate
+**não via** o defeito porque lê `output.rs` e o `170` vivia no `led-player`; agora que o
+endereçamento é pedido de dentro do `output.rs`, **o gate cobre-o**.
+
+**Falcon é o discriminante obrigatório, e não por acaso:** `1024/170` **não é inteiro**, o último
+universo de cada porta é parcial, e a porta 1 arranca no universo **7** — para lá do 6, que é o
+que o `ceil` do §4-bis garante. Advatek (`1020/170 = 6`) é o controlo exacto. O show real do rig
+(6 200 px) num Falcon de 16 portas compila com **9 portas vazias** (§4-ter).
+
+**Dois erros meus, ambos apanhados por gates e não por mim.** (1) Deixei um `#[test]` órfão: o
+`cargo test` **passou** (atributo duplicado é lint de nível warning), o teste correu **duas
+vezes**, e eu li `49 passed` como «+3» esperando «+2» **sem estranhar o número**. Foi o
+`clippy -D warnings` que o tornou erro. (2) Reportei duas falhas da suite como possível regressão;
+a causa era **método meu** — lancei duas suites de workspace **em paralelo**, e o
+`o_daemon_recusa_a_linha_longa_por_si_proprio` é uma corrida de `BrokenPipe` sensível a carga, já
+documentada em 2026-08-13c e hoje rastreada como **TD-022**. Corrida sozinha: 0 failed.
+
+**Invariants verified.** `led-core` **intocado** — SemVer *«superfície de seam inalterada (v1.4.0,
+62 itens)»* nos sete commits. Guardião mecânico **0 regressões**. Clippy `--workspace
+--all-targets -D warnings` exit 0. Gate de dívida `17 TD · 0 Critical`. Presets alterados **só** nos
+dois valores de `ports` do C3. `show.gif` **nunca** entrou em commit nenhum.
+
+**Pending — e a distinção que não pode ser arredondada.** Está provado que os bytes que **saem**
+do daemon não mudaram para os presets existentes e passam a honrar `ppu`/`ColorFormat` no preset
+RGBW+sACN. **Não** está provado que um controlador real os aceita: **o rig está offline**, nenhum
+controlador multi-porta foi alguma vez observado — o `16` é folha de catálogo, e isso está no
+critério de reversão do ADR-0030 — e o sACN continua bloqueado no rig por **firmware** (WLED
+16.0.1 não faz bind na 5568). **Validação física PENDENTE.**
+
+Continuam abertos, todos deliberadamente: **`max_pixels % ports != 0`** (§5, gatilho no primeiro
+preset com divisão inexacta) · **DL-1** (dois caminhos constroem o mapa) · **TD-019 no
+`led-player`** sem `--profile`, que está fora do que o TD-019 descreve · **`raspberry-fpp-sacn`**
+sem fonte · **IPC v2** diferido com gatilho · **B1/ADR-0017** (blackout), decisão humana que
+bloqueia o D6 · **G2/G3** (rig por energizar; plist ausente e Mac a bateria).
+
+### 2026-08-17d — D: a documentação e o instrumento apanham o ADR-0029, e o estado por nó chega ao ecrã
+
+**A inspecção D não encontrou nenhum BLOCKER estrutural.** Encontrou quatro coisas necessárias para 1.0, e todas da **mesma família**: a camada operacional não acompanhou o ADR-0029. Nenhuma é código de domínio.
+
+**D1 — o runbook do GS4.5 não corria.** Não é uma imprecisão de redacção: o comando principal da ETAPA 4 **sai com exit 2**, verificado por execução — `--profile` é obrigatório desde o GS4.4 e o runbook é de antes. E a linha que mandava repetir com `--output artnet://<IP>` produz `output_failed`, porque o ADR-0029 §7 passou a exigir o universo na especificação. Um operador com hardware na mão teria seguido um procedimento que não arranca. As três correcções foram provadas contra o binário, não deduzidas.
+
+**Também dizia que o multi-controlador não era possível** — *"o `--output` do daemon aceita **um** alvo"*. Falso desde o ADR-0029. Um operador que lesse aquilo nem tentava ligar cinco nós.
+
+**D2 — nenhum runbook conhecia o console.** Quatro runbooks, todos anteriores à Web Platform, zero menções ao `led-console`. A secção nova documenta o que **existe**: as três flags obrigatórias, o proxy do Vite, e — com igual peso — **o que o ecrã não mostra e porquê**: sem `healthy`/`degraded`/`connected` (ADR-0028 D3, nada no backend os produz), `/api/profiles` a 501, e loopback-only enquanto o ADR-0014 não der autenticação.
+
+**D3 — o instrumento do GS4.5 media um nó; o rig tem cinco.** `lumyx-hwcheck` passa a aceitar N endereços. A medição **não mudou uma linha**: foi extraída para `medir_alvo` e o `main` itera. Os vereditos **nunca são somados** — cada alvo tem o seu relatório completo, e a agregação do exit code usa a hierarquia que a etapa já usava: **reprovar vence não-medir, que vence aprovar**. Somar tornaria um nó morto indistinguível de um vivo, que é a decisão D do §8 outra vez, agora no instrumento.
+
+Verificado contra o rig offline, com dois alvos: `192.168.2.156` deu `Incompleto`, `192.168.2.157` deu `Reprovou`, e o rig deu **exit 1** — o pior venceu, sem fundir os nós. E nasceu a ETAPA 10 do runbook, a única que fala do rig em vez do nó, com a ressalva escrita de que **sincronização visual não é medível por software**.
+
+**D5 — `outputs` chega ao ecrã.** Oito dos nove campos do contrato eram renderizados; este era o que faltava. Usa só dado já contratado: sem métrica nova, sem ecrã novo. Lista vazia escreve-se `none`, porque *"sem saída"* e *"cinco nós parados"* são factos diferentes. E os rótulos são `sent`/`failed`, que é o que o backend mede — chamar-lhe `healthy` seria a interface a inventar evidência.
+
+**O congelamento da marcação apanhou um falso-verde meu.** Os dois cenários existentes usam `outputs: []`, portanto só exercitavam o ramo `none`: a renderização **por nó** ficaria sem guarda nenhuma, e o ecrã podia somar os nós sem ninguém reparar. Nasceu o `DAEMON_COM_NOS`, com um nó vivo e um morto — se alguém agregar, os dois passam a mostrar o mesmo par e a marcação muda.
+
+**Invariants verified.** `led-daemon`, `led-core` e IPC v1 **intocados**. Produção alterada **só** no `lumyx-hwcheck` e no `App.tsx` — os dois autorizados como D3 e D5.
+
+**Pending.** D4 (o daemon não expõe métricas — só o `led-player`), D6 (sem tratamento de sinais; o caminho limpo é o `ledctl shutdown`) e D7 (`/api/profiles` a 501) ficam como **dívida**, não tocados. E o `NOT_MEASURED` continua onde estava: nada disto foi validado com nós físicos, e a ETAPA 10 tem os campos de resultado vazios como as outras nove.
+
+### 2026-08-17c — C: a falha parcial atravessa o laço, e a mutação provou que ninguém a cobria
+
+**Zero linhas de produção.** Um teste novo em `e2e_output.rs`.
+
+**O buraco era invisível e foi medido, não intuído.** O `output.rs` prova o isolamento ao nível do `OutputManager`, e o `o_laco_publica_a_contabilidade_de_cada_no` prova que o laço lê `por_alvo()` — **mas com os dois nós vivos**. O caminho de **falha** através do laço não tinha teste nenhum: apagar `journal.line(… "output_error" …)` de `run.rs` deixava a suíte inteira do crate **verde**. Por consequência lógica a de-duplicação também não estava coberta — um teste que afirmasse *"aparece uma vez"* teria reprovado com o aviso ausente, e nada reprovou.
+
+**O pacer é o REAL, e essa é a decisão que faz o teste valer alguma coisa.** O nó morto é `127.0.0.1:1` e o erro só chega quando o ICMP volta — tempo de **relógio**. Com o `VPacer` os ticks executam em microssegundos e o laço acabaria o show inteiro antes de o ICMP chegar: o teste passaria **sem exercitar nada**. Com o pacer do sistema a 25 ms a margem é ~300× sobre os 76 µs medidos no C0. Não é um `sleep` — é a cadência real do daemon, que é o que está sob teste.
+
+**Seis propriedades, e a primeira é a premissa.** (1) O nó tem mesmo de morrer, senão o teste **diz** que não exercitou o §5 em vez de passar. (2) A perda é reportada **uma** vez. (3) O laço **não cai** — `ReachedEnd` e `Finished`, que é o coração do §5: um nó perdido não vira falha global. (4) O nó vivo continua a receber, **e com a sua fatia** (offset DDP). (5) A perda é **atribuída**, com o vivo a zero erros. (6) A verdade chega ao **fio**: `Cmd::Status` sobre UDS real, sobre o instantâneo que o laço realmente produziu.
+
+**A (6) existe por causa do §8.** O `estado_por_alvo.rs` prova `Snapshot → fio` mas com um `Snapshot` construído à mão; este prova `laço → Snapshot` com falha real. Compor os dois por argumento seria repetir o erro do §8 — lá, **cada metade parecia bem** e o elo do meio não existia.
+
+**Falsificado 4×.** (A) Sem o `journal.line` → reprova na premissa. (B) Sem a de-duplicação → **36 avisos em 39 ticks**, que é a medida de quanto o journal seria afogado. (C) Endereçamento do nó vivo apontado à fatia do vizinho → reprova com os offsets `[4500, 5961, 7422, 8883]`. (D) Fio a reportar o agregado → reprova a dizer que a falha de um contaminou o relatório do outro.
+
+**Uma falsificação minha falhou, e a lição vale mais que o teste.** Mutei `inicio` — o índice dos píxeis **copiados** — e a asserção não disparou; quase concluí que ela era fraca. Não era: **endereçamento e payload são propriedades diferentes**, de linhas diferentes. O offset no fio vem de `.with_pixel_offset(alvo.pixel_offset)` (`output.rs:708`); os píxeis copiados vêm de `inicio` (`output.rs:832`). Eu tinha atacado a coisa errada.
+
+**Consequência registada como NOT_MEASURED, não arredondada.** Este teste prova **endereçamento** correcto sob falha parcial. **Não** prova que o payload é a fatia certa, porque o helper `escrever` produz quadros **uniformes** e conteúdo idêntico não distingue nós. Essa propriedade tem cobertura própria — `cinco_nos_recebem_cada_um_a_sua_fatia_e_nao_todos_a_mesma`, no `output.rs` — mas **com todos os nós vivos**. Fica assim de propósito: não se estende o C só para apagar um `NOT_MEASURED`.
+
+**SSE fica fora deste C**, porque não está envolvido no caminho que o `Cmd::Status` exercita.
+
+**Invariants verified.** **1092 testes**, exit 0 lido **sem pipe**. Clippy `-D warnings` exit 0. `tsc_gate.sh` exit 0. Zero linhas de produção; `led-daemon`, `led-core` e IPC v1 intocados.
+
+**Pending.** O `outputs` continua **sem chegar ao ecrã**: 8 dos 9 campos do contrato são mostrados pelo `App.tsx`, e este é o que falta. Pelo critério de 1.0 — *"Web Platform representar corretamente os estados existentes"* — é **necessário para 1.0**, não dívida diferível. E nada aqui foi validado com nós físicos: prova-se que o **laço** sobrevive à perda de um alvo, nunca que cinco controladores reais acendem.
+
+### 2026-08-17b — Revisão A1: a porta fecha como capacidade de software, com a fronteira escrita e duas dívidas nomeadas
+
+**Nenhum código alterado.** Revisão read-only da porta A1 (saída multi-controlador), feita contra o repositório em `efc258b` com `A+B` verde na CI.
+
+**As nove secções do ADR-0029 têm implementação e teste discriminante.** §2 repartição derivada (5 testes, recusa 4 configurações impossíveis) · §5 isolamento por nó (agora provado nas **duas** plataformas) · §6 pré-voo com N alvos (13 testes, incl. rig misto e controlo negativo) · §7 universo na especificação (11 testes, recusa em vez de adivinhar) · §8 estado por alvo até ao contrato TS · §9 custo medido nas três plataformas. A CLI aceita `--output` repetido e o `--help` explica que a ordem decide a fatia.
+
+**O §9 fechou o §3 por medição, e isso não estava previsto.** O ADR-0029 §3 afirmava que a `Calibration` não obriga a emendar o ADR-0019 porque é aplicada uma vez, antes do fan-out. Era um argumento; passou a ser um número — o benchmark mede **1 alocação e não 5** com cinco alvos, e há uma asserção que reprova se alguém a mover para dentro do laço por nó.
+
+**Achado A1-1 → TD-018.** A sintaxe `IP@UNIVERSO`, que o §7 tornou **obrigatória** em Art-Net e sACN, tem **zero** ocorrências no `--help`. O operador que leia a ajuda antes de correr não a descobre; só a aprende falhando. Muito mitigado pela mensagem de recusa, que ensina a sintaxe **e a razão** — daí `Low`, não `Medium`.
+
+**Achado A1-2 → TD-017, e é o que interessa.** O daemon **recusa** um universo fora da faixa de 15 bits; o `led-player` **avisa e prossegue** (`main.rs:395`), e o `build_art_dmx` mascara em silêncio (`(universe >> 8) & 0x7F` — 40000 sai 7232). O ADR-0029 §7.1 já nomeia a correcção na origem, mas **a divergência entre os dois binários não estava nomeada em lado nenhum**. O argumento que o §7 usa para recusar — a bancada de 2026-07-23 mostrou que o universo errado desloca a fita sem erro — aplica-se ao player exactamente como ao daemon, e o player é o binário que fez a primeira luz e o burn-in.
+
+Divergências entre binários apodrecem em silêncio, porque cada metade lida sozinha parece deliberada. Escolher entre *"o player passa a recusar"* e *"a origem recusa e os dois herdam"* é arquitectura, não edição — por isso fica registada e não corrigida.
+
+**A fronteira do que A1 fecha, escrita para não ser arredondada.** Entrega **capacidade de software** multi-controlador, provada em três plataformas com bytes lidos de sockets reais. **Não** entrega certificação física — o §9 mede o que *sai* do daemon, nunca que cinco controladores recebem, reconhecem e reproduzem. **Não** entrega visibilidade no ecrã: os `outputs` estão no `/api/state` e não na UI. **Não** entrega o E2E com dois `--output`, que é o C.
+
+**Invariants verified.** `scripts/audit_gate.py` exit 0 — **16 OK** (+2), 0 Critical, 0 Warning. Zero linhas de produção ou de teste tocadas.
+
+### 2026-08-17 — C0: a indução de "nó morto" não era portátil, e a técnica nova foi MEDIDA nas duas plataformas antes de ser escrita
+
+**Nenhum código de produção mudou.** Só os dois testes que a CI reprovou.
+
+**O defeito, que a CI encontrou porque foi a primeira vez que a viu.** `4ca88e2` reprovou no Ubuntu com dois testes a abortar em `OutputManager::open` com `EACCES`. A técnica para matar um nó era `255.255.255.255:1` — **no macOS o `connect` passa e só o `send` falha; no Linux é o `connect` que falha**, o que rebenta a abertura e nunca chega a exercitar o ADR-0029 §5. Foi construída e validada só em macOS.
+
+**Os dois testes falharam na mensagem escrita para apanhar isto** — *"Se falhou, este teste deixou de exercitar o que afirma"*. É o inverso de um falso-verde: sem essa guarda o `open` teria falhado e o teste passaria vacuamente no Linux, deixando o §5 sem cobertura numa plataforma inteira sem ninguém saber.
+
+**A investigação foi read-only e mediu 18 candidatos, nas duas plataformas.** Branch descartável `probe/no-morto-portatil`, fora do padrão `baseline/**` do `ci.yml` — por isso a suíte completa não foi disparada e o sinal ficou limpo. **`baseline/f2-f71` nunca saiu de `4ca88e2`.**
+
+| candidato | Ubuntu | macOS |
+|---|---|---|
+| **`127.0.0.1:1`** | **serve** | **serve** |
+| `255.255.255.255:1` (o antigo) | falha no `connect` | serve |
+| `169.254.1.1` · `224.0.0.1` · `239.255.255.250` | não serve | serve — mas dependem de rota |
+| `127.0.0.2:1` · `127.0.0.1:0` | serve | não serve |
+
+**A intersecção tem dois elementos, e escolheu-se `127.0.0.1:1`** — porta local sem ouvinte: o primeiro envio passa, o ICMP port-unreachable volta, o seguinte falha. Sem privilégios, sem rota, sem broadcast nem multicast, e o nome diz a intenção.
+
+**A sonda local, sub-instrumentada, teria dado a resposta errada.** A primeira versão não tinha pausa entre os dois envios e registava `127.0.0.1:1` como *"não falha"* — o ICMP não tinha tempo de voltar. Com essa tabela a conclusão seria *"não existe mecanismo portátil"*, e daí seguir-se-ia o redesenho do transporte injectado, incomparavelmente mais caro. **Um artefacto da medição quase decidiu a arquitectura.**
+
+**O macOS entrou na matriz da CI como controlo, e apanhou duas divergências contra a minha máquina.** O `255.255.255.255:1` dá `PermissionDenied` aqui e `BrokenPipe` no runner — mesma fase, errno diferente. E endereços sem rota **falham** nesta máquina (WiFi) e **passam** nos runners. Nenhum teste pode afirmar o errno, e nenhuma medição de rede feita só aqui vale para a CI.
+
+**O número de envios até o erro NÃO é fixo, e é isso que obriga ao laço.** Medido: **exactamente 2 no Ubuntu, até 9 no runner macOS**, ≤ 76 µs em ambos. Um teste que assumisse *"falha no segundo envio"* — a leitura óbvia da primeira tabela — seria estável no Linux e instável no macOS. E o erro é **consumido**: o terceiro envio volta a passar.
+
+Por isso a espera é **causal, nunca cronometrada** (TD-003): envia-se até o nó acusar erro, com prazo de 5 s — quatro ordens de grandeza acima do máximo medido, para um runner lento atrasar o teste em vez de o partir.
+
+**A premissa tem guarda própria, e ela sabe reprovar.** Se algum dia houver um serviço na porta 1, o nó deixa de morrer — e isso não pode virar um verde calado. **Falsificado apontando o nó "morto" a um socket vivo:** os dois testes reprovam com *"a condição de nó morto NÃO foi estabelecida em 18535 envios"*.
+
+**E a primeira tentativa de falsificação foi inválida, por minha causa.** Mutei o alvo para `1.2.3.4:1` a contar que nunca falhasse — mas **nesta máquina** endereços sem rota devolvem `NetworkUnreachable`, ao contrário dos runners. A mutação media a rede local, não a guarda. Refeita com um socket vivo, que é independente de plataforma. É a mesma lição do dia, agora dentro da própria falsificação.
+
+**Pending.** A branch `probe/no-morto-portatil` fica até a correcção estar verde na CI; a evidência pode precisar de ser reproduzida. O eixo do tamanho ficou medido e **rejeitado** como técnica: é portátil acima de 65507 B (máximo do UDP sobre IPv4) mas **não é selectivo por alvo** — faria os cinco nós falharem juntos, e o §5 exige um morto com os outros vivos.
+
+### 2026-08-16 — ADR-0029 §8 e §9: a contabilidade de cada nó chega ao operador, e o custo do fan-out passa a ser um número
+
+**Done.** `por_alvo()` existia desde o passo 2 e **não tinha consumidor** — a forma exacta do TD-014: contador com ADR a exigir reporte e nenhum caminho até fora do processo. O elo fecha: `OutputManager::por_alvo()` → `Snapshot.outputs` (`run.rs`) → `outputs_json` no arm `Cmd::Status` (`server.rs`) → fio → `/api/state` → contrato TypeScript.
+
+**O IPC v1 não foi tocado, e isso é a decisão.** É um campo numa resposta que já existia, não um comando novo — a política do ADR-0027 §6. E o console não ganhou uma linha: verifiquei em vez de assumir que `/api/state` é literalmente `daemon(cfg, "status", "")`, a linha do daemon repassada **verbatim**. O `ledctl status` imprime a linha crua, portanto também já o mostra; só o `--help`, que enumerava os campos, estava a mentir por omissão.
+
+**`Snapshot.outputs` guarda tuplos, não uma struct — de propósito.** Uma struct aqui seria uma segunda representação da forma que `por_alvo()` já devolve, e o dia em que divergisse do produtor seria invisível. Os nomes `addr`/`frames`/`errors` nascem **uma só vez**, em `outputs_json`, na fronteira do fio.
+
+**Lista vazia é ausência de saída, nunca zeros fabricados.** É a irmã da alternativa D que o §8 rejeita (o total somado): inventar uma entrada com `frames: 0` para um nó que não existe confundiria "não há saída" com "a saída não enviou nada".
+
+**Falsificado 3×, e a segunda é a que ensina.** (A) Repetir o **agregado** em cada nó → reprova nomeando o defeito: somado, os três nós diriam `(2, 1)` e o nó morto desaparecia. (C) O produtor renomeia `frames` → o gate **novo** reprova. (B) O laço nunca chama `por_alvo()` → **não foi apanhada por nada**. Nenhum teste do repositório cobria essa linha: o `estado_por_alvo.rs` constrói o `Snapshot` à mão, e os dois ficheiros que correm `run_with_control` correm **sem saída**. O campo podia existir, tipado e vazio para sempre — a forma mais silenciosa de um produtor não ter consumidor, que é literalmente o defeito que esta fatia veio corrigir. Nasceu `o_laco_publica_a_contabilidade_de_cada_no`, e agora a mutação reprova.
+
+**Três alvos nos testes, e o número não é decorativo.** Com **um** alvo, "por nó" e "agregado" são indistinguíveis — foi assim que duas mutações do passo 1 (`all`→`any` e "sondar só o primeiro") não apanharam nada. O nó do meio falha (`255.255.255.255:1`, onde o `connect` passa e o `send` devolve EACCES) e os outros dois não.
+
+**O gate de contrato apanhou o campo de topo sozinho**, sem eu escrever nada — o caminho B a extrair os campos do arm `Cmd::Status`. Mas os nomes **de dentro** de cada entrada ficavam sem guarda nenhuma: ali `outputs` é um campo só. Nasceu `os_campos_de_cada_saida_existem_no_contrato`, que extrai as chaves do texto-fonte de `outputs_json`.
+
+**E o `tsc` voltou a apanhar o que o `vitest` não apanha.** Acrescentar um campo obrigatório a `EstadoDoDaemon` reprovou 4 fixtures (2 em `verifica.ts`, 2 em `App.render.test.tsx`) enquanto os **40 testes do vitest passavam** — o esbuild remove tipos sem os verificar. O `verifica.ts` ganhou 3 asserções invertidas: um nó **sem `addr`** não compila (é o defeito de atribuição que o §8 existe para impedir), `addr` numérico não compila, e a lista é `readonly` — um `push` seria a UI a inventar um nó que o backend não reportou.
+
+**Um achado por caminho: a repartição derivada recusou o meu primeiro teste, e recusou certo.** Com 16 px e dois endereços, `repartir` viu que tudo cabia num nó de 1500 e recusou deixar o segundo com zero píxeis. Não era defeito — era a regra do §2 a funcionar. O show passou a 3000 px, que é o que exige dois nós.
+
+**Erro meu, apanhado por verificar em vez de presumir.** A execução da falsificação B expirou aos 2 min com `outputs: Vec::new()` **ainda no ficheiro** — o restauro estava depois do `cargo test` e nunca correu. É a mesma classe do `git stash` que expirou com a stash aplicada: o restauro tem de ser **confirmado**, nunca assumido.
+
+**§9 — o custo do fan-out deixou de ser opinião.** `tests/custo_do_fanout.rs` mede o caminho real com 1 e 5 alvos, com e sem calibração. A afirmação do ADR foi **verificada antes de construir**: nenhum dos cinco gates de `no_alloc` do repositório cobre o `OutputManager`, e o do `led-hal` não vale porque o caminho DDP **contorna o `Hal`** (decisão de 2026-07-09d).
+
+**7500 px, não 6200 — e o número é a decisão.** Com o tamanho do rig real (6200 px) a repartição derivada dá 1500 aos quatro primeiros nós e **200 ao quinto**: a comparação mediria *fatias diferentes* em vez de *número de alvos*. Com 7500 os cinco levam exactamente 1500, que é o que o alvo único leva, e a única variável passa a ser quantos são.
+
+| configuração | aloc/frame | ns/frame (debug, mínimo de 5 rondas) |
+|---|---|---|
+| 1 alvo, sem calibração | **0** | ~149 000 |
+| 1 alvo, γ 2.2 | 1 | ~197 000 |
+| 5 alvos, sem calibração | 5 | ~754 000 |
+| 5 alvos, γ 2.2 | 6 | ~1 065 000 |
+
+**O caminho rápido é livre de alocação, e agora está fixado por teste** — um alvo com offset 0 entrega o frame ao driver sem fatiar nem clonar. É a única configuração do daemon que hoje cumpre a regra do hot-path do `CLAUDE.md`, e valia a pena descobri-lo em vez de o supor.
+
+**O gate mais valioso não estava no enunciado: a calibração é aplicada UMA vez, antes do fan-out.** O delta de alocações que ela custa é **1 com um alvo e 1 com cinco**. Se alguém a mover para dentro do laço por nó, o segundo delta passa a 5 e o teste reprova — é a primeira asserção executável do ADR-0019 Emenda 1, que até aqui só existia como prosa.
+
+**O "~5×" do ADR é ultrapassado, e não é defeito.** Medido: **5.05×** sem calibração e **5.41×** com. A causa é estrutural — o alvo único usa o caminho rápido, portanto o denominador é mais barato que um quinto do numerador. Duas execuções seguidas deram (5.20 / 4.40) e (5.05 / 5.41): o tempo **é** ruidoso, e um limite colado aos 5× teria reprovado na segunda por carga da máquina, que é o erro do TD-006. Daí a divisão: **gate exacto** nas alocações (a propriedade é exacta e não tem ruído) e **gate generoso** no tempo (8×, com a mutação quadrática a dar **22.88×** — folga real dos dois lados).
+
+**Veredito: não optimizar.** 5 alvos com calibração custam ~1,07 ms/frame **em debug**, contra um tick de 25 ms a 40 Hz — ~4% do orçamento, e o release é substancialmente menor. É a mesma conclusão do TD-011 e do TD-012: mediu-se, e a medição mandou não mexer. O ADR-0012 continua adiado, agora **com o número na mão**.
+
+**Falsificado 3× no §9**, cada mutação apanhada pela asserção que lhe corresponde: uma alocação extra por alvo → o gate do caminho rápido reprova; a calibração a correr por nó → `left: 5.0, right: 1.0`; envio O(n²) → 22.88× contra o limite de 8×.
+
+**Invariants verified.** **1091 testes** (+5), exit 0 lido **sem pipe** (KB-013), 0 FAILED. Clippy `--workspace --all-targets --all-features -D warnings` exit 0. `./scripts/tsc_gate.sh` exit 0 nos três passos. O `.ts` versionado mudou **só por regeneração**, e o diff é **puramente aditivo** (21 inserções, 0 remoções). As **13 marcações congeladas inalteradas** — é essa a prova de que o dado chegou ao contrato sem mudar um pixel do ecrã. `led-daemon`, `led-core`, `led-protocols` e o IPC v1 **intocados**.
+
+**Pending.** **A UI não mostra `outputs`** — é barato em código, mas obriga a reescrever à mão a marcação congelada de dois cenários (regenerar com `-u` aprovaria o que quer que acontecesse), e misturá-lo aqui juntaria duas preocupações no mesmo diff. É a fatia seguinte, nomeada e não implícita. **Limite nomeado:** a resposta do `status` partilha o tecto de 64 KiB do IPC v1 (`MAX_BODY == MAX_LINE`), o que dá ~700 nós antes de o console a recusar; o rig tem cinco. Nada validado com nós físicos: o §9 mede o que **sai** do daemon, nunca que cinco nós acendem sincronizados — o runbook do GS4.5 continua a ser quem fecha essa distinção. E os números do §9 são de **debug**, nesta máquina; release não foi medido.
+
+### 2026-08-14c — ADR-0029 passo 1: a saída passa a poder exprimir N nós (e a falsificação encontrou um teste em falta)
+
+**Done.** `OutputConfig` separa **tipo** de **instância**: nasce o `Alvo { addr, first_universe, pixel_offset, pixel_count }` e a config passa a ter `alvos: Vec<Alvo>`. **O comportamento não muda** — com um alvo, `pixel_offset` é 0 e a fatia é o show inteiro. O fan-out em si é o passo seguinte.
+
+**A `Calibration` NÃO está no `Alvo`, e a ausência é a decisão.** Ela é do profile, e cinco nós do mesmo preset partilham-na por construção. Pô-la ali sugeriria que pode divergir por nó — e aí o ADR-0019 teria de ser revisitado. Não tem, porque não pode.
+
+**Duas regras do pré-voo deixam de ser mecânicas com N alvos** (ADR-0029 §6, escrito antes do código). A excepção do loopback exige **`all`**, nunca `any`: basta um alvo de rede para haver fio a proteger, e um `any` desligaria o gate do ADR-0005 para o rig inteiro por causa dos nós que não contam. E a presença exige sondar **todos**, com um ausente a reprovar — o RT-003 existe contra o palco escuro, e a resposta de um nó nunca mascara o silêncio de outro. Os avisos passam a **nomear quem falta**: com cinco robôs, *"SEM resposta"* sem dizer de quem manda procurar em cinco sítios.
+
+**A agregação tem hierarquia, e é a que o repositório já usa:** ausente vence indeterminado, que vence presente. Um nó calado é facto sobre o rig; não conseguir sondar outro não o apaga. É o `Veredito` do `lumyx-hwcheck` outra vez — reprovar > não medir > aprovar.
+
+**O achado desta fatia veio da falsificação, e é sobre os meus próprios testes.** Mutei `all` → `any` e **nada reprovou** — porque todos os testes de pré-voo usam **um** alvo, e com um alvo as duas são indistinguíveis. A regra que eu tinha acabado de escrever **não tinha teste**. Escrevi três: rig misto (um loopback + um de rede) tem de invocar o gate do WiFi; rig todo em loopback mantém a excepção (controlo negativo, senão o primeiro passaria com a excepção apagada); e um nó calado reprova com os outros a responder.
+
+**E o segundo achado é do mesmo tipo.** A mutação *"sondar só o primeiro alvo"* também não reprovava — porque a `SondaFalsa` devolve o mesmo para qualquer endereço, e com resposta uniforme sondar um ou dois é idêntico. Um teste que não distingue não prova. Nasceu a `SondaPorEndereco`, que responde **por endereço** e **conta quem foi sondado**; agora o `.take(1)` reprova com `sondados=["192.168.2.156"]`. Ambas as falsificações apanham.
+
+**Invariants verified.** **1073 testes** (+3), exit 0 lido **sem pipe** (KB-013). Clippy `-D warnings` exit 0. A rede que guarda o caminho validado em hardware — `calibration_path`, `wled_driver`, `pipeline`, `e2e_output` — **verde sem alterações**: é essa a prova de que a separação tipo/instância não mudou um byte no fio. `led-daemon`, `led-core`, IPC v1 e `led-protocols` intocados.
+
+**Pending.** O fan-out **não existe ainda**: `OutputManager` continua com uma saída, e `OutputConfig::resolve` cria sempre um alvo. Falta a CLI aceitar N endereços, a repartição derivada do `max_pixels`, e as N saídas com estatísticas **por alvo**. Nada validado com nós físicos; o rig continua offline.
+
+### 2026-08-14b — A1: o ADR do multi-controlador, e o defeito latente que a investigação encontrou
+
+**Nenhum código de produção mudou.** [ADR-0029](./docs/adr/0029-saida-multi-controlador.md) escrito e indexado **antes** da implementação, e um defeito registado como **TD-016**.
+
+**O enunciado estava errado, e a inspecção corrigiu-o.** *"Multi-controlador não existe"* — existe, mas só num dos dois caminhos, e não é o que o hardware validou. Art-Net/sACN vão por `Hal::new(layout, vec![dev])`, e o `Hal` guarda `Vec<Arc<dyn DeviceDriver>>`: **o fan-out já lá está, e o daemon passa um vector de um**. O DDP contorna o `Hal` por decisão de 2026-07-09d, logo não tem fan-out nenhum. E o `RigBuilder` já constrói N instâncias sem conflito, testado a 86 strips × 5 robôs.
+
+**A decisão que custa mais e é a certa: DDP primeiro, e os três protocolos na mesma fatia.** Ligar o `Hal` a N devices dava cinco nós em Art-Net hoje, com peças já testadas — e produziria **cinco nós num protocolo e um noutro**, sem nada no ecrã a dizê-lo. É literalmente o achado de 2026-08-07f: *"pior que a ausência uniforme, porque pareceria feito"*. O DDP é o caminho do GS4.5.
+
+**A `Calibration` NÃO força emenda ao ADR-0019 — verificado, não assumido.** A Emenda 1 avisava que o multi-controlador a obrigaria a revisitar *"se as calibrações divergirem por nó"*. A premissa não se cumpre: `calibration` vive no `HardwareProfile` (o **tipo**), e `address`/`first_universe` **não estão lá** porque são da instância (ADR-0018, confirmado por `grep`). Cinco nós do mesmo preset partilham a LUT por construção. A consequência vira regra: **perfis mistos são recusados**, não mal calibrados em silêncio.
+
+**O ADR-0012 mantém-se adiado.** O gatilho dele era o **2.º nó físico**, e o rig continua offline. Cinco `sendto` sequenciais de ~910 bytes não são obviamente um problema — e afirmar que são, ou que não são, sem medir contra nós reais seria inventar o número que o TD-011 e o TD-012 ensinaram a não inventar.
+
+**TD-016 — o defeito latente, encontrado ao investigar e não ao implementar.** `DdpOutput` fixa `pixel_offset` em **0 nos três construtores** (`led-player/src/lib.rs:172, 186, 204`), e não é um argumento que o daemon se esqueceu de passar: **é um parâmetro que a API não expõe**. `grep pixel_offset crates/led-daemon-bin/` devolve zero.
+
+A assimetria foi **medida**: o campo de instância do Art-Net/sACN (`first_universe`) é honrado *e* afirmado no fio (`wled_driver.rs:345`); o equivalente do DDP não tem nem API nem teste. É a mesma classe do `RgbOrder` do GS4.3 e do MTU do GS4.4 — campo que o fio suporta e que ninguém honra, **invisível com um só nó porque aí o offset correcto é zero**. Com cinco, os robôs 2 a 5 acenderiam o mesmo que o robô 1. Não é palco escuro: é pior de diagnosticar, porque parece funcionar.
+
+**A rede já existia, e por isso não construí uma segunda.** Antes de propor uma baseline de bytes, verifiquei o que havia: `calibration_path.rs` cobre os três protocolos com bytes lidos de socket, e `wled_driver.rs` congela ordem de canais, fragmentação por MTU e universos consecutivos. Duplicá-la seria o segundo caminho que este repositório recusa. O que faltava não era uma baseline — era **um campo**, e é o TD-016.
+
+**Pending.** A implementação do ADR-0029 toca **19 sítios em 10 ficheiros**, cinco dos quais guardam o caminho DDP validado em hardware. Não é edição cirúrgica, e o TD-016 é **pré-requisito** dela, não consequência. Rig continua offline; nada aqui foi validado com nós físicos.
+
+### 2026-08-14 — `load`/`unload` na UI: o browser deixa de ser um telecomando
+
+**Done.** O operador podia comandar `play`/`pause`/`stop`/`seek` no browser mas **tinha de ir ao `ledctl` para arrancar um show**. O que existia não era uma consola — era um telecomando para algo que outra pessoa tinha arrancado. Fecha-se o elo. Três decisões registadas em ADR **antes** do código: [ADR-0027 Emenda 2](./docs/adr/0027-contrato-tipos-rust-typescript.md) e [ADR-0028 D8/D9](./docs/adr/0028-web-platform-topology-and-state-boundary.md).
+
+**A lacuna que a investigação encontrou, e que ninguém tinha visto: o contrato só cobria uma direcção.** `EstadoDoDaemon`, `EstadoUpstream`, `EventoPayload`, `ROTAS` — tudo **resposta**. Nada descrevia os **argumentos** de um comando. Não custava nada porque o único comando com argumentos era o `seek` (`{to_ms}`, dois caracteres difíceis de errar): a assimetria era invisível porque a superfície era trivial. Com o `load` deixa de ser. **Emenda 2 do ADR-0027**: os argumentos entram, pelos mesmos dois caminhos — o gerador emite `ArgsLoad`/`ArgsSeek`, e o caminho B extrai-os do **texto-fonte do `enum Cmd`** de `proto.rs`. Só o que a superfície expõe: `hello`, `subscribe`, `ping` e `shutdown` estão em `NUNCA_EXPOSTOS`, e descrever argumentos que o browser não pode enviar alargaria o contrato para lá desta fronteira.
+
+**`assume_integrity` não é uma opção, e é isso que decide o desenho.** Lido no aplicador (`run.rs:360-399`), faz **duas** coisas: afirma a integridade (`Integrity::AssumedByOperator`) **e** dispara o pré-voo e o `Arm`. E o daemon **nunca verifica** — `pixel_hash` exige o show inteiro em RAM e hash em fluxo não existe (GS2), razão pela qual `Integrity` é um `enum` e não um `bool`.
+
+Uma caixa **pré-marcada** faria o operador afirmar integridade sem saber que afirmou — o colapso que o `enum` existe para impedir, reintroduzido na última camada. Uma **desmarcada** dá um `load` que parece funcionar e um `play` que recusa com `not_armed` sem nada no ecrã. **As duas falham, ao contrário.** Daí a **D8**: duas acções com nome próprio, e a que afirma integridade nomeia a consequência e **exige confirmação**.
+
+**A regra dos dois gestos vive em lógica pura**, e isso foi uma correcção a mim próprio. A primeira versão testava-a renderizando marcação e afirmando que uma espia não fora chamada — mas `renderToStaticMarkup` **não clica**, portanto a espia nunca poderia ter sido chamada e o teste passava **sem exercitar nada**. Teatro do pior tipo: verde por não olhar. Passou para `confirmacao.ts`, onde *"são precisos dois cliques"* é uma propriedade verificável — incluindo que uma sequência de 8 cliques envia exactamente no 2.º, 4.º, 6.º e 8.º, e que **mudar o caminho derruba a confirmação** (senão confirmava-se um ficheiro e carregava-se outro).
+
+**A matriz de estados NÃO é replicada no browser (D9).** `load` só é aceite em `idle`; `unload` em tudo menos `idle` e `playing`. Os botões ficam activos e mostra-se a **recusa real**. A única coisa desactivada é carregar **sem caminho** — e isso não é antecipar a matriz: é a ausência do único argumento obrigatório de `ArgsLoad`. O `unload` **nunca** é desactivado, e há um teste que o afirma nos dois cenários.
+
+**Não há catálogo de shows, e não se inventou um.** Zero rotas os listam. O caminho é **escrito**; uma lista fabricada seria o ADR-0028 D3 outra vez, noutro campo.
+
+**Falsificado 5×, em três camadas.** Contrato: (M1) o gerador esquece `assume_integrity` → *"`Cmd::Load` leva o argumento `assume_integrity` e ele NAO esta em `ArgsLoad`"*; (M3) o contrato descreve `ArgsShutdown` → *"`shutdown` esta em NUNCA_EXPOSTOS… o contrato e a fronteira, nao o modelo de dominio"*. UI: confirmação removida → 3 testes reprovam; uma **caixa** acrescentada → 4, incluindo a marcação congelada; `unload` desactivado → 4. **M2 não conta como prova do gate**, e digo-o: acrescentar um campo ao `Cmd::Load` quebra a exaustividade dos `match` e o crate **não compila** — o compilador apanha-o uma camada antes. A ameaça real é o campo estar cablado e o **gerador** ficar para trás, que é M1.
+
+**Verificado contra o daemon REAL, sem mocks — os seis casos que a UI pode produzir:** `load` com show carregado → `show_already_loaded`; `unload` → `idle`; **variante 1** (`false`) → `loaded` e `play` → **`not_armed`**; **variante 2** (`true`) → **`ready`** e `play` → `playing`; `unload` a tocar → `not_applicable`; caminho inexistente → `load_failed` com o erro real do SO. A variante 1 reproduz exactamente o defeito que a caixa desmarcada causaria — e é por isso que a acção se chama *"carregar sem armar"*.
+
+**Invariants verified.** `./scripts/tsc_gate.sh` exit 0 nos três passos. **40 testes** no console-web (+14). **17** no `contract_gate` (+2). Clippy `-D warnings` exit 0. O `.ts` versionado mudou **só por regeneração**. `led-daemon`, `led-core`, IPC v1 e `led-daemon-bin` **intocados** — esta fatia não acrescentou um único comando ao protocolo.
+
+**Pending.** A confirmação é um segundo clique no mesmo botão; num teclado sem foco visível isso é menos óbvio do que devia — não medido com leitor de ecrã. O `path` não tem histórico nem completação: o operador escreve o caminho inteiro de cada vez. `/api/profiles` continua 501, e a F7.2 do Ubuntu continua à espera de uma falha.
+
+### 2026-08-13d — F7.2 fatia 2 (Ubuntu): não consigo reproduzir, e por isso entrego o instrumento — não o veredito
+
+**A causa NÃO foi encontrada, e não a vou inventar.** O que esta fatia entrega é o que faltava para a poder encontrar: o gate passa a **nomear** o que apanhou. Só `crates/led-protocols/tests/no_alloc.rs` — **zero linhas de produção**, e a asserção continua a exigir zero.
+
+**Porque parei antes da correcção.** O caminho de envio foi lido e está limpo: `router.rs:131-161` usa buffer pré-alocado (`st.buf`), `build_ddp_packet_bytes` escreve nele, e `socket.send` leva uma fatia. A **única** alocação possível é `OutputError::Transport(e.to_string())` — e está descartada por raciocínio verificável: se `send` falhasse, o `?` devolvia `Err` e o `.unwrap()` do teste entrava em pânico com o erro de transporte. A CI mostra a **asserção** a falhar, não um `unwrap`. Logo os 4 não vêm dali.
+
+**E não há como reproduzir aqui.** Verificado, não presumido: sem `docker`, `colima`, `podman`, `lima`, `vagrant` nem `multipass`; targets Rust instalados são `wasm32-unknown-unknown` e `x86_64-apple-darwin`. **Não há Linux nesta máquina.** Ao contrário da fatia do macOS — onde o offset do relógio era um botão que reproduzia o mecanismo — aqui a grandeza que falha (4 alocações) não tem nenhum botão local. Mexer num orçamento a partir de um número que não consigo observar seria exactamente o que este repositório proíbe.
+
+**Uma hipótese testada e MEDIDA a zero, que fica registada em vez de esquecida.** O alocador é global ao processo, portanto a janela mede tudo o que lá acontece — incluindo a thread do harness do `libtest`. Testei-o com uma janela de controlo em que o teste não chama nada do caminho DDP: **delta = 0 em 5 janelas de 60 ms**. Mas é uma medição de **macOS**, e é o Linux que falha — por isso a hipótese não está morta, está por testar onde importa.
+
+**O instrumento.** O contador passa a registar, sem nunca alocar (só atómicos e um `thread_local` de inicialização `const`, senão entraria em recursão dentro de si próprio):
+- o **tamanho** das primeiras 8 alocações da janela — 48 bytes e 1 KiB apontam para culpados diferentes;
+- se cada uma veio da **thread do teste** ou de outra — o discriminador directo da hipótese acima.
+
+`MEDINDO` só abre depois do aquecimento, para o arranque poder alocar à vontade.
+
+**Falsificado 2×, e cada mutação prova um discriminador diferente.** (A) `vec![7u8; 900]` plantado no laço → *"allocated 4 time(s) — tamanhos=[900, 900, 900, 900] bytes · fora da thread do teste=0 de 4"* — reproduz a **forma exacta** da falha da CI e nomeia o tamanho. (B) uma thread intrusa a alocar durante a janela → *"fora da thread do teste=4 de 9"* — a atribuição por thread funciona, e apanhou também as alocações do próprio `spawn`. Produção restaurada e verde nas duas.
+
+**Invariants verified.** Clippy `-D warnings` exit 0 (uma correcção minha: `needless_range_loop` no formatador do diagnóstico). O gate continua a passar localmente. `led-daemon`, `led-core`, IPC v1, `console-web/` e `led-player` **intocados nesta fatia**.
+
+**O run correu, e NÃO deu dados — o que é um desfecho, não um sucesso.** Run 31782955100 (`427d648`): `test (ubuntu-latest)` = **success**. O instrumento só fala quando apanha alguma coisa, e não apanhou nada porque nada falhou. **Isto não é evidência de que as 4 alocações desapareceram**: esta fatia não mudou uma linha de produção, e a amostra do Ubuntu é agora **1 falha em 6 runs observados** (`9b23961` ❌; `109135d`, `f9153ba`, `f562adc`, `427d648`, `a25617f` ✅) — exactamente o não-determinismo já classificado. Um verde aqui vale zero.
+
+**TD-015 aberto e FECHADO nesta rodada.** Ao verificar o fechamento documental do F-01 encontrei que `main.rs` — a superfície da CLI, o único sítio onde um operador escreve flags — era o **único** dos dez ficheiros de `led-console-bin/src/` fora das `FONTES` do `surface_gate`, e escapava aos **três** gates textuais do crate.
+
+**Não podia ser acrescentado como estava, e a razão é a armadilha que a F1-B já tinha apanhado uma vez.** `main.rs:319` percorre `["blackout", "--auth", "--cors", "0.0.0.0"]` dentro do seu `mod tests`, para afirmar que o `--help` não os menciona — e `linhas_de_codigo` só filtrava comentários. Acrescentá-lo faria o gate do ADR-0017 reprovar **contra um teste que impõe a mesma regra**: *"um gate não pode ser o sítio onde o proibido é escrito"*, segunda vez.
+
+**A solução já existia no repositório, escrita para este ficheiro.** `main.rs:253` faz `FONTE.split("mod tests")` contra si próprio. `linhas_de_codigo` passa a usar o mesmo corte — e **não** um filtro por `#[cfg(test)]`, que não apanharia o `#[cfg(all(test, unix))]` do `main.rs`. Reusar em vez de inventar uma segunda regra para o mesmo fim.
+
+**Falsificado 3×, e o segundo é o que interessa.** (A) `blackout` em produção do `main.rs` → reprova nomeando o ficheiro. (B) **controlo negativo** — a lista da linha 319 continua a **não** reprovar; sem ele, cortar no `mod tests` poderia ter simplesmente desligado o gate em vez de o corrigir. (C) `grand_master` em produção de `surface.rs` → reprova, provando que o corte não apagou a verificação nos nove que já lá estavam.
+
+**E um erro meu, apanhado por o número não sobreviver a uma segunda vista.** A primeira versão do TD-015 afirmava que *"os nove ficheiros das FONTES têm todos `mod tests` (9/9)"*. Falso: são **quatro** (`fanout`, `limits`, `surface`, `truth`). O 9 veio de um `grep -c … || echo 0`, que imprime **dois** zeros quando não há acerto — e `"0\n0" != "0"` dá verdadeiro para todos. É exactamente o bug de shell que este repositório registou em 2026-07-11b, e caí nele. Corrigido no ledger em vez de apagado.
+
+**Pending — e é o que bloqueia fechar a F7.2.** Falta a **próxima falha no Ubuntu**, que é quando o instrumento produz o diagnóstico: `tamanhos=[…]` e `fora da thread do teste=N`. É esse `N` que decide entre **contaminação do processo** (`N > 0` ⇒ o defeito é do gate, não do caminho de envio) e **alocação real no DDP** (`N == 0` ⇒ o tamanho nomeia o culpado). Até lá, *"eliminar as 4 alocações"* continua não-executável — e esperar por uma falha é a única via honesta, porque não há Linux nesta máquina para a provocar.
+
+### 2026-08-13c — F7.2 fatia 1 (macOS): o teste era uma corrida contra o próprio arranque
+
+**Done.** `absolute_pacing_on_schedule_reports_no_lateness` deixa de depender do escalonador. **Só `crates/led-player/src/stream.rs`, dentro de `mod tests`** — zero linhas de produção. A fatia do Ubuntu **não** foi tocada.
+
+**A causa foi medida, não deduzida — e os dois valores da CI foram reproduzidos exactamente.** `SharedClock::new()` põe `epoch = Instant::now()`; com `Pacing::Absolute { epoch_ms: 0 }`, o alvo do quadro 0 é **o instante em que o relógio nasceu**. Esse prazo já passou por construção, por quanto tempo levar a entrar na função e ler o primeiro registo. Uma sonda temporária com offsets controlados:
+
+| relógio | `frames_late` | corresponde a |
+|---|---|---|
+| `+1 ms` | **1** | run 31589767217 (`left: 1`) |
+| `+26 ms` (um período + 1) | **2** | run 31749885199 (`left: 2`) |
+| `−60 000 ms` | **0** | a correcção |
+
+Nunca foi um teste sobre pacing: era uma corrida contra o arranque, que esta máquina ganha por arredondar a 0 ms e um runner partilhado perde. **Não reproduz localmente nem com a CPU saturada** (0/30 falhas com 12 processos de espera activa num host de 4 CPUs) — por isso a prova é o mecanismo, não o flake.
+
+**A correcção não é um orçamento, e isso é a decisão.** Adiar a época dá folga só ao quadro 0 — a partir daí a folga volta a ser **um período**, e uma pausa maior que ele reprova na mesma. Qualquer margem escolhida seria o paliativo que o **TD-006** já nomeia. `SharedClock::with_offset(-60_000)` faz `now_ms()` **saturar em 0** durante 60 s (`shared_clock.rs`: `wall.saturating_sub(...)`), portanto `now > target` é **inalcançável** e o veredito deixa de depender do tempo que a máquina leva. Um run que passasse 60 s ali seria um teste pendurado, não instável. A ordem de grandeza é a que o teste vizinho já usa (`with_offset(60_000)`), com o sinal trocado.
+
+**E continua a discriminar onde interessa.** Com `now == 0` e alvo `0`, está na fronteira exacta do `>`. **Falsificado 2×:** trocar `now > target` por `now >= target` faz o quadro 0 contar como atrasado e reprova (`left: 1`) — é esse o off-by-one que o teste protege; destravar o relógio (`with_offset(1)`) faz a guarda nova disparar **primeiro** e nomear a causa, em vez de a asserção principal falhar sem explicação.
+
+O período desce de 25 ms para 10 ms porque com o relógio fixo cada espera é o alvo inteiro (0+10+…+50): sem isso o ficheiro passava de 125 ms para 390 ms sem provar mais nada. Com 10 ms fica em ~158 ms.
+
+**Invariants verified.** **1067 testes**, exit `0` lido **sem pipe** (KB-013), 0 FAILED. Clippy `-D warnings` exit 0. 30/30 execuções isoladas do teste corrigido. `led-daemon`, `led-core`, IPC v1, `console-web/` e `led-protocols` **intocados**.
+
+**Achado por caminho, nomeado e NÃO corrigido** (hoje rastreado como **TD-022**). Numa execução do workspace, `o_daemon_recusa_a_linha_longa_por_si_proprio` (`led-console-bin/tests/ipc_contra_o_daemon.rs:177`) falhou com **BrokenPipe**; na re-execução passou, e passa 6/6 isolado. Não é desta fatia (o diff é só `stream.rs`, noutro crate). É uma corrida **inerente à decisão da F1-B**: `server.rs:226-231` escreve a recusa e **fecha sem drenar**, enquanto o cliente ainda escreve 64 KiB+ — o `writeln!` do teste apanha EPIPE. É a **primeira observação** registada: não constava do changelog, do ledger nem do KB. Corrigi-lo é fatia própria, e a correcção provável é do lado do **teste** (tolerar EPIPE na escrita, porque o fecho é o comportamento *desejado*), não do daemon.
+
+**VALIDADA NA CI — 2 runs consecutivos.** `427d648` (run 31782955100) e `a25617f` (run 31785038623): `test (macos-latest)` = **success** nos dois. É a primeira vez que este job passa nesta branch. O histórico contra o qual isto se lê: `9b23961` failure, `109135d` failure, `f9153ba` failure, `f562adc` failure — e mais 4 falhas documentadas na investigação da F7.2 (0 ✅ / 4 ❌). **Falha determinística em ≥8 runs observados, sucesso no primeiro run com a correcção.** Uma amostra chegaria pouco contra um teste instável; contra um determinístico, é o sinal. E o mecanismo já estava provado à parte, com os dois valores da CI reproduzidos por offsets controlados.
+
+**Pending.** Nada por validar nesta fatia.
+
+### 2026-08-13b — F-01: o `● Streaming` mentiroso fecha — o elo a montante passa a ser observável
+
+**Done.** O achado que a Phase 2 nomeou e não corrigiu está fechado. [ADR-0026 §9-quinquies](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do código, e `GET /api/upstream` expõe o estado da subscrição console→daemon. `led-daemon`, `led-core`, `led-protocols`, `led-player` e o IPC v1 **intocados**.
+
+**O defeito, e porque era da família do §9.** O ecrã dizia `● Streaming` com o daemon morto. Nada estava partido no browser: o `EventSource` **está** mesmo vivo, porque o console o mantém com comentários de keep-alive a cada 200 ms — escritos sem consultar a subscrição. A UI media *browser→console* e apresentava-o como *browser→daemon*. É o mesmo erro que o `frames_sent` a crescer sobre um `sendto` para um IP inexistente: **o sinal mais fácil de observar é o mais local**, e apresentá-lo como o elo seguinte é a mentira que este ADR existe para impedir.
+
+**A investigação foi read-only e mediu antes de decidir.** `grep` sobre `subscricao_viva|subscricoes_ipc|subscricoes_simultaneas|tentativas_de_ligacao` deu **53 ocorrências: 51 em `tests/`, 2 em comentários, zero em handlers ou rotas**. O produtor (`GuardaSubscricao::estabelecida`) e a medição (`subscricao_viva()`) existiam e estavam falsificados desde a F6; o que faltava era o **elo API**.
+
+**Rota própria, não um campo em `/api/state` — e a terceira razão é a que decide.** (1) `/api/state` é o instantâneo do *daemon*; um campo do console lá dentro seria um facto de uma camada no envelope de outra. (2) Com o daemon em baixo aquela rota devolve **503**, portanto o campo desapareceria exactamente quando mais interessa. (3) **O corpo de `/api/state` não é construído pelo console** — é a linha do daemon repassada verbatim (`Ok(linha) => Saida::json(200, linha)`). Acrescentar-lhe um campo obrigaria o console a **reescrever** essa linha, e essa propriedade vale mais que a conveniência.
+
+**Meta-evento no SSE foi rejeitado por uma razão que não é de gosto:** push **não sabe reportar a própria ausência**. Console morto → nenhum meta-evento → indistinguível de "sem novidades". Com `GET`, não responder É a informação.
+
+**O corpo é `{"upstream": boolean}` — sem `v`, sem `ok`, sem `id` — e isto foi uma correcção ao enunciado.** O comando especificava `{v, ok, upstream}`. Verifiquei: `v` é `PROTOCOL_V = 1`, a versão do **IPC v1**, e `ok` significa *"o comando IPC teve sucesso"* — ambos emitidos pelo **daemon**, em `proto.rs:199`. E as três rotas com `cmd_ipc: None` (`/api/events`, `/api/profiles`, `/api/metrics`) não produzem JSON de sucesso, logo **`/api/upstream` é o primeiro corpo JSON que o console autora**. Incluir `v` afirmaria uma proveniência que aquele corpo não tem — a mesma classe de defeito que a rota corrige. E não há corpo de erro a desenhar: a medição é a leitura de um `AtomicBool` local, sem I/O e sem modo de falha próprio.
+
+**`EstadoUi` ficou de fora, e o ADR-0028 D3 continua intocado.** `upstream` é um booleano com produtor real, não o vocabulário de evidência sem produtor que D3 proíbe. Também ficaram de fora `tentativas_de_ligacao` e `descartados`: são medições reais, mas acrescentá-las transformaria uma correcção de fronteira de verdade numa expansão de observabilidade, e um teste verde deixaria de dizer qual das propriedades está provada.
+
+**`subscricoes_ipc()` é proibido nesta rota, e há um teste que o prova.** É **cumulativo**: depois de dois ciclos vale 2 e nunca desce. Devolvê-lo responderia *"já houve"* a uma pergunta que é *"há agora"*.
+
+**A regressão a impedir tem nome — `upstream = sseAberto` — e a rede tem dois níveis que falham por razões diferentes.** `rotulosDeFluxo(sseAberto, upstream)` recebe **duas** entradas: quem quiser derivar um elo do outro tem de **apagar um parâmetro**, e aí o teste deixa de **compilar**. Sobre isso, a asserção `(true, false)` → não pode dizer "Live". Falsificado 3×: **(1)** o rótulo de montante a ler o `onopen` → 4 testes de lógica reprovam **e** a marcação `EVENTOS_UPSTREAM_MORTO` reprova; **(2)** o parâmetro apagado da assinatura → `tsc` reprova em 4 sítios com `TS2554`, incluindo o `App.tsx`; **(3)** a rota a devolver o acumulado → 3 testes de integração reprovam.
+
+**A prova principal, com daemon REAL e zero mocks.** Daemon vivo → `{"upstream":true}` e o ecrã mostra `Console API ● Connected · Browser stream ● Open · Daemon subscription ● Live`. `pkill` no daemon → `{"upstream":false}`, e a ligação SSE do browser **continua a crescer** (81 → 126 bytes de keep-alive): o ecrã passa a `Browser stream ● Open` **ao lado de** `Daemon subscription ● Down`. É exactamente o estado que antes dizia `● Streaming`. Daemon de volta → os três verdes, com `performance.navigation.type === "navigate"` a provar que a página **nunca** recarregou.
+
+**E observei o CASO C sem o procurar.** Nos 2 s seguintes ao regresso do daemon, `/api/state` já dava **200** e `/api/upstream` ainda dizia **false** — daemon alcançável, subscrição ainda em backoff. Medido instante a instante (`t+1s`, `t+2s` divergentes; `t+3s` convergidos). São duas ligações UDS distintas (`"lumyx-console"` por pedido, `"lumyx-console-eventos"` longa) e divergem na realidade, no momento que o desenho previa. Colapsá-las teria escondido isto.
+
+**Todos os indicadores passaram a NOMEAR a camada.** `Console API`, `Browser stream`, `Daemon subscription`. Sem o nome, dois indicadores lado a lado voltam a ser lidos como uma cadeia contínua — que é como o defeito passou despercebido. O `Indicador` deixou de decidir o texto (recebe-o de `ligacoes.ts`): calcular nos dois sítios daria um segundo tradutor de estado→rótulo, e o dia em que divergissem seria invisível.
+
+**Três erros meus nesta rodada, todos apanhados por não confiar no primeiro resultado.** (1) Um `cat >>` que **escreveu antes de ser recusado** duplicou o bloco de testes; e a minha limpeza por índice apagou o bloco **errado**, deixando a versão com `drop(_p2)` — que não desliga nada, porque o `Proxy` não tem `Drop`. O teste esperou 20 s por uma queda impossível, e a falha era do teste, não da produção. (2) Verifiquei com `striptest.lumyx` (2,3 s) e li `upstream:false` **antes** de matar o daemon — ele já tinha terminado; a leitura não provava nada. Corrigido usando `--socket` sem show, que o `--help` documenta como caminho para um daemon que fica. (3) O primeiro `curl` ao Vite deu `connection refused` em `127.0.0.1`: ele escuta só em `[::1]`.
+
+**Invariants verified.** **1067 testes** no workspace (+4), exit 0 lido **sem pipe** (KB-013). `./scripts/tsc_gate.sh` exit 0 nos três passos. **26 testes** no console-web (+7). Clippy `-D warnings` exit 0. O `.ts` versionado mudou **só por regeneração**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/`, `spike/` não tocados.
+
+**Estado de evidência, com a fronteira exacta do que a CI provou.** Publicado em `9b23961`; run **31749885199**. `contrato TS (tsc --noEmit)` = **success** — é o job que valida esta fatia, e corre os três passos do `tsc_gate.sh` (contrato + `console-web` + os 26 testes, incluindo os 6 do `ligacoes.test.ts` e a marcação congelada de `EVENTOS_UPSTREAM_MORTO`).
+
+**Os testes Rust do F-01 NÃO foram observados na CI.** Os jobs `test` abortaram nas duas dívidas F7.2 — macOS `absolute_pacing_on_schedule_reports_no_lateness` (`stream.rs:330`, `left: 2 right: 0`) e Ubuntu `ddp_backend_send_path_is_alloc_free` (`no_alloc.rs:68`, **N=4** alocações) — **antes** de os 13 do `sse_reconnect` darem veredito. Não são regressão desta fatia, e a prova não é a cor do job: `git diff 109135d..9b23961 --name-only | grep -cE "led-player|led-protocols"` → **0**. Nenhum caminho que aqueles dois testes exercitam foi tocado.
+
+Portanto o registo honesto é: **commitada e validada localmente; contrato TS confirmado na CI; testes Rust não observados na CI por falhas pré-existentes da F7.2.** Verde local não é verde de CI, e a distinção fica escrita em vez de arredondada.
+
+**Pending.** `descartados_totais()` continua sem rota, e o ADR-0026 §13 exige que a perda seja **reportada** — lacuna nomeada, não esquecida, e registada como **TD-014** (`9b23961`, commit separado do F-01 de propósito). Os dois achados cosméticos da baseline (dois `<hr>` seguidos com `ligacao === null`; `margin` vertical em `<span>`). `secundario` (0.6) e `rotuloDeCampo` (0.7) continuam dois degraus para o mesmo papel. `/api/state` a devolver 503 não distingue daemon morto de socket sem permissões — o `detail` traz o erro do SO, o código é sempre `console.daemon_offline`. Dívida F7.2 intocada.
+
+### 2026-08-13 — Phase 2: o sistema de design sai de repetição medida, e um refactor byte-idêntico prova-o
+
+**Done.** Os componentes partilhados e os tokens saíram do `App.tsx` para [`console-web/src/ui.tsx`](./console-web/src/ui.tsx). **Nenhum crate Rust tocado**; `led-daemon`, `led-core`, IPC v1 e `spike/` intocados.
+
+**A rede veio antes do refactor, porque os 9 testes que existiam não a davam.** `eventos.ts` e `api.ts` são lógica pura — um refactor que trocasse o ecrã inteiro passaria por eles sem os acordar. `App.render.test.tsx` renderiza nove superfícies com `renderToStaticMarkup` (do `react-dom`, **sem dependência nova**, sem jsdom) e compara com marcação **capturada do código pré-refactor** e colada à mão em `marcacao.esperada.ts`. Não é snapshot: um ficheiro que se regenera com `-u` aprova o que quer que aconteça.
+
+**As 9 marcações continuam byte-a-byte iguais depois do refactor.** É essa a prova de que os componentes mudaram de sítio e o ecrã não mudou um carácter.
+
+**Falsificado 3×, e as duas primeiras tentativas foram inválidas — por minha causa.** Usei `git checkout` para restaurar entre mutações, e isso apagou os `export` que eu tinha acrescentado (não estavam commitados). As mutações B e C pareceram reprovar 8 testes cada; as 8 falhas eram os componentes a chegarem `undefined`, não a mutação. **O padrão denunciou-o:** falhou tudo *excepto* `APP_INICIAL`, o único cujo componente continuava exportado. Repetido com cópias de segurança: **A** (opacidade da régua 0.25→0.3) → 1 falha, exactamente `APP_INICIAL`; **B** (campo `Show` apagado) → 2, exactamente os dois cenários do daemon; **C** (cenário removido de `CASOS`) → 1, o gate da contagem. Cada mutação acorda quem devia e mais ninguém.
+
+**O que foi extraído, e o que NÃO foi.** `Seccao` (5 usos), `Indicador` (2), `Campo` (5), e a `estilos` partida em tokens de ênfase. **`Botao` ficou de fora**: tem um só chamador, e um componente com um chamador é indirecção que não paga a viagem.
+
+**A `Seccao` não existe para poupar linhas.** O par `aria-labelledby`/`id` estava escrito à mão em cinco sítios; uma letra trocada rompe o nome acessível **sem partir nada visível**, e nenhum teste apanha uma string que deixou de casar com outra string. Agora vem do mesmo argumento e não pode divergir — verificado no browser: as quatro secções resolvem o nome, zero `ROMPIDO`.
+
+**Não há paleta, e isso é uma decisão.** Esta interface não tem uma única cor escrita: é `currentColor` com opacidade, o que a faz herdar o tema do browser sem código para isso. Inventar cores agora seria escolher um tema que ninguém pediu e perder essa propriedade.
+
+**Dois achados que a baseline revelou e que NÃO foram corrigidos aqui**, porque o refactor tinha de ser byte-idêntico: (a) **dois `<hr>` seguidos** enquanto `ligacao === null` — as réguas são colocadas pelo pai e a secção do daemon não renderiza, portanto a secção que falta deixa a régua para trás; (b) **`estilos.codigo` e `estilos.detalhe` aplicados a `<span>`**, com `margin` vertical que em elemento inline não faz nada. Ambos são de um commit próprio.
+
+**O achado com consequência real: `● Streaming` com o daemon morto.** Observado ao vivo — o show chegou a `reached_end`, o daemon encerrou, e o indicador continuou a dizer que o fluxo estava de pé. O `EventSource` do browser **está** mesmo vivo (o console mantém-no com comentários de keep-alive); o que morreu foi a subscrição a montante. A UI mede *browser→console* e apresenta-o como se fosse *browser→daemon*. Nenhum evento pode chegar e o ecrã diz que está tudo bem — é a classe que o ADR-0026 §9 existe para impedir. **Nomeado, não corrigido**: a correcção exige o console expor o estado da subscrição, que hoje só existe como medidor interno (`subscricoes_ipc()`).
+
+**O `tsc` apanhou o que o `vitest` não apanha.** O meu ficheiro de teste **nunca compilou**: faltavam `v`/`id`/`ok` do envelope em `EstadoDoDaemon`. O `vitest` usa esbuild, que remove tipos sem os verificar — 19 verdes sobre um ficheiro com erro de tipos. Foi o `tsc --noEmit` do gate que o viu. Acrescentar os três campos não mudou uma única marcação, porque o `Daemon` não os lê.
+
+**Verificado contra a cadeia real, sem mocks:** `led-daemon` a tocar `robot_sequence.lumyx` (98,1 s, o show real) → `led-console` → proxy do Vite → browser. `● Connected`, `PLAYING`, posição a avançar, 2680 eventos de posição colapsados. **Clique verdadeiro** no `pause` → `pause aceite` → `PAUSED` em 87203 ms, e a transição `playing → paused` chegou por SSE e apareceu no registo, separada do progresso.
+
+**Três erros meus de instrumentação, todos apanhados por não confiar no primeiro resultado.** (1) O `preview_start` serviu o **spike React** outra vez — li o `<title>` antes de olhar para o ecrã, e era `LUMYX Spike — React`. É a segunda vez; a lição não pegou à primeira. (2) O `read_page` devolveu `(empty page)` com viewport `0x0` enquanto a página estava renderizada (provado por `javascript_tool`) — quinta ocorrência. (3) O primeiro clique falhou: o espaço de coordenadas é 800×450, mas a imagem que eu vejo está a 1600×900, portanto as minhas estimativas visuais vinham a dobrar. Medi o rectângulo do botão em vez de continuar a adivinhar.
+
+**Invariants verified.** `./scripts/tsc_gate.sh` exit 0 nos três passos (contrato `tsc`, console-web `tsc`, console-web testes). **19 testes** no console-web (+10). `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados.
+
+**Pending.** O `● Streaming` mentiroso, acima — é o próximo a fechar neste caminho, e é de verdade, não de estilo. Os dois achados cosméticos da baseline. `secundario` (0.6) e `rotuloDeCampo` (0.7) são ambos rótulos e deviam ser um só degrau — uni-los muda pixels. `load`/`unload` continuam fora da UI (abrem a gestão de shows, e `load` precisa de superfície de entrada de caminho). Dívida F7.2 intocada. `.claude/launch.json` ganhou uma entrada `console-web` que **não funcionou** — o harness arrancou `spike-react` na mesma; ficou por commitar por não fazer o que diz.
+
+### 2026-08-11 — Web Platform Phase 0 + Phase 1: o console ganha processo, e a primeira tela vê o daemon a sério
+
+**Done.** A LUMYX Web Platform saiu do papel. [ADR-0028](./docs/adr/0028-web-platform-topology-and-state-boundary.md) escrito **antes** de existir uma linha de frontend, e o índice dos ADRs — que saltava de 0022 para 0027 — passou a incluir 0023–0026 e 0028.
+
+**COMMAND 03 — o console passa a ser um processo.** O crate chamava-se `-bin` e era uma *library*: `serve()` existia e estava provado, mas **nada o lançava** senão os testes. A garantia do ADR-0013 (*"o output não partilha processo de falha com a UI"*) não chegava a ser exercida. Agora há `led-console`, e o `main` é **só o invólucro** — não abre sockets, não encaminha rotas, e **não repete a política de bind**: `serve()` já chama `bind_permitido` antes do bind, e um segundo sítio a verificar seria uma segunda regra a divergir.
+
+**`--bind` é obrigatório, e isso foi uma correcção.** A primeira versão caía em `127.0.0.1:0` — não inventava um número, mas inventava a **omissão**, e com porta 0 o endereço muda a cada arranque. A convenção do workspace é clara: `serve_metrics` e `serve_readmodel` recebem o `SocketAddr` de quem chama, `led-player --metrics` exige valor, `led-daemon --socket` exige caminho. **Nenhum servidor deste projeto escolhe sozinho onde escuta.** Falsificado: reintroduzir o `unwrap_or` reprova dois gates.
+
+**Phase 1.1 — o tipo de `/api/state`, antes do frontend e não depois.** O contrato tinha o envelope mas **nenhum tipo para o corpo do `status`**. Era o único ponto onde um atalho custava caro: sem ele, a UI escreveria a forma à mão — a segunda fonte de verdade que o ADR-0026 §15 proíbe. `EstadoDoDaemon` é **gerado**, com nomes em `snake_case` porque é o que o fio leva; renomear seria traduzir vocabulário, e o console traduz transporte.
+
+**O caminho B novo é o que torna isso verificável:** um gate extrai os campos do arm `Cmd::Status` de `server.rs` — o produtor real — e confronta-os com o TS. Sem ele, um campo novo no `Snapshot` sairia em falta e o ficheiro versionado, gerado pelo mesmo caminho, concordaria com o erro. Falsificado com um `campo_novo` no produtor.
+
+**Phase 1.2–1.4 — a Shell.** `console-web/` fora de `crates/` (ADR-0028 D1). Mostra `state`, `position_ms`, `duration_ms`, `ticks`, `show_id` e o estado da ligação. **Nada mais** — sem saúde de hardware, controlador, rede, certificação, evidência ou frescura, porque nenhum tem produtor (ADR-0028 D3). Três estados de ligação, e o terceiro importa: antes da primeira resposta mostra `○ …`, não um dos outros dois — ausência de resposta não é offline nem ok. `api.ts` é o **único** sítio com `fetch`.
+
+**Proxy em vez de CORS.** O Vite encaminha `/api`, o que mantém a mesma origem. A saída fácil seria acrescentar CORS ao console; o ADR-0028 D7 proíbe-o, e com razão — um console loopback-only que aceita qualquer origem deixa de o ser na prática.
+
+**A evidência principal, com daemon REAL e zero mocks:** daemon vivo → `200` com `ticks:10502` → a UI mostra `● Connected · IDLE · Ticks 10502 · Show none`. `kill -TERM` → `503 console.daemon_offline` → a UI mostra `● Offline` e **o código do backend verbatim**. A transição aconteceu sem recarregar a página.
+
+**O gate TS passa a correr dois projectos**, e correm **sempre os dois** — abortar no primeiro esconderia o segundo. Falsificado 3×: contrato quebrado reprova, app quebrada reprova, ambos bons passa. Node **22** normativo (`.nvmrc` + `engines`), e o `cache-dependency-path` da CI passou a cobrir **os dois** lockfiles.
+
+**Três erros meus, todos apanhados por verificação.** (1) O `preview_start` serviu o **spike React** em vez da minha app — se eu tivesse tirado o screenshot sem ler o `<title>`, teria apresentado o spike como prova da Phase 1. (2) O gate do `/api/state` extraía **4 de 5** campos, porque `show_id` está em tuplo multi-linha; foi o meu próprio `assert` de contagem que o apanhou. (3) O controlo negativo da porta reprovava por causa da **sua própria linha de asserção** — a mesma armadilha da lista de palavras proibidas do ADR-0017.
+
+**Invariants verified.** **1061 testes** (+10), clippy `--workspace --all-targets --all-features -D warnings` exit 0, build `--all-targets` exit 0, `tsc_gate.sh` exit 0 nos dois projectos. O `.ts` versionado é **byte-idêntico** ao regenerado. `led-core`, `led-daemon`, IPC v1 e `spike/` intocados.
+
+**Pending.** SSE não ligado — a Shell faz polling de 1 s; `/api/events` é Phase 3. `led-console` continua **sem tratamento de sinais** (`KNOWN GAP — NOT BLOCKING`, mesma postura do `led-daemon`). A porta 7878 é convenção do dev server, **não** norma. O `tsc_gate.sh` instala `node_modules` se faltarem — funciona, mas um gate que instala pode falhar por rede em vez de por tipos. F7.2 intocada: macOS determinístico em CI (6/6), Ubuntu não-determinístico.
+
+### 2026-08-10c — F7.2: baseline persistido e CI real — FECHADA COM DÍVIDA NOMEADA
+
+**Nenhum código, teste, CI ou contrato alterado nesta entrada.** Só documentação: é o registo de uma decisão.
+
+**Done.** As sete fatias (F1-B → F7.1) deixaram de viver só na árvore de trabalho. Dois commits em `baseline/f2-f71`, publicados: `f141491` (`led-daemon-bin` — `MAX_LINE` durante a leitura + `Snapshot.state` tipado) e `ffd8277` (`led-console-bin` — HTTP, SSE, reconexão, contrato TS, gate na CI). `show.gif` **não** foi commitado (modificado desde antes, deliberadamente fora). `led-daemon`, `led-core` e `spike/` intocados.
+
+**Separação por fatia não foi possível, e a razão está registada em vez de escondida.** Nove ficheiros misturam fatias — `server.rs` tem F1-B *e* F5; `lib.rs` declara os mods de F2+F3+F4; `0026.md` tem §9-bis(F2), §9-ter(F4) e §9-quater(F7). Separar exigiria staging por *hunk*, que é interactivo e não está disponível neste ambiente. Optei pela única fronteira real que existe — **por crate** — e digo-o em vez de fingir granularidade que não há.
+
+**O objectivo da F7.1 está cumprido em runner real:** `contrato TS (tsc --noEmit)` = **success**, com Node 22 + `npm ci` + `./scripts/tsc_gate.sh`, nas **duas** tentativas do run 31425015576.
+
+**F7.2 fecha COM DÍVIDA NOMEADA.** Dois testes vermelhos na CI, **ambos pré-existentes** aos commits desta linha e **ambos fora do âmbito** deles (`git diff 4455a90..ffd8277 --name-only | grep -cE "led-protocols|led-player"` → **0**). Nenhuma correcção autorizada nesta etapa.
+
+| Dívida | Teste | Amostras | Classificação |
+|---|---|---|---|
+| **Ubuntu** | `ddp_backend_send_path_is_alloc_free` (`led-protocols/tests/no_alloc.rs:68`) | 4 (2 ✅ / 2 ❌), incl. o **mesmo commit a passar e a falhar** | **não-determinístico** |
+| **macOS** | `absolute_pacing_on_schedule_reports_no_lateness` (`led-player/src/stream.rs:329–330`) | 4 (0 ✅ / 4 ❌) | **determinístico em CI**, passa sempre localmente |
+
+**Foi o re-run que separou as duas.** Na tentativa 1 pareciam a mesma coisa; na tentativa 2 o Ubuntu passou e o macOS falhou de novo. São naturezas diferentes, e uma correcção genérica teria sido errada para pelo menos uma delas.
+
+O macOS alterna entre as **duas** asserções do teste — linha 330 (`frames_late`) num run, 329 (`frames_played`) nos outros três. Que ambas já tenham falhado confirma o mecanismo: com `Pacing::Absolute { epoch_ms: 0 }` cada quadro vence em `now + i·25 ms`, e num runner partilhado uma pausa de escalonamento ou conta atraso ou faz o pacer descartar o quadro vencido. É a família do TD-003.
+
+**Duas hipóteses minhas retiradas por evidência**, ambas sobre o Ubuntu: atribuí-o à falta de um `ALLOC_GATE` (contaminação por testes paralelos). Errado — `grep -c '#[test]'` naquele ficheiro dá **1**: é o seu próprio binário, sem irmãos a alocar em paralelo.
+
+**Pending, e é o que bloqueia qualquer estabilização.** Faltam os **números**: o `N` de alocações do Ubuntu (*"allocated N time(s) over 10000 frames"*) e os `left:`/`right:` do macOS. O `ci.yml` encaminha essas linhas para um `::group::falhas` no **log**, e o log devolve **HTTP 403** sem autenticação — enquanto as anotações, que são públicas, levam só ficheiro e linha. Sem esses valores, mexer num orçamento seria inventar um número, e isso está proibido. `gh` não está instalado; desbloquear o log é pré-requisito da fatia de estabilização.
+
+**Achado colateral, não explicado:** `subscritor_morto_e_podado` (`led-daemon-bin/tests/ipc.rs:175`) falhou nos **dois** runs anteriores e **passa** nos dois commits desta linha. Ou o trabalho do `MAX_LINE` o corrigiu, ou também é não-determinístico. Nomeado, não investigado.
+
+### 2026-08-10b — F7.1: o gate do TypeScript passa a correr sozinho (CI)
+
+**Done.** O gargalo que a F7 deixou nomeado está fechado: `./scripts/tsc_gate.sh` deixou de depender de alguém se lembrar dele. Job novo **bloqueante** `contract` no `ci.yml`. **Nenhuma UI** (verificado: zero `.tsx`/`.jsx`/`vite.config` em `crates/`); `led-daemon`, `led-core` e `spike/` intocados.
+
+**Job próprio, e não um step da matriz do Rust — por duas razões distintas.** (1) `tsc` é **independente do SO**: o veredito é o mesmo em Linux e macOS, e correr na matriz duplicaria o custo sem acrescentar sinal. (2) É uma **propriedade diferente**: o job `test` já corre o gate Rust↔TS (`contract_gate.rs`), que prova **correspondência**; este prova **compilabilidade**. São independentes — um ficheiro pode bater byte a byte com o gerador e não compilar (ADR-0027, Emenda 1). Duas propriedades, dois jobs.
+
+**Node fica fora do job do Rust de propósito.** Pôr um segundo toolchain no caminho do `cargo test` fá-lo-ia falhar em máquinas que só têm Rust — um preço maior que o problema.
+
+**`npm ci`, não `npm install`.** Instala **exatamente** o lockfile e falha se ele divergir do `package.json`; `install` poderia resolver uma versão diferente da pinada, e o gate deixaria de correr contra o que está versionado. É o equivalente npm do `--locked` que os jobs Rust já usam. Verifiquei que funciona **a partir de zero** (`rm -rf node_modules && npm ci`) e que o `tsc` vem da dep pinada — **5.9.3**, lido do `node_modules/typescript/package.json`, não presumido.
+
+**A CI corre o *mesmo* comando que corre localmente** (`./scripts/tsc_gate.sh`). Se corresse um comando próprio, a reprodução local deixaria de provar o que a CI prova.
+
+**Falsificação — e não confiei no YAML.** Três níveis, porque YAML válido não é gate a funcionar:
+
+1. **O gate, isolado:** GREEN → mutação no `verifica.ts` (`DaemonState = "HEALTHY"`) → **RED** (`TS2322`, exit 1) → restaurado GREEN.
+2. **O YAML, por asserção:** um script lê o `ci.yml` e afirma que o job existe, que **não** é `continue-on-error`, que usa `setup-node` com versão explícita, que usa `npm ci`, que corre `./scripts/tsc_gate.sh` e que **não** usa `npx`.
+3. **A sequência da CI, executada:** um simulador **gerado a partir do próprio YAML** (para não poder divergir do que a CI faz) corre os steps em ordem, num `node_modules` limpo. Com o código bom: exit 0. Com um **erro de sintaxe plantado no contrato gerado**: `TS1110`/`TS1005` → `STEP FALHOU` → **exit 1**.
+
+E a mesma mutação foi apanhada **também** pelo outro job (*"o contrato versionado DIVERGE do Rust"*) — os dois gates, por razões diferentes, como a Emenda 1 previu. Restaurado por **regeneração**, byte-idêntico ao pré-mutação.
+
+**Dois erros meus nesta rodada, ambos meus e não do código.** (1) Li um exit code **através de um pipe** (`... | tail; $?`) e obtive `0` de um script que **nem tinha corrido** — cwd errado. É exatamente o KB-013 deste repo, e apanhei-o por o número não fazer sentido. (2) O simulador de CI desapareceu entre sessões (está no scratchpad, não no repo) e a re-execução deu `127`; regenerei-o do YAML. Fica registado que ele é **efémero de propósito** — o artefacto durável é o job, não o simulador.
+
+**Invariants verified.** **1051 testes** (inalterado — esta fatia não acrescenta testes Rust), clippy `--all-targets --all-features -D warnings` exit 0, `build --all-features` exit 0, `./scripts/tsc_gate.sh` exit 0, simulação da CI exit 0. `scripts/tsc_gate.sh` com bit de execução (`-rwxr-xr-x`) — a CI invoca-o como `./scripts/...`. `package-lock.json` **não** está gitignorado, senão o `npm ci` falharia no runner.
+
+**Pending — e é honesto dizê-lo:** **não vi a CI correr.** Não há push nesta fatia, portanto a primeira execução real do job será a primeira vez que ele corre num runner GitHub, e a **primeira** em **Node 22** (local é v26.3.0). O que verifiquei foi a sequência de comandos, não o runner. Se falhar, o candidato mais provável é o ambiente do runner — não o gate, que está falsificado em três níveis.
+
+### 2026-08-10 — F7: as duas últimas dívidas antes da UI — `/api/profiles` decidido e o TypeScript a compilar de verdade
+
+**Done.** As duas dívidas que bloqueavam a primeira linha de UI estão fechadas. **Nenhuma UI** — sem React, Vite, Tailwind, `/console`, componentes, dashboard ou WebGPU (verificado: zero `.tsx`/`.jsx`/`vite.config` em `crates/`). `led-daemon`, `led-core`, `spike/` e o IPC v1 **intocados nesta fatia**.
+
+**A · `/api/profiles` = 501, e agora é uma decisão escrita** ([ADR-0026 §9-quater](./docs/adr/0026-console-daemon-boundary.md)). *"A rota é conhecida pelo contrato, mas a capacidade não está disponível através da fronteira autorizada."*
+
+As três respostas dizem coisas diferentes e só uma é verdadeira: `404` afirma que a rota não existe (**existe**, e está no contrato gerado); `200 []` afirma que o catálogo está vazio (**tem 8 presets**); `501` afirma o que se passa. **`200 []` é a pior das três** — um operador que veja lista vazia conclui que *não há hardware configurado*, quando o que não há é caminho até ao catálogo. É o mesmo *blame* invertido que o `413` do `PedidoDemasiadoGrande` já corrigiu.
+
+Continua 501 porque as duas saídas custam algo proibido: importar o catálogo traz **domínio** para o tradutor (o gate `nenhuma_segunda_fonte_de_verdade_no_console` recusa-o pelo nome) ou acrescentar um comando ao **IPC v1**, que está fechado. Ambas são decisões de arquitetura, não edições.
+
+**Cinco testes** pinam o 501 e proíbem: `200 []`, `404`, perfis escritos à mão, `led-hardware-profile` como dependência de produção, e um `cmd_ipc` que o IPC v1 não define. **Falsificado 2×**: `200 []` e `404` — ambos reprovam.
+
+**E um achado na própria falsificação: o gate textual apanhou o `200 []`, os testes HTTP não.** Nenhum teste verificava `/api/profiles` **no fio**. Acrescentei `get_api_profiles_e_501_no_fio`, e agora os dois gates apanham. Sem falsificar, essa lacuna teria passado.
+
+**B · `tsc --noEmit` existe, corre, e sabe reprovar** ([ADR-0027, Emenda 1](./docs/adr/0027-contrato-tipos-rust-typescript.md)).
+
+**A lacuna que a emenda nomeia:** o gate de dois caminhos prova que o `.ts` **corresponde** ao Rust — e nada mais. Um ficheiro pode bater byte a byte com o gerador **e não compilar**: o gerador emitiria o mesmo erro nas duas pontas e os dois caminhos concordariam com ele. *"Bate com o gerador"* **não** é *"é TypeScript válido"*. São duas propriedades independentes, e nenhuma substitui a outra.
+
+**O que torna o `tsc` significativo é o `verifica.ts`.** `tsc` sobre um ficheiro só de tipos prova que o texto é sintaxe válida e mais nada — nenhum tipo é *usado*, logo nada é *verificado*. O `verifica.ts` (escrito à mão, **não** gerado) usa-os, e cada `@ts-expect-error` é uma **asserção invertida**: se o erro não acontecer, `tsc` reprova. Assim ficam provadas, em compilação, coisas que uma comparação de bytes nunca poderia: `EstadoUi = "HEALTHY"` não compila (e `HEALTHY` é precisamente o nome que alguém inventaria para dizer "está tudo bem"); `Elo = "hardware_ok"` não compila; `DaemonState = ""` não compila — o defeito que a F5 corrigiu na origem não é representável no cliente; `| null` **não** é opcional; um `Evento` com `id` e uma `Resposta` sem `id` não compilam; e o **`switch` exaustivo sem `default`** obriga o frontend a *tratar* um valor novo em vez de o ignorar.
+
+**Uma armadilha verificada, não presumida:** `npx tsc` **não serve** — no registo npm o pacote `tsc` é um stub antigo (2.0.4) que não é o TypeScript, e o `npx` chegou a tentar instalá-lo. O script invoca o binário instalado diretamente. `typescript` **5.9.3** pinada é a única dependência, num `package.json` mínimo em `crates/led-console-bin/contract/` — não é o frontend, é o menor comando reprodutível. `node_modules` gitignorado; `package.json`, `tsconfig.json` e `verifica.ts` versionados. `tsconfig` **estrito** (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`): um gate permissivo prova muito menos do que parece.
+
+**O gate não salta.** Sem `node`, `scripts/tsc_gate.sh` **falha** em vez de declarar "nada a verificar" — a forma mais barata do KB-012, que já mordeu este repo (Miri N=0). Verifiquei que o script **sabe reprovar**: com um erro plantado sai 1; restaurado, sai 0.
+
+**Falsificado 3×, cada mutação a provar uma propriedade diferente.** **M1** tipo incompatível → `TS2322`. **M2** símbolo inexistente → `TS2305`. **M3** contrato gerado divergente (`SIMULATION` removido à mão) → **os dois gates** reprovam, e por razões distintas: o gate Rust↔TS diz *"`SIMULATION` existe no Rust e NÃO está no contrato"*, e o `tsc` diz que o `switch` deixou de ser exaustivo. É a demonstração de que as duas propriedades são independentes e complementares. O contrato foi restaurado por **regeneração** (o caminho autoritativo), e voltou byte-idêntico.
+
+**Invariants verified.** **1051 testes** (+6), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0, `./scripts/tsc_gate.sh` exit 0. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados.
+
+**Pending.** O `tsc` **não está na CI** — a CI é hoje 100 % Rust (verificado: nenhum `setup-node`), e o gate corre como comando reprodutível documentado. Deliberadamente **fora** do `cargo test`: pôr Node no caminho da suíte Rust fá-la-ia falhar em máquinas sem Node, um preço maior que o problema. Integrar na CI é a fatia seguinte, e fica **registado como pendente, não dado como feito**. `/api/profiles` continua 501 à espera de uma das duas decisões de arquitetura.
+
+### 2026-08-09g — F6: reconexão upstream do SSE (0 ou 1 subscrição, e "duas" deixa de ser representável)
+
+**Done.** O gargalo da F5 está fechado: se o daemon cair, o console **volta a falar com ele sozinho**, sem ser reiniciado. Nenhuma UI. `/api/profiles` continua 501 e o `tsc --noEmit` continua dívida — nenhuma tocada. `led-daemon`, `led-core`, `spike/` e o `ipc-protocol-v1.md` **intocados nesta fatia**; IPC v1 não mudou.
+
+**O supervisor é o único que subscreve, e não consegue abrir duas.** Uma thread por console. `Fanout::reivindicar_subscricao()` devolve `Option<GuardaSubscricao>` com `compare_exchange`: quem não obtiver a reivindicação **não tem por onde** abrir a segunda. **Duas subscrições simultâneas deixam de ser representáveis** — não são "proibidas por convenção". O `Drop` da guarda liberta, e é isso que faz o invariante sobreviver a `break`, a `?` e a `panic!`. Browsers não subscrevem, o `Fanout` não subscreve, os handlers HTTP não subscrevem.
+
+**A guarda é libertada antes do backoff**, portanto durante a espera o medidor diz `false` — que é a verdade. Fingir subscrição viva enquanto se espera seria a mesma mentira que um `200` sobre um daemon morto.
+
+**Backoff derivado, não inventado.** `BACKOFF_INICIAL = 50 ms`, a dobrar, com teto **derivado** do `REPLY_TIMEOUT` — o mesmo raciocínio do `http_timeout()`: esperar mais do que o tempo que o daemon tem para responder não torna a religação mais provável, só atrasa o regresso. E a espera é **interrompível**: um `stop()` que demorasse o teto do backoff acabaria por ser contornado.
+
+**Três defeitos meus, todos apanhados por falsificação e nenhum escondido.**
+
+1. **O acumulador contava reivindicações, não subscrições.** `reivindicar_subscricao()` incrementava `subscricoes_ipc`, portanto cada tentativa falhada contava como subscrição, e um console contra um daemon ausente reportava subscrições que nunca existiram. Um teste da F5 apanhou-o. Passou a contar só depois de o `subscribe` ser aceite.
+2. **O medidor dizia "viva" antes de haver fluxo** — e isto produziu um **teste intermitente**, que só apareceu sob a carga do workspace inteiro. Entre reivindicar e o daemon aceitar há uma janela; quem observasse `subscricao_viva()` e difundisse nessa janela **perdia o evento**. Separei as duas coisas: `reivindicada` (privada, exclusão) e `estabelecida` (o medidor público). O teste estrutural passou a afirmar exatamente essa distinção.
+3. **O BUG B não foi apanhado à primeira** — falso-verde. O teste media a linha de base **depois** de abrir os browsers, portanto as subscrições que eles criassem ficavam *dentro* da base. Corrigido para medir antes; agora dois testes o apanham (`1 -> 5` e 6 browsers → 6 subscrições). É KB-012 no meu próprio teste, encontrado ao falsificar.
+
+**Um flake pré-existente, encontrado e corrigido.** `subscritor_morto_e_podado` (`led-daemon-bin/tests/ipc.rs`) reprovava em **3 de 5** execuções **isoladas** — usava `yield_now()` como se fosse sincronização, quando a poda depende de a thread escritora do subscritor notar o socket fechado e sair. Verifiquei que **não** foi esta fatia a causá-lo (`broadcast`, `subs` e o próprio teste sem diff meu) e corrigi com barreira causal com prazo, a disciplina do TD-003. 6/6 estável depois.
+
+**O proxy UDS, e porque não é um mock.** Provar reconexão exige **matar** uma subscrição viva, e o `Server` do GS3 não tem `stop()` — o laço de `accept` vive na thread, e o crate é para ficar como está. O teste levanta um cano de bytes que controla: o **daemon real** continua no circuito, e o que se liga e desliga é o caminho até ele. É o equivalente, em UDS, ao `UdpChaosProxy` que o repo já usa para puxar o cabo em UDP.
+
+**Gate falsificado 4×.** **A** — exclusão mútua removida: reprova. **B** — subscrição por browser: dois testes reprovam. **C** — sem backoff: **25 761 tentativas em 1,5 s** contra ~5 com backoff, três ordens de grandeza. **D** — eventos engolidos após reconexão: reprova.
+
+**E um ajudante de teste que travava em vez de reprovar.** Com o BUG D, o teste **pendurava** >60 s em vez de falhar: o fluxo manda um comentário de vida a cada 200 ms, portanto `read_line` **nunca** expira e o ajudante girava para sempre a consumir comentários. Ganhou prazo; o BUG D passou a reprovar com mensagem em 5 s. É a segunda vez nesta linha de trabalho que encontro a mesma classe — um gate que trava perde o diagnóstico.
+
+**Invariants verified.** **1045 testes** (+9), **três execuções consecutivas** do workspace a 1045/0 — a exigência de "verde" não se cumpre com uma amostra quando acabei de perseguir dois flakes. Clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0.
+
+**Pending.** A entrega ao browser continua por **polling de 10 ms** da fila, não por condvar — suficiente, e sem medição que justifique mais. O supervisor **sai** se encontrar uma reivindicação já tomada (não é esperado: há um só) em vez de esperar; se algum dia houver dois supervisores, isso passa a ser silencioso e tem de mudar. Nada validado com hardware; GS4.5 continua BLOCKED.
+
+### 2026-08-09f — F5: o `state:""` corrigido na origem, e o SSE ligado (uma subscrição, N browsers)
+
+**Done.** Duas coisas, na ordem pedida: primeiro o defeito, depois a funcionalidade. **Nenhuma UI** — sem React, sem Vite, sem Tailwind, sem componentes, sem WebGPU. `/api/profiles` continua **501 por decisão**, e a dívida do `tsc --noEmit` continua registada; nenhuma das duas foi tocada.
+
+**PARTE A — `state:""` corrigido onde nasce, e agora é irrepresentável.** `Snapshot.state` era `String`, e `Default` dava-lhe a **string vazia**; como o laço só publica no fim do primeiro tick, havia uma janela em que o `status` respondia `"state":""` — que não é nenhum dos oito estados do ADR-0023 e cai fora da união fechada que o contrato da F3 declara ao browser. Passou a ser `led_daemon::State`. **A correção não é uma verificação, é a remoção da possibilidade** — a mesma escolha do GS3 (sem TCP, `0.0.0.0` não é representável) e do ADR-0026 (SSE em vez de WebSocket). Não mascarei no console (seria o tradutor a reinterpretar) e não pus `Idle` como remendo: `Idle` é o estado **contratual** com que `ShowRuntime::new()` começa, verificado no código, e o `Default` do tipo passa a dizer só isso.
+
+**Dois pontos de toque no repo inteiro** (`run.rs` a escrever, `server.rs` a ler) e **zero mudanças no fio**: os 15 testes de IPC e o contrato TypeScript regenerado ficam **byte-idênticos**. O `led-daemon` não foi tocado — a correção é do `led-daemon-bin`, que é quem constrói o instantâneo.
+
+**RED antes: determinístico, sem corrida.** O teste olha para o instantâneo que o `ControlPlane` publica **antes de qualquer tick** — exatamente o que a janela expunha — em vez de tentar ganhar uma corrida contra o laço. E o teste F4 que precisava de uma barreira causal para contornar o defeito **deixou de a precisar**: perguntar de imediato passou a ser a asserção mais forte, e é essa que ficou.
+
+**PARTE B — SSE: uma subscrição no daemon, N browsers.** Uma thread, uma `Ligacao`, um `subscribe`, no arranque do console. Ligar um browser **não abre nada** a montante: o `Fanout::ligar` cria só uma fila local — é por isso que N browsers e as suas reconexões não multiplicam subscrições. Difundir **nunca bloqueia**: fila cheia descarta o **mais antigo** e **conta** (`descartados`), porque uma vista incompleta que o operador não sabe que está incompleta é pior que perder eventos.
+
+**O defeito que os testes desta fatia encontraram: um browser que desaparece não era detetado.** Sem eventos a fluir, a thread de SSE nunca escrevia, portanto nunca via a ligação morta — o `Subscriber` não era podado e a lista **crescia sem limite**, o mesmo defeito que o servidor IPC do GS3 poda do seu lado. Corrigido com um **comentário SSE** periódico (`:`): mantém a ligação viva e faz a escrita falhar quando ela morre. Um comentário **não é um evento** — nada é inventado.
+
+**Gate falsificado 4×.** **A** — subscrição por browser (ligação UDS real + `subscribe` por cada um): 4 browsers → **5** subscrições, dois testes reprovam. **B** — fila cheia a **esperar** em vez de descartar: reprova. **C** — subscritor não podado ao desligar: dois testes reprovam por timeout. **D** — fanout a duplicar: reprova mostrando `[0,0,1,1,2,2,…]`.
+
+**Dois erros meus, e um deles estava no manual.** (1) Usei `timeout` para limitar uma execução — **não existe no macOS**, e o `grep` seguinte não viu nada, o que me levou a concluir que o teste *pendurava* quando na verdade o comando nunca correu. É **KB-013c**, que este repo já tem escrito, e caí nele mesmo assim. (2) O teste do browser lento passava sem exercitar o que dizia: com poucos eventos o buffer do socket absorve tudo, a fila esvazia-se sozinha e o "lento" não está lento. Só com **100×** a capacidade da fila é que a thread de SSE fica genuinamente presa a escrever. E a primeira versão media o tempo **depois** de um laço que, sob o BUG B, nunca terminava — um gate que **trava em vez de reprovar** perde o diagnóstico; a difusão passou a correr noutra thread para o teste falhar *com mensagem*.
+
+**Regressão que eu próprio causei, apanhada pelos gates.** O teste F4 `get_api_events_e_sse_e_nao_json` usava `read_to_end` — e assim que o SSE passou a manter a ligação **aberta** (que é o objetivo), ficou pendurado 60 s+. Passou a ler **só os cabeçalhos**. O teste estava a assumir que a resposta terminava.
+
+**Invariants verified.** **1036 testes** (+12), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados**; `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados. Os nove `EstadoUi` e o contrato gerado **inalterados** — a regeneração dá o mesmo ficheiro.
+
+**Pending.** O SSE **não reconecta a montante**: se o daemon cair, a thread de eventos termina e `subscricoes_ipc()` fica a 0 (que é a verdade, não uma mentira) — mas não volta sozinha quando o daemon regressa. É a próxima coisa a fazer neste caminho. A entrega ao browser é por **polling de 10 ms** da fila, não por condvar: simples e suficiente, sem medição que justifique mais. `/api/profiles` a 501 e o `tsc --noEmit` continuam abertos, ambos por decisão.
+
+### 2026-08-09e — F4: o servidor HTTP real do console (o browser ganha, pela primeira vez, um caminho até ao daemon)
+
+**Done.** `led-console-bin` deixou de ser uma tabela `const` e passou a **servir**. [ADR-0026 §9-ter](./docs/adr/0026-console-daemon-boundary.md). O caminho `Browser → HTTP → console → IPC v1 → daemon` existe e está provado **contra o daemon real e o exporter real**, sem mocks em nenhuma camada. **Nenhuma UI construída** — sem React, sem Vite, sem Tailwind, sem componentes, sem WebGPU; zero dependências de frontend entraram no repo.
+
+**Sem framework, e a razão foi medida antes de decidir.** O workspace não tem nenhum — verificado: zero `axum`/`hyper`/`actix`/`warp`/`tiny_http` — e já tem **dois** servidores HTTP escritos à mão pela mesma razão (`led_hal::serve_metrics`, `led_readmodel::serve_readmodel`). A superfície são 11 rotas sem query-strings, sem upload e sem cookies. `std` chega, e a convenção do repo é explícita quanto a dependências.
+
+**A `ROTAS` é o router.** O encaminhamento percorre a tabela que os gates estruturais já auditam; **não há um segundo sítio** onde acrescentar caminhos. Um caminho fora da tabela é 404 **antes** de se olhar para o método — porque um caminho que não existe não tem métodos.
+
+**RED antes de verde, a sério.** O servidor foi primeiro um **stub que devolvia 404 a tudo**: **10 dos 13 testes reprovaram**. Os 3 que passaram são os negativos que um stub satisfaz trivialmente (404, `/metrics` ausente, loopback) — e por isso foram re-provados depois por mutação, não aceites como cobertura.
+
+**Gate falsificado 4×.** **A** — `/metrics` servido diretamente pelo console: o teste mostra o corpo inteiro do exporter a vazar, e reprova. **B** — verificação de método desligada: dois testes de 405 reprovam. **C** — erro do IPC mascarado como `200 {"ok":true,"state":""}`: dois testes reprovam. **D** — daemon OFFLINE fabricado como `200 {"state":"idle"}`: reprova. A D existe porque reparei que a C só tocava no caminho do `pedir`; o `abrir` (que é por onde o OFFLINE passa) ficava por falsificar, e um gate por falsificar é um gate por provar.
+
+**O achado que os testes encontraram, e que não mascarei: `/api/state` pode devolver `"state":""`.** `Snapshot::default()` tem `state: String::default()`, e o laço só publica o primeiro instantâneo em `run.rs:506` — há uma janela, no arranque, em que a string vazia sai no fio. **Uma string vazia não é nenhum dos 8 estados** que o contrato da F3 gerou: o browser receberia um valor fora da união. Não o corrigi aqui e **não o escondi**: mascarar no console seria o tradutor a reinterpretar (proibido pelo §15), e pôr `Idle` por omissão seria **fabricar** um estado que o laço ainda não publicou. O teste usa uma **barreira causal** (espera a publicação, não dorme — TD-003) e o defeito fica nomeado. Escrever um teste que o afirmasse fixá-lo-ia como comportamento esperado, que é o erro que a fatia de 2026-08-07f recusou fazer.
+
+**Decisão registada, não contornada: `/api/profiles` responde 501.** O catálogo vive no `led-hardware-profile` e o console **não depende dele**. Servi-lo exigiria acrescentar um crate de domínio ao tradutor — que o gate `nenhuma_segunda_fonte_de_verdade_no_console` recusa pelo nome — ou acrescentar um comando ao **IPC v1, que está fechado**. **501 e não 404**, de propósito: a rota existe e está no contrato; o que falta é decidir por onde o catálogo chega. Um 404 diria que a rota não existe, e seria mentira.
+
+**Invariants verified.** **1024 testes** (+13), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados**; **IPC v1 não foi tocado nesta fatia**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados. `http.rs` acrescentado às `FONTES` do `surface_gate` — pelo terceiro ficheiro seguido, porque um ficheiro novo que não entre ali escapa a **todos** os gates do crate.
+
+**Pending.** **SSE é só a superfície**: `/api/events` anuncia-se `text/event-stream` e fecha; o `Fanout` existe e **não está ligado** — falta subscrição viva ao daemon e política de reconexão. Uma **ligação IPC por pedido** (`connect` + `hello`): correto e simples, sem pool, porque não há medição que justifique um. `/api/profiles` a 501, à espera de decisão. E o `"state":""` acima, que é do `led-daemon-bin` e não desta camada. A dívida do `tsc --noEmit` continua aberta, como a F3 registou.
+
+### 2026-08-09d — F3: o contrato TypeScript passa a ser gerado, e um controlo negativo prova que não diverge
+
+**Done.** [ADR-0027](./docs/adr/0027-contrato-tipos-rust-typescript.md) escrito **antes** do código. O ADR-0016 tinha tornado este gate **condição de validade** da escolha do React: em Leptos os tipos seriam partilhados por construção; em TypeScript passam a ser mantidos por gate. Ele existe agora, e foi falsificado 4×. **Nenhuma linha de UI construída** — sem React, sem Vite, sem HTTP, sem componentes.
+
+**Inspeção antes de decidir.** Verificado, não presumido: **zero** `serde`/`schemars`/`ts-rs`/`typeshare` no repo, **zero** `.ts` fora do `spike/`. `Elo::ALL` e `State::ALL` existem; **`EstadoUi` não tinha `ALL`**; e **`Rejected::code()` e `proto::code::*` não são enumeráveis** — um é `match` exaustivo, o outro `const` soltas, e ambos vivem a montante com o `led-daemon` **congelado**. Foi essa inspeção que ditou o desenho.
+
+**A decisão que sustenta tudo: dois caminhos independentes.** O **caminho A** (o gerador, `src/contract.rs`) emite dos valores Rust compilados. O **caminho B** (o gate, `tests/contract_gate.rs`) lê o **texto-fonte** e extrai os literais dos `match` exaustivos e das `const`. O gate exige que A cubra tudo o que B encontrou, **e** que o `.ts` versionado seja byte a byte o que A produz.
+
+**Porquê dois — e a prova de que era mesmo preciso.** A mutação M1 acrescentou uma variante ao `enum EstadoUi` e ao `as_str` (que o compilador obriga), **esquecendo-a no `ALL`**. O gerador não a viu, o `.ts` regenerado saiu sem ela, e `o_typescript_versionado_e_exatamente_o_gerado` **passou** — verde, e errado. Foi o caminho B que reprovou: *"o estado `STALE` existe no Rust e NAO esta no contrato TypeScript"*. Um desenho de caminho único teria deixado passar exatamente este defeito, que é o KB-012 na sua forma mais cara.
+
+**Gate falsificado 4×**, cada mutação num eixo diferente. **M1** variante ausente do `ALL` → caminho B reprova (acima). **M2** edição manual do `.ts` a inventar `"HARDWARE_OK"` — precisamente o colapso que o ADR-0026 proíbe → comparação com o gerado reprova. **M3** `staleMs: number | null` trocado por `staleMs?: number` → `os_opcionais_mantem_a_semantica_de_nulo` reprova, porque campo ausente e campo a `null` não são a mesma coisa. **M4** rota `/api/transport/blackout` inventada no cliente → *"o contrato declara a rota …, que o console NAO serve"*. Produção restaurada e verde nas quatro.
+
+**RED antes de verde, e a sério.** O `.ts` foi primeiro escrito **deliberadamente incompleto**: 7 dos 9 testes reprovaram, cada um a nomear o que faltava (`SIMULATION`, `software_sent`, `unauthenticated`, `/api/state`). Só depois foi gerado.
+
+**A regra que impede este gate de ser falso-verde:** uma extração que devolva **zero** literais é tratada como **falha**, nunca como "nada a verificar". Extrair zero e "não há divergência" seriam indistinguíveis — e este repo já foi mordido por isso (Miri N=0).
+
+**Invariants verified.** **1011 testes** (+9), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados**. `show.gif`, `*.lumyx`, `*.sig`, `burnin-*.jsonl`, `release/` não tocados. `contract.rs` foi acrescentado às `FONTES` do `surface_gate` — senão o ficheiro novo escapava aos gates estruturais do crate, como o `metrics.rs` quase escapou.
+
+**Pending.** O contrato cobre as **uniões de strings** que atravessam o fio; as formas de objeto (`/api/state`) só serão fixáveis quando o servidor HTTP existir e houver resposta real para descrever. O gate **não** corre `tsc`: prova que o `.ts` corresponde ao Rust, não que compila em TypeScript — para isso é preciso um toolchain Node na CI, que ainda não existe (custo já assumido no ADR-0016). Continua sem servidor HTTP, sem UI e sem qualquer dependência de frontend no repo.
+
+### 2026-08-09c — F2: ADR-0016 fechado por medição, e `/api/metrics` como proxy (ADR-0026 §9-bis)
+
+**Done.** O ADR-0016 estava bloqueado desde 2026-07-26. O anexo dizia porquê, em §3.2: *"decidir agora seria decidir contra o lado que não teve chance de ser medido"* — o Leptos não fora medido em axe, bundle nem build **porque faltavam `trunk`, `wasm-pack` e o target `wasm32`**. **Verifiquei o ambiente antes de aceitar o bloqueio, e a premissa já não valia:** `trunk 0.21.14`, `wasm32-unknown-unknown`, node v26.3.0 estão presentes. A assimetria foi **eliminada por medição**, não por argumento.
+
+**O que passou a ser MEDIDO** (spike **não** modificado — `git diff -- spike/` vazio; só artefactos gitignorados): axe no Leptos **0 violações / 35 regras** contra React **0 / 37**; bundle da app **47,82 kB** gzip (React) vs **84,72 kB** (Leptos); build morno release **4,27 s** vs **17,37 s**. Mais duas medições que decidem sozinhas um ponto de arquitetura: `led-console-bin` **não compila** para wasm32 (`mio`←`tokio`←`led-protocols`), mas o `truth.rs` isolado **compila**, em 2,46 s, com zero dependências.
+
+**Três correções ao registo, todas contra o que estava escrito.** (1) O spike afirma que *"os dois protótipos implementam a mesma tela mínima"* — **não implementam**: o React tem uma secção `Métricas` que o Leptos não tem, e é isso que explica 37 vs 35 regras, não qualidade de a11y. (2) O "0 violações" do React **só vale em regime estável**: a corrida que a própria página faz na montagem reporta **1 violação séria, `color-contrast` × 16**. As duas são verdadeiras em momentos diferentes — e a consequência é que verificação contínua de a11y tem de correr **depois do render assentar**. (3) A vantagem de partilha de tipos do Leptos é **real mas condicional**: exige extrair um crate leaf, e provei que a extração é barata em vez de a supor.
+
+**Decisão: React + TypeScript**, com uma obrigação inseparável — **nenhum enum escrito à mão** no frontend a espelhar `EstadoUi`/`Elo`; os tipos são **gerados** e um teste reprova a CI se divergirem. O precedente está em árvore (`os_limites_sao_os_do_gs3_e_nao_copias` fixa `MAX_BODY == MAX_LINE`). **A11y e WebGPU empatam medidos**, portanto não decidiram; o que decidiu foi o ecossistema para o que falta construir (tabelas virtualizadas, timeline) e o facto de o Leptos 0.6 ser major-zero. **H1–H5 deixaram de ser bloqueadores do ADR** — os dois emitem HTML equivalente com 0 violações — e passam a critério de aceitação da F3. O custo aceite e escrito: **um segundo toolchain**, e partilha de tipos **por gate** em vez de por construção.
+
+**`/api/metrics` — o achado que a F2 encontrou ao mapear o contrato de dados.** O enunciado listava `GET /metrics`, mas ele **não está no `ROTAS`**: é servido pelo `led_hal::serve_metrics`, um `TcpListener` **noutro processo**. Um browser a chamá-lo teria **duas origens**, e a segunda não atravessa o tradutor — exatamente a forma de a decisão 5 do ADR-0026 ser contornada sem ninguém reparar. Decisão do responsável: **proxy**. [ADR-0026 §9-bis](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do código.
+
+**O proxy é um cano, e há um gate que o obriga a continuar a ser.** `metrics.rs` repassa corpo e `Content-Type` **verbatim**. O teste forte não usa mocks: sobe o `led_hal::serve_metrics` **real** e compara o corpo com o `prometheus_text` **do próprio exporter** — uma comparação byte a byte que prova as quatro proibições (não recalcula, não agrega, não converte, não reescreve) de uma vez. `led-hal` entrou como **dev-dependency**; o grafo de produção não mudou.
+
+**Gate falsificado 3×**, um bug por garantia. **A** — o proxy a acrescentar `lumyx_total_agregado`: `o_corpo_atravessa_o_console_inalterado` reprova. **B** — `Content-Type` reescrito para `application/json`: `o_content_type_do_prometheus_nao_e_reescrito` reprova. **C** — a rota mudada de `/api/metrics` para `/metrics`: **dois** gates independentes reprovam. Produção restaurada e verde nos três.
+
+**Erro meu nesta rodada.** O teste de "exporter em baixo" usava `drop(srv)` e acusava o proxy de **fabricar** uma resposta. O defeito era do teste: o `MetricsServer` documenta, na própria API, que *"dropping it does NOT stop the server"* — o servidor continuava a atender e o proxy devolvia um 200 legítimo. Ler o contrato antes de o usar teria poupado o desvio; ficou escrito no teste.
+
+**Invariants verified.** **1002 testes** (+6), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `build --workspace --all-features` exit 0. `led-daemon`, `led-core` e `spike/` **intocados** (`git diff` vazio nos três). `show.gif` não tocado. `metrics.rs` foi acrescentado às `FONTES` do gate estrutural — senão o ficheiro novo escapava a **todos** os gates do crate.
+
+**Pending.** **Não há servidor HTTP**: `ROTAS` continua uma tabela `const` e o `buscar` do proxy ainda não tem router que o invoque — a rota está *declarada e testada*, não *servida*. O gate de tipos gerados TS↔Rust **ainda não existe** e é pré-requisito da F3, não opcional. Nenhuma UI construída, nenhuma stack instalada no repo. `led-console-model` (crate leaf) continua recomendação, não requisito.
+
+### 2026-08-09b — O limite de 64 KiB passa a ser imposto durante a leitura (e um achado do enunciado que não se confirmou)
+
+**Done.** O achado que a sessão anterior registou e não corrigiu está fechado. `handle_connection` deixou de usar `BufReader::lines()` e passa a ler com `reader.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf)`. `led-daemon` e `led-core` **intocados**; `show.gif` não foi tocado (já estava modificado na árvore desde antes desta sessão — verificado, e deixado como estava).
+
+**A medição que torna o defeito indiscutível.** O teste novo instala um **alocador global contador** e mede o pico de memória viva enquanto um cliente escreve 8 MiB sem um único `\n`. Antes da correção: **12,6 MB de crescimento** para 8 MB escritos (a duplicação do `Vec` do `read_line`) e **nenhuma resposta** — o daemon ficava à espera do `\n` que nunca vinha. Depois: crescimento abaixo de 64 KiB + 1 MiB de folga, e uma recusa `bad_request` limitada. O ficheiro tem **um só teste, de propósito**: cada ficheiro de teste é um binário próprio, e um `#[test]` vizinho a alocar em paralelo tornaria a medição ruído.
+
+**A decisão que o enunciado pedia por escrito: ao exceder o teto, fecha-se a ligação.** Não se drena. Drenar até ao próximo `\n` é ler uma quantidade que o **atacante** escolhe — a mesma negação de serviço mudada de sítio. E prosseguir sem drenar seria pior: a leitura seguinte retomaria a meio da linha gigante e o resto seria analisado como **um pedido novo**, dando ao atacante um modo de injetar pedidos que o cliente nunca escreveu. Depois de um corte a meio de linha o enquadramento não é recuperável, e fechar é a única saída limitada. Falsifiquei a decisão: trocar o `break` por `continue` reprova o teste, e a mensagem mostra o defeito real — o daemon passa a emitir **uma recusa por cada 64 KiB** que o atacante escreve, que é amplificação, não proteção.
+
+**O `+1` do `take(MAX_LINE + 1)` é o que mantém a fronteira no sítio, e quase escapou.** A primeira versão do teste de fronteira **não discriminava**: trocar `take(MAX_LINE + 1)` por `take(MAX_LINE)` deixava-o verde. A causa é que JSON malformado **também** devolve `bad_request` — o teste comparava códigos e os dois caminhos dão o mesmo código. Sem o `+1`, uma linha um byte acima do teto é **truncada** e analisada como JSON inválido: mesma resposta, motivo errado, e o resto da linha fica no socket. Corrigido para afirmar o **detalhe** (`"linha demasiado longa"`, não `"JSON inválido na posição 65536"`) e o **fecho da ligação**; assim mutado, reprova. É KB-012 apanhado no meu próprio teste, e vale mais registado que escondido.
+
+**O ponto 3 do enunciado não se confirmou — e verifiquei antes de o documentar.** A tarefa afirmava que `err_line(None, &e)` faz o cliente esperar para sempre, porque os clientes distinguem respostas de eventos pela **presença** de `id`. Mas `err_line(None, …)` não omite a chave: emite `"id":null`, e `Json::get("id")` sobre isso devolve `Some(Json::Null)` — ou seja, **presente**. Confirmei-o a correr, não a ler: `ledctl` e `led-console-bin` tratam a linha como **resposta**, e o cliente **não** bloqueia. O risco real é outro e menor — nenhum dos dois compara o `id` devolvido com o enviado, portanto uma recusa não-atribuível é aceite como resposta ao pedido em curso. Como só pode haver **uma** por ligação (o que se segue é o fecho), a atribuição está certa na prática. Escolhi **documentar o contrato** em vez de recuperar o `id`: ele pode estar para lá do byte 65 536, e adivinhá-lo de um prefixo truncado exigiria um analisador de JSON incompleto — mais superfície para um caso em que a ligação vai fechar. Um teste novo (`id_nulo_continua_a_ser_uma_resposta_e_nao_um_evento`) fixa a chave-presente-com-null e contrasta-a com um evento, para que ninguém a passe a omitir sem reparar.
+
+**Wire behaviour: a fronteira de aceitação não mudou; o que mudou foi o fecho.** Antes, `linha.len() > MAX_LINE` sobre a linha sem `\n`; agora, conteúdo ≤ 64 KiB aceite e > 64 KiB recusado — **a mesma fronteira**, e o teste anda um passo para cada lado dela para o provar. O que é novo no fio é o daemon **fechar** depois da recusa (antes continuava a ler). `docs/architecture/ipc-protocol-v1.md` foi atualizado nos três pontos: o teto é imposto durante a leitura, a ligação fecha e porquê, e a secção nova `id: null — o erro que não se consegue atribuir`.
+
+**Invariants verified.** **996 testes** no workspace (+3), clippy `--workspace --all-targets --all-features -D warnings` exit 0, `led-daemon` e `led-core` intocados (`git diff` vazio), nenhum teste removido. Bytes inválidos em UTF-8 continuam a fechar a ligação, como `lines()` fazia — o desfecho foi preservado de propósito, não herdado por acidente. `show.gif` **não foi tocado**: aparece modificado no `git status`, mas já estava assim **antes** desta sessão (verificado no arranque).
+
+**Pending.** Continua sem `id` recuperável na recusa por comprimento (decisão documentada acima, não lacuna). Nenhum cliente **compara** o `id` devolvido com o enviado — nomeado aqui; corrigi-lo é tocar `ledctl` e `led-console-bin`, e não é esta fatia. Os testes de integração do daemon continuam a não exercitar o laço aplicador (pendente herdado da sessão anterior, não abordado).
+
+### 2026-08-09 — F1-B: ADR-0026 + fundação do `led-console-bin` (fronteira, não UI)
+
+**Done.** A ponte console↔daemon deixou de ser uma decisão por tomar em silêncio na primeira linha de código da UI. [ADR-0026](./docs/adr/0026-console-daemon-boundary.md) escrito **antes** do crate, com 15 decisões numeradas. `led-daemon` e `led-core` **intocados** (`git diff` vazio). **Nenhuma UI construída, e nenhuma stack escolhida** — o ADR-0016 continua provisório e esta fatia não o desbloqueia.
+
+**A decisão que mais restringe o futuro: SSE para eventos, POST para comandos — não WebSocket.** Não é preferência de protocolo. Um canal bidirecional **convida** alguém a mandar comandos por ele, criando um segundo caminho de comando ao lado do POST; com SSE isso não é sequer **representável**. É o mesmo tipo de garantia que *"sem TCP, `0.0.0.0` não é representável"* deu ao GS3 — mais forte que proibir por convenção. E a reconexão passa a ser do `EventSource` do browser, em vez de código nosso a testar sob queda de rede.
+
+**Uma subscrição no daemon, fan-out para N browsers.** Sem isto, a carga no daemon passaria a depender de **quantos separadores o operador tem abertos** — arquitetura a variar com o comportamento do utilizador.
+
+**O timeout HTTP é derivado, não escrito.** `http_timeout() = REPLY_TIMEOUT + MARGEM_HTTP`, e o `REPLY_TIMEOUT` do daemon passou a `pub` para isso. Se os dois empatassem, o browser receberia "falhou" enquanto o daemon ainda aplicaria o comando — e o operador veria o show mudar **depois** de a UI dizer que não mudou. Falsificado: empatar os dois reprova `o_timeout_http_e_estritamente_maior_que_o_do_daemon`.
+
+**A regra que este crate existe sobretudo para proteger: OBSERVABILIDADE ≠ EVIDÊNCIA FÍSICA.** `frames_sent` a crescer diz que o `sendto` **local** teve sucesso — e um `sendto` para um destino inexistente também tem. Foi assim que o `lumyx-hwcheck` se apanhou a reportar `PASS` de heartbeat contra um IP que não existia. `Evidencia::confirma(elo)` não implica **nada** sobre os outros elos, e há testes que afirmam exatamente isso: `software_sent` não implica `controller_received`, e `controller_received` não implica `led_verified`.
+
+**Três defeitos que este trabalho encontrou — dois deles meus, um no desenho.**
+
+1. **`stale_ms()` devolvia `0` para um instantâneo que nunca existiu** — indistinguível de "acabou de chegar". É o zero artificial que o próprio ADR §7 proíbe, dentro do tipo criado para o impedir. Passou a `Option<u64>`: sem dado, não há idade.
+2. **`Erro::Protocolo` mapeava um pedido grande demais para HTTP 502** — culpando o *daemon* por um corpo que o **browser** mandou grande demais. Blame invertido manda o operador procurar o defeito no sítio errado. Separado em `PedidoDemasiadoGrande { bytes, limite }` → **413**.
+3. **A lista de palavras proibidas do ADR-0017 vivia em produção e apanhava-se a si própria.** A primeira versão do gate reprovava porque `surface.rs` continha a palavra `blackout` — na declaração da lista que vigia `blackout`. A lista mudou-se para dentro do teste: um gate não pode ser o sítio onde o proibido é escrito.
+
+**O achado que só apareceu por não haver mocks: sem o laço, o teste media o timeout.** A primeira versão do fixture subia só o `Server`, e `play` sem show devolvia **`engine_busy` ao fim de 5 segundos** em vez de `no_show_loaded`. A causa é a disciplina do GS3 a funcionar — as threads de ligação **enfileiram**, quem aplica é o laço — e sem laço não há aplicador. O fixture passou a levantar o `run_with_control` **real**; o ficheiro caiu de 5,01 s para 0,07 s, que é a prova de que o comando passou mesmo a ser aplicado em vez de expirar.
+
+**Gates falsificados 4×** (KB-012), cada um com um bug plantado. **A** — o console a reescrever o código do daemon (`no_show_loaded` → `console.refused`): reprova. **C** — `stale_ms` a fabricar `0`: reprova. **D** — uma rota `/api/blackout` na superfície: reprova com `/api/blackout: contem \`blackout\``. **E** — timeout HTTP empatado: reprova. Produção restaurada e verde nas quatro.
+
+**Erro meu na própria falsificação, que vale registar.** O BUG D pareceu **não** reprovar. Não era o gate a falhar: o meu script de injeção apanhou o `&[` da *anotação de tipo* (`&[Rota]`) em vez do valor, o crate não compilou, e o meu `grep` procurava `error\[` — que não casa com `error:`. Um gate que "passa" porque nada correu é a forma mais barata do KB-012, e desta vez estava no **harness de falsificação**, não no código.
+
+**29 testes** no crate (16 inline + 8 de integração contra o `Server` real + 5 estruturais). Os de integração **não têm mocks**: usam o `led_daemon_bin::server::Server` e o `run_with_control` de produção. **993 no workspace** (+29), clippy `--workspace --all-targets --all-features -D warnings` exit 0, build `--all-features` exit 0.
+
+**Achado registado, não corrigido: o limite de 64 KiB do daemon é verificado tarde demais.** `server.rs` lê a linha com `BufReader::lines()` — que cresce **sem limite** até ao `\n` — e só **depois** compara com `MAX_LINE`. O changelog do GS3 diz que o limite existe porque *"um cliente que nunca envie `\n` faz o daemon crescer sem limite"*, e contra esse cenário exato ele não protege. Não corrigi: é `led-daemon-bin`, fora do âmbito desta fatia, e a correção (ler com `take(MAX_LINE+1)`) muda o comportamento do transporte. Nomeado aqui em vez de deixado para outro teste o encontrar. **→ FECHADO em 2026-08-09b (entrada seguinte).**
+
+**Pending.** **Não há UI, e não há servidor HTTP** — `ROTAS` é uma tabela `const` para que os gates a possam percorrer antes de existir HTTP, e `Fanout` não está ligado a nada. A escolha React vs Leptos (ADR-0016) continua bloqueada por medição humana de a11y/GPU/DX. Autenticação continua vazia (ADR-0014, `ClientRegistry` declarado e sem entradas) — é o que mantém o console loopback-only. Os testes de integração do daemon (`tests/ipc.rs`) **nunca exercitam o laço aplicador**, o que este trabalho revelou por acidente e não corrigi.
 
 ### 2026-08-07j — A3: `refresh_hz` é um limite (ADR-0025) — e a minha própria suíte estava a violá-lo
 

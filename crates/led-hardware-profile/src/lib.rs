@@ -31,11 +31,18 @@
 pub mod compile;
 pub mod presets;
 pub mod registry;
+pub mod reparticao;
 pub mod validate;
 
-pub use compile::{compile_layout, driver_config, CompileError, DriverConfig};
+pub use compile::{
+    compile_layout, compile_layout_de, driver_config, CompileError, DriverConfig, Enderecamento,
+};
 pub use led_core::{ColorFormat, RgbOrder, WhiteMode};
 pub use presets::{PresetRow, PRESETS};
+pub use reparticao::{
+    repartir, repartir_portas, repartir_portas_de, Fatia, FatiaDePorta, RepartirError,
+    UnidadeVazia,
+};
 pub use registry::HardwareRegistry;
 pub use validate::{validate, Available, Finding, Severity, Validation};
 
@@ -107,6 +114,16 @@ pub struct Capabilities {
     pub supports_discovery: bool,
     /// O nó expõe métricas próprias.
     pub supports_metrics: bool,
+    /// Quantas saídas físicas o nó tem (ADR-0030 §5).
+    ///
+    /// É uma **capacidade declarativa estrutural**, não um limite de píxeis — por isso vive
+    /// aqui e não em [`Limits`], e a decisão 5 do ADR-0018 fica intacta (Emenda 1,
+    /// 2026-08-30). A capacidade por porta é **derivada** de `max_pixels`, nunca declarada
+    /// ao lado dele (ADR-0030 §4): `max_pixels` continua o único lar do tecto de píxeis.
+    ///
+    /// Uma porta **sem píxeis é válida** (§4-ter) — o profile descreve o hardware físico, e é
+    /// o show que determina quanto dele é usado.
+    pub ports: u16,
 }
 
 /// Limites numéricos do nó. **Único lar** dos limites de pixel (ADR-0018).
@@ -180,6 +197,7 @@ mod tests {
                 color: ColorFormat::Rgb(RgbOrder::Grb),
                 supports_discovery: true,
                 supports_metrics: false,
+                ports: 1,
             },
             limits: Limits { pixels_per_universe: 170, max_pixels: 1_560, refresh_hz: 44 },
             transport: Transport { mtu_bytes: 1_500, heartbeat_ms: 800 },
@@ -195,6 +213,33 @@ mod tests {
         assert_eq!(p.capabilities.protocol, Protocol::Ddp);
         assert_eq!(p.capabilities.output_interface, OutputInterface::Ethernet);
         assert_eq!(p.limits.pixels_per_universe, 170);
+    }
+
+    /// ADR-0030 §5 + Emenda 1 do ADR-0018: `ports` é capacidade declarativa, e **nada**
+    /// entrou em `Limits`.
+    ///
+    /// Os dois `let` são o gate, e valem mais que as asserções: destruturar exaustivamente
+    /// **deixa de compilar** se um campo for acrescentado a qualquer das duas structs. É o
+    /// que impede a segunda fonte de verdade que a Emenda 1 existe para negar — quem
+    /// acrescentar um tecto por porta a `Limits` parte este teste em vez de criar um limite
+    /// paralelo ao `max_pixels` que ninguém veria divergir.
+    #[test]
+    fn ports_vive_em_capabilities_e_limits_nao_ganhou_nada() {
+        let p = sample();
+
+        let Capabilities {
+            protocol: _,
+            output_interface: _,
+            color: _,
+            supports_discovery: _,
+            supports_metrics: _,
+            ports,
+        } = p.capabilities;
+
+        let Limits { pixels_per_universe: _, max_pixels, refresh_hz: _ } = p.limits;
+
+        assert_eq!(ports, 1, "o nó de bancada tem uma saída física");
+        assert_eq!(max_pixels, 1_560, "`max_pixels` continua o único lar do tecto de píxeis");
     }
 
     /// A mesma placa com outro firmware/protocolo/interface é o MESMO schema com outros

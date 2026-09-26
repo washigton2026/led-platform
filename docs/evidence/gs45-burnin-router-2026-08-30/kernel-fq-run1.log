@@ -1,0 +1,7 @@
+Timestamp               Ty Process[PID:TID]
+2026-08-30 16:47:08.402 Df kernel[0:deea] fq_if_add_fcentry: num: 1, scidx: 7, flowsrc: 1, flow: 0x942eb99d, iface: en7, B:19874
+2026-08-30 16:47:08.402 Df kernel[0:deea] [24593.233210]: fq_detect_dequeue_stall:num: 1, scidx: 7, flow: 0x942eb99d, iface: en7 grp:
+2026-08-30 16:47:08.446 Df kernel[0:deea] fq_if_add_fcentry: num: 2, scidx: 7, flowsrc: 1, flow: 0xab0738ff, iface: en7, B:69128
+2026-08-30 16:47:08.447 Df kernel[0:deea] [24593.277574]: fq_detect_dequeue_stall:num: 2, scidx: 7, flow: 0xab0738ff, iface: en7 grp:
+2026-08-30 16:50:47.860 Df kernel[0:10e1f] fq_if_add_fcentry: num: 3, scidx: 7, flowsrc: 1, flow: 0xacec1a4f, iface: en7, B:8305
+2026-08-30 16:50:47.860 Df kernel[0:10e1f] [24812.275598]: fq_detect_dequeue_stall:num: 3, scidx: 7, flow: 0xacec1a4f, iface: en7 grp:

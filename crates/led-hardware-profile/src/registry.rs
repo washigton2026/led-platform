@@ -30,6 +30,7 @@ fn row_to_profile(row: &PresetRow) -> HardwareProfile {
             color: row.color,
             supports_discovery: row.supports_discovery,
             supports_metrics: row.supports_metrics,
+            ports: row.ports,
         },
         limits: Limits {
             pixels_per_universe: row.pixels_per_universe,
@@ -194,6 +195,61 @@ mod tests {
                 "preset '{}' tem erro(s) de validação: {:?}",
                 row.name,
                 v.errors().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// ADR-0030 §5: a contagem de portas do preset chega ao profile sem tradução.
+    ///
+    /// A segunda asserção descreve o **catálogo de hoje**, não uma regra do validador: os 8
+    /// presets declaram 1 saída física cada. Nenhum preset multi-porta existe ainda — o
+    /// Falcon F16V3 tem 16 portas e continua a declarar 1 até à fatia C3, que é onde o dado
+    /// muda.
+    #[test]
+    fn as_portas_do_preset_chegam_ao_profile() {
+        let reg = HardwareRegistry::with_builtin();
+        for row in PRESETS {
+            let p = reg.profile(row.name).expect("profile");
+            assert_eq!(
+                p.capabilities.ports, row.ports,
+                "preset '{}': a contagem de portas não sobreviveu à conversão",
+                row.name
+            );
+            assert!(
+                row.ports >= 1,
+                "preset '{}' declara {} portas — um nó sem saída física não endereça nada",
+                row.name,
+                row.ports
+            );
+        }
+    }
+
+    /// Os dois presets multi-porta declaram o que o ADR-0030 §5 afirma, e a aritmética dele
+    /// fecha contra o `max_pixels` que já estava na tabela.
+    ///
+    /// **Isto NÃO é uma regra de validação.** O §5 regista explicitamente que
+    /// `max_pixels % ports != 0` é uma pendência **sem política decidida**, com gatilho no
+    /// primeiro preset que a alcance. Este teste nomeia os dois presets um a um, de propósito:
+    /// se algum dia um preset dividir inexacto, ele **não** o reprova — o que reprova é mexer
+    /// nestes dois sem refazer a conta.
+    #[test]
+    fn os_presets_multi_porta_batem_com_a_aritmetica_do_adr() {
+        let reg = HardwareRegistry::with_builtin();
+        for (nome, portas, px_por_porta) in
+            [("falcon-f16v3-sacn", 16u16, 1024u32), ("advatek-pixlite16-sacn", 16, 1020)]
+        {
+            let p = reg.profile(nome).expect("profile");
+            assert_eq!(p.capabilities.ports, portas, "{nome}: contagem de portas");
+            assert_eq!(
+                p.limits.max_pixels % u32::from(portas),
+                0,
+                "{nome}: {} / {portas} não é exacto — o ADR §5 afirma que é",
+                p.limits.max_pixels
+            );
+            assert_eq!(
+                p.limits.max_pixels / u32::from(portas),
+                px_por_porta,
+                "{nome}: capacidade por porta",
             );
         }
     }

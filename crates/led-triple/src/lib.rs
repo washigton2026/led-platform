@@ -165,8 +165,14 @@ mod adversarial_tests {
     // ── STRESS: 1M publish/update cycles — no stale data ─────────────────
     #[test]
     fn triple_buffer_1m_cycles_no_torn_frame() {
+        // Miri interprets (~100× slower), and each cycle here touches ~1 KiB of bytes
+        // (fill + scan), so the native 1M cycles are ~10⁹ interpreted operations — it does
+        // not terminate. Same treatment as `no_tearing_under_threads`: a small workload
+        // under Miri (the property is per-cycle, so fewer cycles still exercise it), the
+        // native run does the heavy stress.
+        let cycles: u32 = if cfg!(miri) { 500 } else { 1_000_000 };
         let (mut prod, mut cons) = triple_buffer([0u8; 512], [0u8; 512], [0u8; 512]);
-        for i in 0..1_000_000u32 {
+        for i in 0..cycles {
             let marker = (i % 256) as u8;
             prod.input().fill(marker);
             prod.publish();
@@ -232,8 +238,13 @@ mod adversarial_tests {
     fn triple_buffer_publish_latency_sub_microsecond() {
         use std::time::Instant;
         let (mut prod, _cons) = triple_buffer([0u8; 512], [0u8; 512], [0u8; 512]);
+        // Under Miri, `Instant::elapsed` measures the INTERPRETER, not the atomic swap —
+        // the budget is not a statement about this code there (measured: avg 355000ns, a
+        // false red on a Miri-clean crate). So under Miri the loop still runs — it is what
+        // exercises the `unsafe` publish path — and only the timing VERDICT is skipped.
+        // No threshold is invented for Miri: an arbitrary budget is the TD-006 mistake.
         let mut total_ns = 0u128;
-        let runs = 10_000;
+        let runs: u128 = if cfg!(miri) { 500 } else { 10_000 };
         for i in 0..runs {
             prod.input().fill(i as u8);
             let t0 = Instant::now();
@@ -242,6 +253,8 @@ mod adversarial_tests {
         }
         let avg_ns = total_ns / runs;
         // publish is one atomic swap — should be << 1µs; allow generous 10µs for CI
-        assert!(avg_ns < 10_000, "publish avg {}ns exceeds 10µs budget", avg_ns);
+        if !cfg!(miri) {
+            assert!(avg_ns < 10_000, "publish avg {}ns exceeds 10µs budget", avg_ns);
+        }
     }
 }

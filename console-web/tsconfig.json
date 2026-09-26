@@ -1,0 +1,22 @@
+{
+  "//": "Projecto SEPARADO do gate do contrato (ADR-0028 D2). O do contrato continua isolado, com o seu include de dois ficheiros; este cobre a app e acrescenta `jsx`. Fundi-los obrigaria o mais estrito a aceitar JSX — afrouxar um gate para acomodar o outro é o oposto do que se quer.",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}

@@ -1,10 +1,17 @@
 # ADR-0016 — Anexo: evidência levantada e matriz comparativa (B2)
 
-**Data:** 2026-08-05 · HEAD `a336f03` · **Nenhum código alterado, nenhuma stack escolhida.**
+> **Leia isto primeiro.** O corpo deste anexo (§1–§5) foi escrito a **2026-08-05**, *antes*
+> da decisão, e está preservado tal como estava — incluindo as frases que dizem que nada foi
+> escolhido. **A decisão foi tomada a 2026-08-09: React + TypeScript**
+> ([ADR-0016](0016-stack-console-provisorio.md)). A **§6** acrescenta medições posteriores que
+> fecham lacunas do levantamento e **não reabrem** a decisão.
+
+**Data do levantamento:** 2026-08-05 · HEAD `a336f03` · **Nenhum código alterado, nenhuma
+stack escolhida** *(verdade nessa data)*. · **Adenda:** §6, 2026-08-15, HEAD `1bac5d3`.
 
 Este anexo existe para que a decisão do [ADR-0016](0016-stack-console-provisorio.md) seja
 tomada sobre **evidência separada de opinião**. Ele **não decide** — a decisão é do
-responsável, e §4 lista exatamente o que ainda falta para tomá-la.
+responsável, e §4 lista o que faltava para tomá-la.
 
 ## Como ler as classificações
 
@@ -211,7 +218,11 @@ real e julgamento. Nenhum número foi inventado para nenhuma delas.
 
 ---
 
-## 5. Estado do ADR-0016 após este anexo
+## 5. Estado do ADR-0016 após este anexo *(registo de 2026-08-05 — ver §6)*
+
+> **Histórico.** O que esta secção diz era verdade na data em que foi escrita. O ADR-0016 foi
+> **aceito a 2026-08-09** (React + TypeScript). Mantém-se aqui por inteiro porque um anexo de
+> evidência que reescreve o seu próprio passado deixa de servir para auditar a decisão.
 
 **Continua `proposto (provisório)`.** Este anexo não o promove.
 
@@ -220,3 +231,114 @@ preencher a tabela do `spike/README.md`, e registar o veredito no corpo do ADR-0
 stack vencedora. Só então o **PR-05 (scaffold da shell)** e a **FASE D** ficam desbloqueados.
 
 **Nada aqui autoriza começar o console.**
+
+---
+
+## 6. Medições posteriores à decisão *(2026-08-15)*
+
+> **Estas medições NÃO reabrem o ADR-0016.** A decisão — **React + TypeScript** — está aceita
+> desde 2026-08-09 e o seu fundamento principal não é nenhum número abaixo: é que o frontend
+> **não pode conter enums escritos à mão** que espelhem `EstadoUi`/`Elo`, e os tipos são
+> gerados do Rust ([ADR-0027](0027-contrato-tipos-rust-typescript.md)). O que segue fecha
+> `⏳ não medido` que ficaram em aberto em §1 e §4, para que o anexo deixe de ter buracos.
+
+### 6.1 Condições de medição
+
+| Condição | Valor |
+|---|---|
+| Data · HEAD | 2026-08-15 · `1bac5d3` |
+| Máquina | Darwin 23.6.0 · x86_64 · Intel Core i5-8210Y @ 1,60 GHz · 4 núcleos · 8 GB |
+| Toolchain | node v26.3.0 · npm 11.16.0 · trunk 0.21.14 · rustc 1.96.0 |
+| Versões | react 18.3.1 · vite 5.4.21 · leptos 0.6.15 · axe-core 4.12.1 |
+| Alimentação / estado térmico | **não registada** |
+| Carga concorrente na máquina | **não registada** |
+| Browser dos testes de a11y | painel de preview do agente; **versão não registada** |
+
+**O que mudou desde julho, e é a razão de isto ser mensurável agora:** `trunk` e o target
+`wasm32-unknown-unknown` **passaram a existir** nesta máquina. Em 2026-07-30 não existiam, e
+foi por isso que a coluna do Leptos ficou com `⏳`.
+
+### 6.2 Build e bundle
+
+| Eixo | React/Vite | Leptos/WASM | Classe |
+|---|---|---|---|
+| Build a frio | **24,6 s** (`npm install` 12,5 + `vite build` 12,1) | **363,6 s** (`trunk build --release`, `target/` apagado) | [M] |
+| Rebuild após 1 edição de fonte | **8,9 s** (`vite build`) | **10,6 s** (`trunk build` debug, cache quente) | [M] |
+| Rebuild sem alteração nenhuma | não registada | **1,6 s** | [M] |
+| Bundle da aplicação (gzip) | **45,7 kB** (142,5 kB bruto) | **84,0 kB** (275,0 kB bruto: wasm 243,9 + glue JS 31,1) | [M] |
+
+**Três ressalvas sem as quais estes números enganam.**
+
+1. **Os builds não são equivalentes.** `vite build` é bundle de produção; o rebuild do Leptos
+   foi medido em **debug**, e o de frio em **release**. Serve para ordem de grandeza, não para
+   um rácio final.
+2. **O bundle React aparecia como 212 kB gzip.** Eram os **572 kB do `axe-core`**, que é
+   harness de medição e não embarcaria. O valor da tabela é um baseline isolado
+   (`react` + `react-dom` + app trivial). O do Leptos exclui o mesmo harness (`axe.min.js`).
+3. **Para um console *loopback-only*, o tamanho do bundle quase não decide** — não há rede
+   entre o servidor e o browser. Está registado por completude, não por peso.
+
+### 6.3 Acessibilidade — o `⏳` do Leptos fecha
+
+| Eixo | React/Vite | Leptos/WASM | Classe |
+|---|---|---|---|
+| axe-core, violações | **0** | **0** | [M] |
+| axe-core, regras aprovadas | 37 | 35 | [M] |
+| Viewport da medição | **não registada** (página curta, ~393 caracteres de texto) | **1280 × 2200** | — |
+
+A diferença 37 vs 35 é do **conteúdo das páginas** (número de regras aplicáveis), não de
+qualidade — os dois protótipos não renderizam exactamente o mesmo DOM.
+
+**Assimetria declarada:** a medição do React correu numa viewport que não registei, sobre uma
+página curta que cabia nela; a do Leptos correu a 1280×2200. **Não são condições idênticas**,
+e a §6.4 explica porque é que isso importa mais do que parece.
+
+### 6.4 ⚠️ O falso-positivo de contraste, e a condição que o eliminou
+
+A **primeira** execução do axe sobre o protótipo Leptos deu **1 violação séria**:
+`color-contrast` em **10 nós**, com o axe a reportar `fgColor #eeeeee` sobre
+`bgColor #ffffff` — rácio 1,16:1.
+
+**Era falso.** Os estilos computados no browser mostravam `<main>` com
+`background-color: rgb(17,17,17)`, `color: rgb(238,238,238)`, e os nós acusados **dentro** de
+`<main>` (cadeia verificada elemento a elemento). O contraste real é o mesmo do protótipo
+React, que declara `color:#eee; background:#111` no mesmo sítio.
+
+**Causa:** o `color-contrast` do axe resolve o fundo por ponto e **cai para branco** quando
+não o consegue determinar — o que acontece com elementos **abaixo da dobra**. A página do
+Leptos é mais alta que a do React (tem tabela + canvas), por isso só ela foi afectada.
+
+**Condição que o elimina:** viewport alta o bastante para conter a página inteira. A
+1280×2200 (altura da página = 2200 px), as violações passam a **0** e sobra 1 `incomplete`.
+
+**Porque isto fica escrito:** sem esta nota, a próxima pessoa a medir a11y neste repositório
+repete o erro e atribui à stack um defeito da janela. Um falso-**vermelho** contra uma stack é
+tão caro quanto o falso-verde do KB-012 — e mais fácil de acreditar, porque parece rigor.
+
+**Regra para futuras medições de a11y:** registar a viewport e garantir que ela contém a
+página; ou percorrer a página em segmentos. Um número de contraste sem viewport declarada
+**não é evidência**.
+
+### 6.5 Os 3 fps continuam a ser do Canvas2D — não do React
+
+O **3 fps** de §1.4 é resultado de **um desenho de preview** (Canvas2D com 10k `fillRect`
+individuais), medido no protótipo React **porque era o único que corria na altura**. Ele
+**não** é um resultado da stack React, e continua a **não diferenciar** as duas: as duas
+usariam o mesmo canvas e a mesma API. A conclusão que ele suporta é uma só, e é a de §1.4 —
+**o preview será WebGPU/instanced**.
+
+**Continua por medir:** fps real em WebGPU (a assimetria **A4** de §4.2). Nenhum dos dois
+protótipos implementa o caminho WebGPU; ambos apenas verificam que `navigator.gpu` existe.
+
+### 6.6 O que estas medições mudam no ADR-0016
+
+**Nada na decisão.** Fecham `⏳`:
+
+- §1.1 — *"Bundle Leptos: precisa de `trunk`"* → **medido** (84,0 kB gzip).
+- §1.1 — *"axe-core Leptos: não medido"* → **medido** (0 violações).
+- §1.1 — *"Árvore de a11y Leptos: não medido — não presumir"* → **medido**, e o *"não
+  presumir"* provou-se sábio: a primeira leitura foi um falso-positivo.
+- §4.2 **A5** (hot reload do `trunk serve`) e **A1–A4** continuam **não medidos**.
+
+**Continua a exigir julgamento humano e não foi medido:** leitor de ecrã real
+(VoiceOver/NVDA), teclado interactivo com foco visível, e DX subjectiva. Ver §4.1.

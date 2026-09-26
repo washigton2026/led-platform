@@ -179,9 +179,11 @@ impl MetricsEmitter {
     pub fn p99_us(&self)      -> u64 { self.histogram.percentile(99.0) }
 }
 
-// Safety: only atomics — no interior mutability via raw pointers.
-unsafe impl Send for MetricsEmitter {}
-unsafe impl Sync for MetricsEmitter {}
+// `Send + Sync` sao DERIVADOS: `&'static str`, `Instant`, `AtomicU64` e `Histogram`
+// ja os sao. O `unsafe impl Send/Sync` que aqui estava era redundante — e, pior,
+// tornava o `send_sync` deste ficheiro incapaz de falhar, porque satisfazia o
+// `assert_send_sync::<MetricsEmitter>()` independentemente dos campos reais.
+// A demonstracao esta em `shared_clock.rs`, medida nos dois sentidos.
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 

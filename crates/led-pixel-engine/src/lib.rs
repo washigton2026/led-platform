@@ -26,7 +26,9 @@ pub mod library;
 pub mod noise;
 pub mod pipeline;
 pub mod reactive;
-pub mod triple;
+/// Re-export do crate leaf [`led_triple`] sob o nome `triple`, para `crate::triple::…`
+/// continuar a resolver. O módulo mudou de crate; a superfície não mudou.
+pub use led_triple as triple;
 
 /// Real wgpu GPU executor for [`compute::ComputeKernel`]s.
 /// Only compiled with `--features gpu` — skips gracefully when no adapter is available.
@@ -43,7 +45,7 @@ pub use library::{Chase, ColorWash, Fire, Lightning, Meteor, Ripple, Strobe, Twi
 pub use noise::{fbm, hash01, mix64, value_noise};
 pub use pipeline::{spawn, PipelineHandle};
 pub use reactive::{AudioScalars, AudioShare, Band, BandPulse, BeatFlash};
-pub use triple::{triple_buffer, Consumer, Producer};
+pub use led_triple::{triple_buffer, Consumer, Producer};
 
 #[cfg(feature = "gpu")]
 pub use gpu_executor::{GpuContext, GpuPlasmaExecutor};

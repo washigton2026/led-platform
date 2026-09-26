@@ -461,12 +461,21 @@ review_by: "proxima fatia do F2 — bloqueia qualquer uso do modo fluxo em traje
 | TD-009  | cargo fix → slice panic + zip timing  | 2026-06-17 | 73376ed  |
 | TD-010  | (alias de TD-002)                     | 2026-06-19 | 2f80574  |
 
-## Open items — priority order
+## Open items — a fonte é o ficheiro, não uma tabela
 
-| TD-ID  | Severity | Title (short)                 | Milestone |
-|--------|----------|-------------------------------|-----------|
-| TD-004 | High     | wgpu→Metal block on startup   | MEDIUM-1  |
-| TD-013 | High     | artefato de bake não autenticado | F2 fatia 2 |
+Havia aqui uma tabela mantida à mão. Foi **apagada em 2026-09-13**, e a razão é medida:
+listava `TD-004` como `High/open` quando o ficheiro diz `status: closed`, e continha **2**
+entradas quando o ficheiro tinha **7** `status: open` (TD-013, TD-014, TD-017, TD-018,
+TD-019, TD-020, TD-021) — errava nos dois sentidos, e só o TD-013 estava certo.
+
+Era uma **vista derivada** de dados que o `scripts/audit_gate.py` já imprime, entrada a
+entrada e com o status de cada uma, em **cada commit**. Reconciliá-la seria reiniciar o
+relógio até apodrecer outra vez. A regra da casa é *reutilizar, não duplicar* — e uma
+segunda fonte de verdade que diverge em silêncio é precisamente o que este ficheiro existe
+para registar, não para praticar.
+
+**Para ver o que está aberto:** `python3 scripts/audit_gate.py`, ou
+`grep -B4 '^status:    open' docs/technical-debt-ledger.md`.
 
 ## Note — tokio async sleeps in led-protocols (NOT part of TD-003)
 
@@ -479,4 +488,876 @@ distinction: |
   These are tokio::time::sleep (async cooperative yield), not thread::sleep
   (OS thread block). A different risk profile from TD-003. Converted where
   beneficial; the one Type B is documented and acceptable.
+```
+
+## TD-014 — F-01 (resíduo): `console.dropped` é prometido como reportado, e não é
+
+```yaml
+td_id:     TD-014
+title:     "A perda de eventos por browser lento tem contador, tem ADR que exige reporte, e nenhum caminho ate ao operador"
+severity:  Medium
+status:    open
+origin:    "Achado separado durante o fecho do F-01 (COMMAND 04), 2026-08-13. NAO incorporado ao F-01 por decisao do responsavel: e uma expansao de observabilidade, e F-01 era correccao de fronteira de verdade."
+context: |
+  Verificado por grep, nao presumido:
+
+  1. ADR-0026 §13 diz, literalmente: "Fila cheia -> descarta o mais antigo e
+     incrementa `console.dropped`, que e REPORTADO, nao escondido."
+  2. O comentario de modulo de fanout.rs repete a promessa: "O contador e
+     **reportado** (`console.dropped`), nao escondido: o operador tem de saber
+     que a sua vista esta incompleta."
+  3. `grep -rn "console.dropped" --include=*.rs crates/` devolve UMA ocorrencia:
+     o comentario acima. NAO existe identificador, campo, cabecalho nem rota com
+     esse nome em lado nenhum.
+  4. `Subscriber::descartados()` e `Fanout::descartados_totais()` existem e estao
+     correctos. Consumidores: `tests/sse.rs:249`. UM, e e um teste. Zero em
+     producao, zero em `ROTAS`, zero no contrato gerado.
+
+  A medicao existe e esta provada (o teste `browser_lento_nao_aplica_backpressure_e_a_perda_e_contada`
+  afirma 96 descartes exactos). O que falta e o mesmo elo que faltava no F-01:
+  a API.
+impact: |
+  Um operador com um separador lento ve uma lista de eventos INCOMPLETA e nao tem
+  como saber disso. E a forma mais barata do defeito que o ADR-0026 §9 existe para
+  impedir: nao ha estado falso no ecra, ha uma AUSENCIA que se parece com silencio.
+  Um daemon parado e um browser a perder eventos produzem hoje a mesma tela.
+
+  Severidade Medium e nao High porque exige um browser genuinamente lento — a fila
+  e de 256 eventos por browser — e porque nada e AFIRMADO de falso; o que existe e
+  omissao. Mas a promessa escrita no ADR nao esta cumprida, e uma promessa por
+  cumprir num documento aceite e pior que uma lacuna nao documentada: quem ler o
+  §13 conclui que o reporte existe.
+mitigation_now: |
+  Nenhuma. O contador e correcto e esta testado; simplesmente nao chega a ninguem.
+  Nao ha mascara nem valor fabricado — a ausencia e honesta, so nao e visivel.
+required_fix: |
+  Fatia propria. Duas decisoes por tomar, e nenhuma e edicao:
+
+  a) ONDE. O F-01 acabou de estabelecer o precedente: facto do console vive em
+     superficie do console, nunca dentro do envelope do daemon. `/api/upstream`
+     e a rota natural para o acompanhar, mas acrescentar-lhe um campo alarga um
+     contrato que acabou de ser congelado como "um booleano e mais nada" — o que
+     exige emendar o ADR-0026 §9-quinquies, nao so escrever codigo.
+  b) O QUE. `descartados_totais()` e cumulativo e agrega TODOS os browsers. O
+     operador quer saber se A SUA vista esta incompleta, nao a soma. Por browser
+     exigiria identidade de sessao no SSE, que nao existe. Decidir antes de medir.
+
+  PROIBIDO: inventar um `console.dropped` com semantica diferente da que o §13
+  descreve; expor o acumulado como se fosse estado actual (o erro que o
+  `subscricoes_ipc()` ja tem documentado no fanout.rs); ou renomear o campo para
+  algo que soe melhor — o nome esta no ADR e e o contrato.
+falsification_required: |
+  Um teste que encha a fila de um browser (100x a capacidade, como o
+  `browser_lento_...` ja faz) e afirme que o numero de descartes CHEGA ao cliente.
+  Controle negativo obrigatorio: um browser que le tudo tem de reportar zero — sem
+  isso, um campo que devolvesse sempre uma constante passaria.
+review_by: "proxima fatia de observabilidade do console"
+```
+
+---
+
+## TD-015 — `surface_gate` lê código de teste como se fosse produção, e `main.rs` fica de fora
+
+```yaml
+td_id:     TD-015
+title:     "As FONTES do surface_gate excluem main.rs, e o filtro nao distingue #[cfg(test)] de producao"
+severity:  Medium
+status:    closed
+evidence_ref: docs/evidence/td-015-surface-gate-main-rs.txt
+required_test: nenhum_blackout_na_superficie_nem_no_codigo
+source_files: crates/led-console-bin/tests/surface_gate.rs
+negative_control: |
+  Tres controlos, e o B e o que impede a "correccao" de ser um desligar do gate:
+  A) `blackout` em codigo de PRODUCAO do main.rs -> REPROVA, nomeando o ficheiro.
+  B) NEGATIVO: a lista da linha 319, dentro do mod tests, NAO reprova. Sem isto, cortar
+     no `mod tests` poderia ter simplesmente apagado o gate em vez de o corrigir.
+  C) `grand_master` em producao de surface.rs -> REPROVA. Prova que o corte nao
+     desligou a verificacao nos nove ficheiros que ja estavam nas FONTES.
+resolucao: |
+  `linhas_de_codigo` passa a cortar no `mod tests`, REUSANDO o idioma que o proprio
+  `main.rs` ja usava contra si mesmo (`FONTE.split("mod tests")`) — e nao um filtro por
+  `#[cfg(test)]`, que nao apanharia o `#[cfg(all(test, unix))]` do main.rs. Com o corte
+  no sitio, `main.rs` entrou nas FONTES: a superficie da CLI passa a ser coberta pelos
+  tres gates textuais do crate.
+origin:    "Encontrado ao verificar o fechamento documental do F-01, 2026-08-13"
+context: |
+  Provado por leitura e contagem, nao presumido:
+
+  1. `crates/led-console-bin/src/` tem DEZ ficheiros. NOVE estao nas `FONTES` do
+     `tests/surface_gate.rs`. O decimo — `main.rs`, a superficie da CLI — nao esta.
+     Foi acrescentado no COMMAND 03 sem entrar na lista, apesar de o changelog deste
+     repo avisar tres vezes seguidas que "um ficheiro novo que nao entre ali escapa
+     a TODOS os gates do crate" (entradas de 2026-08-09c, 09d e 09e).
+
+  2. Tres gates leem as `FONTES` (linhas 71, 105 e 128): as palavras proibidas do
+     ADR-0017, a segunda-fonte-de-verdade, e o timeout duplicado. `main.rs` escapa
+     aos tres. Um `--blackout` acrescentado a CLI nao seria apanhado por nenhum.
+
+  3. A causa de nao ter sido corrigido antes nao e esquecimento simples: `main.rs`
+     NAO PODE ser acrescentado como esta. A linha 319 e
+
+         for proibido in ["blackout", "--auth", "--cors", "0.0.0.0"] {
+
+     dentro do proprio `mod tests` de `main.rs` — um teste que verifica que o
+     `--help` nao menciona nada disso. E `linhas_de_codigo` (surface_gate.rs:29-34)
+     so filtra comentarios: `//` e `*`. Nao conhece `#[cfg(test)]`. Acrescentar
+     `main.rs` faz o gate do ADR-0017 reprovar por causa de um teste que existe
+     precisamente para impor a mesma regra.
+
+  4. E o problema e maior que `main.rs`: QUATRO dos nove ja nas FONTES tem `mod tests`
+     inline (fanout.rs, limits.rs, surface.rs, truth.rs). O gate le esse codigo de
+     teste como producao. Passam por SORTE — nenhum dos seus testes calha conter uma
+     palavra proibida. Nao passam por desenho.
+
+     CORRECCAO DE UM ERRO MEU: a primeira versao desta entrada dizia "os NOVE tem
+     TODOS mod tests (9/9)". Era falso. O numero veio de um `grep -c ... || echo 0`,
+     que imprime DOIS zeros quando nao ha acerto — e `"0\n0" != "0"` da verdadeiro
+     para todos. E exactamente o bug de shell que este repo ja registou em 2026-07-11b,
+     e cai nele. Recontado sem o `|| echo 0`: sao 4, nao 9.
+
+  5. E `main.rs` ja resolve este problema CONTRA SI PROPRIO. A linha 253-254:
+
+         const FONTE: &str = include_str!("main.rs");
+         let producao = FONTE.split("mod tests").next().expect(...);
+
+     O idioma certo ja existe no repo, escrito para o ficheiro que esta de fora. E e
+     mais forte que filtrar `#[cfg(test)]`: o `main.rs` usa `#[cfg(all(test, unix))]`,
+     que um filtro por `cfg(test)` nao apanharia.
+impact: |
+  A superficie da CLI — o unico sitio onde um operador escreve flags — nao tem
+  nenhum gate estrutural. E a proteccao dos outros nove e mais fraca do que parece:
+  depende de nenhum teste futuro nomear uma palavra proibida, que e exactamente o
+  que um teste que PROIBE essa palavra tem de fazer.
+
+  E a mesma classe que este repo ja corrigiu uma vez e nao fechou: "um gate nao pode
+  ser o sitio onde o proibido e escrito" (F1-B, 2026-08-09). A correccao de entao
+  moveu a lista de `surface.rs` para dentro do teste; o gate continuou sem saber
+  distinguir teste de producao.
+mitigation_now: |
+  Nenhuma activa. `main.rs` esta limpo hoje: grep das 16 palavras proibidas devolve
+  zero em codigo de producao (o unico acerto e a linha 319, que e o teste). Portanto
+  nao ha defeito a correr — ha uma proteccao que nao cobre o que diz cobrir.
+required_fix: |
+  DECISAO antes de codigo, porque ensinar o gate a parar em `#[cfg(test)]` muda o que
+  os NOVE ficheiros passam a ser verificados contra, e pode revelar violacoes hoje
+  invisiveis:
+
+  a) Ensinar `linhas_de_codigo` a cortar no `mod tests`, REUSANDO o idioma que o
+     `main.rs` ja usa contra si proprio, e so depois acrescentar `main.rs` as FONTES.
+     Cortar por `mod tests` e melhor que filtrar `#[cfg(test)]`: apanha tambem o
+     `#[cfg(all(test, unix))]` do `main.rs`. Custo: o gate deixa de ver codigo de
+     teste — correcto, mas e uma reducao de alcance que tem de ser deliberada.
+  b) Acrescentar `main.rs` e mover a lista da linha 319 para outro sitio. Rejeitado
+     a partida: a lista esta ja no sitio que o F1-B prescreveu (dentro do teste), e
+     move-la outra vez seria repetir o ciclo em vez de o fechar.
+
+  Recomendo (a). Nao implementado: e uma decisao sobre o alcance de um gate.
+falsification_required: |
+  Depois de (a): plantar `blackout` em codigo de PRODUCAO de `main.rs` e confirmar
+  que o gate reprova. Controle negativo obrigatorio: a linha 319 (a lista dentro do
+  teste) tem de continuar a NAO reprovar — sem esse segundo controlo, a correccao
+  pode ter simplesmente desligado o gate.
+review_by: "proxima fatia que toque led-console-bin"
+```
+
+---
+
+## TD-016 — O DDP não tem como expressar um offset de pixels, e é o campo de instância do multi-controlador
+
+```yaml
+td_id:     TD-016
+title:     "DdpOutput fixa pixel_offset em 0 nos tres construtores; o daemon nao tem como enderecar o 2.o no"
+severity:  High
+status:    closed
+fixed_in:  "5561aa0 — `DdpOutput::with_pixel_offset`, aditivo"
+evidence_ref: docs/evidence/td-016-ddp-pixel-offset.txt
+negative_control: |
+  DOIS controlos, porque um so nao chegava:
+  A) parametro ignorado (`.pixel_offset = 0`) -> left [0] vs right [2160]: reproduz o
+     defeito com a API ja a existir.
+  B) offset em PIXELS em vez de BYTES -> left [720] vs right [2160]. Existe porque um
+     teste que so afirmasse "o offset chega" passaria com a unidade errada — o valor
+     chega na mesma, e o 2.o no escreveria EM CIMA do 1.o em vez de a seguir.
+  E dentro do teste, `assert_ne!(no1, no2)`: sem ele, olhar so para um no passaria com
+  ambos a zero, que e o defeito.
+origin:    "Investigacao do ADR-0029 (saida multi-controlador), 2026-08-14"
+context: |
+  Provado por leitura de codigo, nao presumido:
+
+  1. led-player/src/lib.rs:172, 186, 204 — os TRES construtores do `DdpOutput` chamam
+     `DdpDevice::new(addr, 0)` / `with_format(addr, 0, format)`. O `0` esta escrito a mao.
+     Nao e um parametro que o daemon se esqueceu de passar: e um parametro que a API do
+     `DdpOutput` NAO EXPOE. Nao ha por onde passar outro valor.
+
+  2. `grep pixel_offset crates/led-daemon-bin/` devolve ZERO. O daemon nunca o menciona,
+     nem em producao nem em teste.
+
+  3. O protocolo suporta-o: `DdpDevice.pixel_offset` (ddp.rs:262) e `offset_bytes` viaja no
+     cabecalho, big-endian (ddp.rs:104), com testes de unidade a afirma-lo
+     (`p2.offset_bytes == 365 * 4`).
+
+  4. ASSIMETRIA MEDIDA. O campo de instancia do Art-Net/sACN — `first_universe` — E honrado
+     e E afirmado no fio (`wled_driver.rs:345`, universos consecutivos para 0/1/7/100).
+     O equivalente do DDP nao tem nem API nem teste.
+impact: |
+  E exactamente a classe de defeito que o GS4.3 apanhou no `RgbOrder` e o GS4.4 no MTU:
+  um campo que o fio suporta e que ninguem no daemon honra — invisivel enquanto houver um
+  so no, porque com um alvo o offset correcto E zero.
+
+  Com N nos deixa de ser invisivel: os cinco WLED do rig receberiam todos o mesmo intervalo
+  de pixels a partir do offset 0. O robo 1 acenderia; os robos 2 a 5 acenderiam a MESMA
+  coisa que o 1, em vez da sua parte do show. Nao e palco escuro — e pior de diagnosticar,
+  porque parece funcionar.
+mitigation_now: |
+  Nenhuma necessaria hoje: com um unico alvo, offset 0 e o valor correcto, e o caminho DDP
+  esta validado em hardware nessa configuracao (94/94 frames, 2026-07-20). O defeito e
+  latente, nao activo.
+required_fix: |
+  Pertence a fatia do ADR-0029 e e PRE-REQUISITO dela, nao consequencia:
+
+  a) `DdpOutput` ganha o offset na API (`with_offset` ou parametro nos construtores),
+     propagando-o ao `DdpDevice` que ja o aceita. ZERO logica nova de protocolo.
+  b) Um teste discriminante que leia os datagramas de um socket e afirme o `offset_bytes`
+     de CADA alvo — o equivalente DDP do que o `wled_driver.rs:345` ja faz para o
+     `first_universe`. Sem ele, a correccao nao seria falsificavel.
+  c) Controlo negativo obrigatorio: dois alvos com offsets diferentes tem de produzir
+     `offset_bytes` DIFERENTES no fio. Um teste que so verificasse "o offset chega" passaria
+     com os dois a zero.
+review_by: "fatia do ADR-0029 (saida multi-controlador)"
+```
+
+## TD-017 — Daemon e player divergem na politica do universo fora da faixa de 15 bits
+
+```yaml
+td_id:     TD-017
+title:     "O daemon RECUSA um universo fora da faixa; o led-player AVISA e prossegue, e o pacote sai mascarado"
+severity:  Medium
+status:    open
+origin:    "Revisao A1 (porta de saida multi-controlador), 2026-08-17"
+context: |
+  Provado por leitura de codigo, nao presumido:
+
+  1. led-protocols/src/artnet.rs, `build_art_dmx` — o Net e escrito com
+     `buf[15] = ((universe >> 8) & 0x7F)`. O `& 0x7F` deita fora o bit 15, portanto
+     qualquer universo acima de 32767 e MASCARADO em silencio: 40000 (0x9C40) sai como
+     0x1C40 = 7232. Nao ha erro, nao ha aviso no fio, e o pacote e valido.
+
+  2. led-daemon-bin/src/output.rs:376 — a fronteira do ADR-0029 §7 RECUSA:
+     "universo {u} fora da faixa do {proto} ({min}..={max})". O daemon esta protegido.
+
+  3. led-player/src/main.rs:395 — o outro binario que fala Art-Net apenas AVISA
+     ("likely a typo") e PROSSEGUE. O comentario acima declara a intencao:
+     "Warn loudly; do not block (some rigs legitimately use high universes)".
+
+  A divergencia e o problema, nao cada uma das metades. O argumento que o ADR-0029 §7
+  usa para recusar — a bancada de 2026-07-23 mostrou que o universo errado DESLOCA A
+  FITA sem erro nenhum — aplica-se ao player exactamente como ao daemon. E o player e
+  o binario que fez a primeira luz e o burn-in, ou seja e o que esteve mais perto de
+  hardware real.
+
+  O ADR-0029 §7.1 ja nomeia a correccao NA ORIGEM (o mascaramento em `build_art_dmx`)
+  como fatia propria. O que NAO estava nomeado em lado nenhum, e e o que esta entrada
+  regista, e que os dois binarios aplicam politicas diferentes ao mesmo perigo fisico.
+  Divergencias entre binarios apodrecem em silencio: ninguem as ve porque cada metade,
+  lida sozinha, parece deliberada.
+
+  Nao corrigido nesta revisao de proposito: escolher entre "o player passa a recusar"
+  e "a origem passa a recusar e os dois herdam" e decisao de arquitectura, nao edicao.
+review_by: "antes de qualquer uso do led-player contra o rig fisico (GS4.5)"
+```
+
+## TD-018 — A sintaxe obrigatoria do universo nao esta no `--help` do daemon
+
+```yaml
+td_id:     TD-018
+title:     "O ADR-0029 §7 tornou `IP@UNIVERSO` obrigatorio em Art-Net/sACN, e o --help nao o menciona"
+severity:  Low
+status:    open
+origin:    "Revisao A1 (porta de saida multi-controlador), 2026-08-17"
+context: |
+  Medido, nao presumido: `led-daemon --help` tem ZERO ocorrencias de `@`, e a unica
+  linha com a palavra "universo" descreve o que vem do profile, nao a especificacao do
+  endereco. Mas `OutputConfig` EXIGE o universo nos protocolos que o usam — sem ele o
+  palco nao abre.
+
+  Consequencia: o operador que leia a ajuda antes de correr nao descobre a sintaxe. So
+  a aprende falhando. Isto e a superficie de descoberta desactualizada face ao codigo,
+  e o `--help` e literalmente o unico sitio onde um operador escreve flags (foi esse o
+  argumento que abriu o TD-015).
+
+  Muito mitigado, e por isso Low: a mensagem de recusa e explicita e ensina a sintaxe —
+  "o preset `{modelo}` usa {proto} e exige o universo — escreva `{endereco}@N`. Nao ha
+  omissao: a bancada de 2026-07-23 mostrou que o universo errado desloca a fita sem
+  erro nenhum". Quem falha uma vez fica a saber, e a saber PORQUE.
+
+  Nao corrigido aqui porque a revisao A1 e read-only sobre produccao; e uma linha de
+  texto no `--help`, e cabe na fatia que fechar o TD-017.
+review_by: "fatia do TD-017"
+```
+
+## TD-019 — `linear_assignments` tem 170 e 3 canais escritos à mão, e é o caminho Art-Net/sACN do daemon
+
+```yaml
+td_id:     TD-019
+title:     "O `led-player` sem `--profile` ainda endereca com `170`/`x3` e RGB a mao — e o fecho do lado do daemon (C2b) nunca foi capturado como evidencia"
+severity:  Low
+status:    open
+origin:    "Inspeccao para o ADR-0030 (portas fisicas), 2026-08-30. Registado como DL-2 nesse ADR."
+adr:       "ADR-0030 §Dividas registadas / DL-2"
+evidence_ref: docs/evidence/td-019-enderecamento-no-fio-2026-09-13.md
+negative_control: |
+  M2 (output.rs:615 `color: ColorFormat::Rgb(self.rgb_order())`) reprova o teste no pixel 0:
+  "esperava os 4 canais [50, 150, 0, 50], veio [100, 200, 50, 100]". ANTES do commit 09c135e
+  a mesma mutacao passava os 18 testes — a assercao era `d.len() >= 126`, cega ao formato.
+  M1 (output.rs:611 `pixels_per_universe: 170`) reprova na fronteira de universo.
+  ATENCAO: o criterio B do closure_criteria abaixo esta STALE — manda repor PX_PER_UNIVERSE
+  no led-player, constante que o daemon deixou de usar no C2b; mutar essa constante NAO pode
+  reprovar este teste. Os controlos validos sao o M1/M2 acima.
+context: |
+  RECONCILIACAO 2026-09-13 — LEIA ISTO ANTES DO CORPO HISTORICO ABAIXO.
+
+  O corpo original (preservado a partir de "SINTOMA") descreve o mundo ANTES do C2b da
+  FASE C (2026-09-01). Foi medido hoje, ponto a ponto, e a maior parte ja nao se aplica.
+  O historico fica porque explica PORQUE foi classificado High; o que muda e o presente.
+
+  MEDIDO HOJE:
+
+  a) Ponto 3 do corpo — FALSO hoje. `grep linear_assignments crates/led-daemon-bin/src/output.rs`
+     devolve UMA linha, e e um COMENTARIO (`output.rs:599`) que documenta o proprio fecho:
+     "Ate ao C2b o daemon chamava `led_player::linear_assignments`...". O daemon deixou de
+     chamar a funcao; o endereçamento e pedido ao `led-hardware-profile` (ADR-0030 §8).
+
+  b) Ponto 4 — a funcao sobrevive, o defeito nao. `rgb_order()` ainda faz
+     `Rgbw(o, _) => o` (`output.rs:629-634`), mas tem ZERO chamadores em producao: o unico
+     e `output.rs:1249`, e o `mod tests` abre em `:1031`. O colapso RGBW->RGB nao pode
+     acontecer no fio por esta rota.
+
+  c) Ponto 5 — a assimetria "a tres linhas de distancia" foi resolvida pelo C2b: os tres
+     protocolos pedem o endereçamento ao dono. O SEGUNDO EIXO do `severity_rationale`
+     ("os dois binarios passam a ter semanticas diferentes") caiu com ela.
+
+  d) Ponto 6 — a alcancabilidade via `generic-sk6812-rgbw-sacn` dependia do
+     `linear_assignments` no arm do sACN. Removido esse, o mecanismo desapareceu.
+
+  e) Ponto 7 — a FASE C afirma que o gate passou a cobrir, COM falsificacao medida
+     (reintroduziu o defeito; reprovaram dois testes, incluindo o gate estrutural da GS4.4).
+     Nao verificado hoje: e afirmacao do changelog, nao artefacto.
+
+  O QUE CONTINUA ABERTO, e e outra coisa: o ramo `None` do `led-player`
+  (`main.rs:303-308`) — sem `--profile`, ainda usa
+  `linear_assignments(px, 0, first_universe, RgbOrder::Rgb)`, ou seja `170`/`x3` a mao e
+  RGB forcado. O changelog da FASE C ja o tinha nomeado como "fora do que o TD-019
+  descreve". A entrada passa a descrever ISTO.
+
+  E UMA CORRECCAO A DUAS FONTES: o changelog da FASE C escreve "TD-019 no `led-player`
+  SEM `--profile`" — a flag EXISTE (`main.rs:158`) e o ramo `Some` honra-a ponta a ponta
+  (`:303` devolve `(layout, calibration, profile_color)`, `:310` usa `led_hardware_profile`,
+  `:322` valida, `:333` chama `hwp::compile_layout`). O que nao honra e o ramo `None`.
+
+  PORQUE CONTINUA `open` E NAO `closed`: o `audit_gate.py` exige, para `closed`, um
+  `evidence_ref` que aponte para um ficheiro EXISTENTE com `N passed; 0 failed` e `N > 0`
+  (`scripts/audit_gate.py:163-185`), mais um `git-hash:` de frescura (`:83`). Nao existe
+  `docs/evidence/td-019-*.txt` — a serie salta do `td-016` para nada. A correccao aterrou
+  em codigo; a PROVA nunca foi capturada. Isto e o gate a funcionar, nao uma omissao:
+  neste repositorio `closed` significa "provado fechado com artefacto", nao "acreditamos
+  que esta corrigido".
+
+  ESTADO DOS CAMPOS ABAIXO — todos escritos pre-C2b, e nenhum reescrito de propósito
+  (o historico explica o raciocinio; este bloco diz o que dele caiu):
+
+  - `mitigation_now`: descreve quando o defeito "acorda" NO DAEMON — caminho que ja nao
+    existe. A mitigacao real hoje e outra: o daemon recusa arrancar sem `--profile`.
+  - `not_fixed_because` (c): dizia que a correccao certa era consequencia do ADR-0030 §6,
+    "quando a reparticao tiver um so dono". SATISFEITO — o C2a poe o nucleo em
+    `led-hardware-profile::reparticao` e o daemon passa a chamador.
+  - `required_fix` 1: SATISFEITO (§6 implementado). `required_fix` 2: satisfeito PARA O
+    DAEMON (deixou de chamar a funcao); a funcao continua no `led-player` com a mesma
+    assinatura. `required_fix` 3: NAO FEITO — o gate textual da GS4.4 continua a ler tres
+    ficheiros (`output.rs`, `stage.rs`, `run.rs`) e `led-player/src/lib.rs` fica de fora.
+    E este o unico item do `required_fix` que sobrevive inteiro.
+  - `closure_criteria` A–D: continuam validos como critérios, mas foram escritos contra o
+    defeito do daemon. O (C) — comparar o endereçamento do player com o do daemon para o
+    mesmo profile — foi coberto pela mutacao cruzada do C2a, sem artefacto capturado.
+
+  ---- CORPO HISTORICO (pre-C2b, 2026-08-30) — preservado, ja nao descreve o presente ----
+
+  SINTOMA. O `led-player` tem valores fisicos escritos a mao no caminho de saida, e o
+  daemon usa esse caminho para Art-Net e sACN. Dois campos que o `HardwareProfile`
+  declara — `pixels_per_universe` e `color` — nao chegam ao fio por esta rota.
+
+  Provado por leitura de codigo, nao presumido, e nao executado:
+
+  1. crates/led-player/src/lib.rs:297-312 — `linear_assignments`:
+       `const PX_PER_UNIVERSE: usize = 170;  // 510 / 3`
+       `universe: first_universe + (i / PX_PER_UNIVERSE) as u16`
+       `channel:  ((i % PX_PER_UNIVERSE) * 3) as u16`
+       `format:   order.into()`
+     O 170 e o *3 estao escritos a mao. E a assinatura recebe `order: RgbOrder` — nao
+     `ColorFormat`. Nao e um argumento que o chamador se esqueceu de passar: e um
+     parametro que a API NAO EXPOE. Mesma forma do TD-016.
+
+  2. crates/led-core/src/types.rs:141-146 — `impl From<RgbOrder> for ColorFormat` devolve
+     sempre `ColorFormat::Rgb(o)`. Logo `format: order.into()` e SEMPRE tres canais.
+
+  3. crates/led-daemon-bin/src/output.rs:28 — `use led_player::linear_assignments;`
+     Chamado em :713 (Art-Net) e :724 (sACN), com `cfg.rgb_order()` como quarto argumento.
+
+  4. crates/led-daemon-bin/src/output.rs:569-574 — `rgb_order()` faz
+     `ColorFormat::Rgbw(o, _) => o`: descarta o RGBW E o `WhiteMode`.
+
+  5. CONTRASTE DENTRO DO MESMO `match`. O arm DDP (:700-707) passa `cfg.color` inteiro
+     a `DdpOutput::with_limits`, mais `cfg.pixels_per_universe`. O DDP honra; o
+     Art-Net/sACN nao. A assimetria esta a tres linhas de distancia.
+
+  6. ALCANCAVEL, nao hipotetico. O preset `generic-sk6812-rgbw-sacn`
+     (presets.rs:178-197) declara `protocol: Sacn`, `color: Rgbw(Grb, MinSubtract)` e
+     `pixels_per_universe: 128`. O validador do ADR-0018 so recusa RGBW quando o
+     protocolo e DDP (validate.rs:181, `caps.protocol == Protocol::Ddp`) — nao ha guarda
+     nenhuma para RGBW sobre sACN. O preset valida limpo e chega ao arm do sACN.
+
+  7. O GATE NAO COBRE. `nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida`
+     (led-daemon-bin/tests/wled_driver.rs:395) le exactamente tres ficheiros —
+     `output.rs`, `stage.rs`, `run.rs` (linhas 397-399). O `led-player/src/lib.rs` esta
+     fora, e e onde os numeros vivem. O gate criado na GS4.4 para impedir esta classe
+     nao a ve.
+impact: |
+  Com `generic-sk6812-rgbw-sacn` o daemon produziria, no fio: tres canais por pixel em
+  vez de quatro, e 170 pixels por universo em vez dos 128 declarados. O endereco de
+  cada pixel a partir do primeiro fica errado, e o die branco da fita nunca acende.
+
+  E a mesma familia do `RgbOrder` (GS4.3), do MTU (GS4.4) e do TD-016: campo declarado
+  que o fio ignora. E, como esses, NAO da palco escuro — da uma fita que acende com as
+  cores e as posicoes trocadas, que e mais caro de diagnosticar porque parece funcionar.
+
+  Segundo eixo, e e o que o torna High e nao Medium: os dois binarios que falam com
+  hardware passam a ter semanticas diferentes para o mesmo profile. O DDP honra o
+  `ColorFormat` e o `pixels_per_universe`; o Art-Net/sACN nao. Divergencias entre
+  caminhos apodrecem em silencio — cada metade, lida sozinha, parece deliberada.
+severity_rationale: |
+  RECLASSIFICADO 2026-09-13: High -> Low. Os DOIS eixos do argumento original cairam,
+  e nao por opiniao — por medicao (ver RECONCILIACAO em `context`).
+
+  - Eixo 1 ("valor fisico a mao num caminho de saida do daemon"): o daemon deixou de
+    chamar `linear_assignments` (`output.rs:599` e so um comentario), e `rgb_order()`
+    tem zero chamadores em producao. O caminho descrito nao existe.
+  - Eixo 2 ("os dois binarios com semanticas diferentes para o mesmo profile"): resolvido
+    pelo C2b — os tres protocolos pedem o endereçamento ao dono.
+
+  Comparado pelo mesmo metodo do ledger, contra o que RESTA (o ramo `None` do
+  `led-player`):
+
+  = TD-018 (Low), e na verdade MELHOR mitigado. O TD-018 e Low porque a mensagem de
+    recusa ensina o operador. Aqui a mitigacao e mais forte: o `led-daemon` — o binario
+    que faz show — RECUSA ARRANCAR sem `--profile` desde a GS4.4 (exit 2). Chegar ao
+    defeito exige usar o binario legado E omitir a flag.
+  < TD-017 (Medium): la a divergencia daemon/player esta VIVA. Aqui o lado do daemon
+    esta corrigido em codigo; sobra o fallback opcional do binario legado.
+
+  NAO e zero, e e por isso que nao proponho `closed` nem apagar: um `RgbOrder` errado e
+  SILENCIOSO — vermelho acende verde, sem erro nenhum. E a classe que a FASE C encontrou,
+  agora reduzida a um caminho que o operador tem de escolher explicitamente.
+
+  ---- ARGUMENTO ORIGINAL (pre-C2b) — preservado, sustentava o High que ja nao se aplica ----
+
+  Classificado por comparacao com o ledger, nao por intuicao.
+
+  = TD-016 (High): valor fisico escrito a mao num caminho de saida, num parametro que a
+    API nao expoe, latente hoje e produtor de saida errada-mas-plausivel quando activa.
+    A forma e a mesma; aqui sao DOIS campos declarados em vez de um.
+  > TD-017 (Medium): la a divergencia daemon/player e uma escolha DELIBERADA e
+    documentada no codigo ("Warn loudly; do not block"). Aqui nada e deliberado — e uma
+    constante escrita a mao que ignora um campo declarado.
+  > TD-018 (Low): nao ha mitigacao. O TD-018 e Low porque a mensagem de recusa ensina o
+    operador. Aqui nao ha recusa, nao ha aviso, e nada no ecra o denuncia.
+mitigation_now: |
+  Nenhuma necessaria hoje, e o defeito e LATENTE, nao activo:
+
+  - os quatro presets validados ou usados em hardware — `esp32-devkit-wled-artnet`,
+    `esp32-poe-wled-ddp`, `falcon-f16v3-sacn`, `advatek-pixlite16-sacn` — declaram todos
+    `pixels_per_universe: 170` e cor RGB, que e exactamente o que o codigo assume;
+  - o unico preset RGBW+sACN do catalogo (`generic-sk6812-rgbw-sacn`) nunca foi corrido
+    contra hardware;
+  - o caminho DDP, que e o validado em hardware (94/94 frames, 2026-07-20), NAO passa
+    por aqui.
+
+  Ou seja: o defeito so acorda quando alguem correr o daemon com um preset cujo
+  `pixels_per_universe` seja diferente de 170, ou com RGBW em Art-Net/sACN.
+not_fixed_because: |
+  Tres razoes, e nenhuma e falta de tempo:
+
+  a) E ANTERIOR a FASE C. Nao foi introduzido pelo ADR-0030; foi encontrado por ele.
+     Corrigi-lo dentro da etapa documental misturaria duas preocupacoes no mesmo diff.
+  b) E CODIGO DE PRODUCAO, e a etapa que o encontrou era read-only por directiva.
+  c) A CORRECCAO CERTA E CONSEQUENCIA DO ADR-0030 §6, nao independente dele. Quando a
+     reparticao tiver um so dono (`led-hardware-profile`), o 170 escrito a mao deixa de
+     ter onde viver. Corrigi-lo agora, isolado, criaria uma segunda implementacao da
+     regra que o §6 existe para unificar — exactamente o que este repositorio recusa.
+required_fix: |
+  Pre-condicoes, por ordem:
+
+  1. ADR-0030 §6 implementado: `led-hardware-profile` como fonte normativa unica do
+     enderecamento, e o daemon a consumi-lo em vez de construir o layout inline.
+  2. `linear_assignments` deixa de receber `RgbOrder` e passa a receber o que o profile
+     declara — ou desaparece, absorvida pelo `compile_layout`. A segunda hipotese e a
+     preferivel, e e a que o §6 aponta.
+  3. O gate `nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida` passa a incluir
+     `led-player/src/lib.rs` nas suas FONTES. Sem isto a correccao nao fica protegida
+     contra reincidencia, e foi a ausencia deste ficheiro que deixou o defeito crescer.
+closure_criteria: |
+  Fecha quando TODAS as quatro se verificarem:
+
+  A) Um teste discriminante le os datagramas de um socket real com o preset
+     `generic-sk6812-rgbw-sacn` e afirma QUATRO canais por pixel e 128 pixels por
+     universo. Contar so canais nao chega — tem de afirmar tambem a fronteira do
+     universo, senao passa com o 170 ainda la.
+  B) CONTROLO NEGATIVO OBRIGATORIO: uma mutacao no ponto que o daemon REALMENTE usa tem de
+     REPROVAR esse teste. Dois, ambos medidos em 2026-09-13 (ver `evidence_ref`):
+       M1 · output.rs:611 `pixels_per_universe: 170`        -> reprova na fronteira
+       M2 · output.rs:615 `color: Rgb(self.rgb_order())`    -> reprova no pixel 0
+     Um teste que so afirmasse "sai RGBW" passaria com a fronteira de universo errada; um
+     que so afirmasse a fronteira passa com o formato colapsado — foi esse o falso-verde
+     fechado no commit 09c135e. Sao precisos os dois.
+
+     REENDERECADO 2026-09-13, e a exigencia NAO foi baixada. A redaccao anterior mandava
+     repor o `PX_PER_UNIVERSE = 170` (ou o `* 3`) do `led-player`. Depois do C2b o daemon
+     deixou de chamar `linear_assignments`, logo essa mutacao NAO pode reprovar o teste do
+     daemon: um controlo negativo que nao reprova nao e um controlo, e seguir a instrucao a
+     letra produzia um verde vazio (KB-012) — a forma exacta do defeito que este TD regista.
+     O `led-player` continua coberto, pelo criterio (D), que e onde essa constante vive.
+  C) Um teste que compare o enderecamento produzido pelo `led-player` e pelo
+     `led-daemon-bin` para o MESMO profile e o MESMO show, e que reprove se divergirem.
+     E o gate do ADR-0030 §8, e e o que impede a divergencia de voltar.
+  D) O gate textual da GS4.4 cobre `led-player/src/lib.rs` e reprova com `170` ou `* 3`
+     fora de comentario nesse ficheiro.
+
+  Mais `evidence_ref` e `negative_control` no schema de fecho (KB-012), como qualquer
+  entrada `closed` deste ledger.
+review_by: |
+  ACTUALIZADO 2026-09-13 — a proibicao anterior mudou de NATUREZA, nao caiu.
+
+  Dizia: "NAO correr o daemon contra hardware com um preset de pixels_per_universe != 170
+  ou com RGBW em Art-Net/sACN". A razao era que o daemon produziria bytes errados. Essa
+  razao acabou: o C2b poe o endereçamento no `led-hardware-profile` e o daemon honra
+  `pixels_per_universe` e `ColorFormat` nos tres protocolos.
+
+  O que RESTA nao e um defeito de software, e a AUSENCIA DE VALIDACAO FISICA — e a FASE C
+  diz isso por escrito: "NAO esta provado que um controlador real os aceita... Validacao
+  fisica PENDENTE", com o rig offline. Portanto:
+
+  - `pixels_per_universe != 170` e RGBW sobre Art-Net/sACN passam a ser SUPORTADOS EM
+    SOFTWARE e NUNCA OBSERVADOS EM HARDWARE. Correr isso contra o rig e uma PRIMEIRA VEZ,
+    com o risco de uma primeira vez — nao a repeticao de um defeito conhecido.
+  - Continua PROIBIDO usar o `led-player` sem `--profile` contra uma fita GRB ou RGBW: e o
+    ramo `None` (`main.rs:303-308`), que forca `RgbOrder::Rgb`, e a falha e SILENCIOSA.
+  - O gate da GS4.4 continua a nao cobrir `led-player/src/lib.rs` (`required_fix` 3), logo
+    nada impede a reincidencia nesse ficheiro.
+```
+
+## TD-020 — A guarda de monotonia do `SharedClock` nao e atomica, e o relogio do show pode recuar
+
+```yaml
+td_id:     TD-020
+title:     "`now_ms` faz load-calcula-store em vez de `fetch_max`: uma perda de actualizacao deixa um leitor observar o relogio a andar para tras"
+severity:  High
+status:    closed
+closed_by: "13d2f41 (2026-09-17) — `load`/`max`/`store` substituido por `fetch_max(AcqRel)`; detector endurecido no mesmo ficheiro."
+evidence_ref: docs/evidence/td-020-relogio-monotonico-2026-09-17.md
+required_test: concurrent_readers_never_see_rewind_during_correction
+source_files: crates/led-hal/src/shared_clock.rs
+negative_control: |
+  DOIS controlos, e o segundo e o que impede o detector de ser teatro.
+
+  A) O DEFEITO REPOSTO. Com a versao de tres operacoes (`load`/`max`/`store`) e o detector
+     endurecido: 10 execucoes, 10 VERMELHAS. Mensagem verbatim —
+     "ronda 2: um leitor viu o relogio RECUAR 1 ms sob correccao concorrente
+     (8 leitoras x 20000 leituras)". Com `fetch_max`: 10 execucoes, 10 VERDES, mesmos
+     parametros. Isto satisfaz o criterio A do `review_by` (o teste tem de reprovar de
+     forma FIAVEL com o defeito presente — 1-em-30 nao serve).
+
+  B) A AMPLITUDE DESLIGADA, COM O DEFEITO PRESENTE. Com a versao de tres operacoes E
+     `AMPLITUDE_MS = 0` (a thread de correccao continua a girar, mas o offset nunca muda):
+     10 execucoes, **0 vermelhas**. Sem este controlo, "o detector dispara" e "o detector
+     tem 3,2 milhoes de iteracoes" seriam indistinguiveis, e ninguem saberia se a thread de
+     correccao faz trabalho ou e decoracao. Ela faz: e a alternancia do offset que impede
+     `adjusted` de voltar a dominar `prev` e mascarar a escrita obsoleta.
+
+  UMA PREVISAO MINHA FALSIFICADA, registada em vez de apagada: eu previa que o recuo teria
+  a magnitude de `AMPLITUDE_MS`. O recuo medido e de **1 ms** — a granularidade de `wall`.
+  A amplitude nao cria magnitude; cria a condicao em que a perda aflora. O comentario do
+  codigo foi reescrito para o mecanismo medido ANTES de o fix ser aplicado.
+origin:    "Observado na fatia 1-A do ADR-0031 (2026-09-10). NAO e regressao dessa fatia — ver PROVA DE ALHEAMENTO."
+context: |
+  SINTOMA. `cargo test --workspace` reprovou numa de duas medicoes, em
+  `shared_clock::tests::concurrent_readers_never_see_rewind_during_correction`
+  (`crates/led-hal/src/shared_clock.rs:198`), com a mensagem
+  "a reader observed a backward jump under concurrency". A segunda medicao deu
+  1131 passed / 0 failed. Em isolamento: 10 execucoes, 10 verdes.
+
+  CAUSA, lida no codigo e nao inferida do sintoma. `crates/led-hal/src/shared_clock.rs`,
+  `pub fn now_ms` (linhas 78-81):
+
+      let prev = self.last_now.load(Ordering::Acquire);
+      let next = adjusted.max(prev);
+      self.last_now.store(next, Ordering::Release);
+      next
+
+  Sao tres operacoes atomicas separadas, nao um read-modify-write. E a perda de
+  actualizacao classica: a thread A le `prev`, a thread B le o MESMO `prev`, B calcula
+  um `next` maior e guarda-o, e A guarda por cima o seu `next` menor. Quem ja devolveu
+  o valor maior le na iteracao seguinte um `last_now` rebaixado e devolve um valor
+  MENOR que o anterior — o recuo que a assercao apanha.
+
+  `AtomicU64::fetch_max` (estavel desde o Rust 1.45) faz a mesma coisa num so RMW e
+  fecha a janela. NAO foi aplicado: e `led-hal`, e fora do escopo da fatia que o
+  encontrou.
+
+  PRECONDICAO DO DEFEITO, medida e nao suposta. O recuo exige que `adjusted` DESCA,
+  ou seja um `set_offset_ms` para tras concorrente com leituras. Sem isso `adjusted`
+  e monotono por thread e `max(adjusted, prev)` nunca regride, mesmo com o `store` a
+  ser pisado. Por isso o defeito e probabilistico e so aparece sob contencao — foi
+  visto sob `cargo test --workspace` (paralelo) e nunca em isolamento.
+
+  PROVA DE ALHEAMENTO a fatia 1-A do ADR-0031 (tres factos independentes):
+
+  1. O diff da fatia toca 0 ficheiros em `crates/led-hal/`.
+  2. `crates/led-hal/Cargo.toml` NAO declara `led-daemon-bin` nem `led-console-bin`
+     (grep exit 1). Nao existe caminho de dependencia por onde a alteracao pudesse
+     alcancar este crate.
+  3. O mesmo teste passou na baseline `e6096ed` (suite serial, 1128 passed).
+
+  POR QUE `High`, e o que baixaria a classificacao. A propriedade que o codigo declara
+  — o comentario diz "Monotonicity: never go backward", e o teste chama-lhe "the show
+  clock never rewinds" — NAO e garantida pela implementacao. `SharedClock` e o relogio
+  usado pelo `net_time` (sincronizacao multi-no) e pelo `Pacing::Absolute` do
+  `led-player`, e `net_time::sync_to` e exactamente o caminho que aplica correccoes
+  para tras. A correccao e de uma linha.
+
+  ALCANCABILIDADE EM PRODUCAO: **NAO MEDIDA**. O rig multi-no nunca foi energizado, e
+  num show de um so no `set_offset_ms` nao e chamado durante a reproducao. Se a
+  auditoria decidir que "declarado mas nao alcancavel hoje" pesa mais que "invariante
+  declarado e falso", isto desce a Medium. Registado a High para que a decisao seja
+  tomada por alguem e nao por omissao.
+
+closure_criteria: |
+  Fecha quando as tres se verificarem:
+
+  A) `now_ms` usa um read-modify-write atomico unico (`fetch_max`) em vez de
+     load/max/store.
+  B) CONTROLO NEGATIVO OBRIGATORIO: repor o `load`+`store` tem de REPROVAR
+     `concurrent_readers_never_see_rewind_during_correction`. Como o defeito e
+     probabilistico, o controlo tem de ser repetido N vezes e reprovar em pelo menos
+     uma — e o N usado tem de ficar escrito na evidencia. Um controlo que corra uma
+     vez e passe NAO prova nada (KB-012).
+  C) O teste corre em `cargo test --workspace` (paralelo, com contencao), nao so
+     isolado — foi a contencao que o revelou, e um gate que so corre sozinho voltaria
+     a nao o ver.
+
+  Mais `evidence_ref` e `negative_control` no schema de fecho, como qualquer entrada
+  `closed` deste ledger.
+review_by: "antes de qualquer trabalho que dependa de sincronizacao multi-no (net_time / SyncedCluster), e antes do G4 com mais de um controlador energizado."
+```
+
+## TD-021 — O `led-console-bin` nao compila em Windows: importa um modulo `#[cfg(unix)]` do daemon
+
+```yaml
+td_id:     TD-021
+title:     "`limits.rs` deriva `MAX_BODY` e `BACKOFF_MAX` de `led_daemon_bin::server`, que so existe em unix (IPC sobre UDS) — E0433 no Windows"
+severity:  Medium
+status:    open
+origin:    "Observado no job `windows (allow-failure)` do PR #5, run 34683654404 (SHA 51d8241, 2026-09-12). NAO e regressao desse PR — ver PROVA DE ALHEAMENTO."
+context: |
+  SINTOMA, lido do log da CI e nao inferido:
+
+      error[E0433]: cannot find `server` in `led_daemon_bin`
+      crates/led-console-bin/src/limits.rs:8, :36, :47
+
+  CAUSA, lida no codigo. `crates/led-daemon-bin/src/lib.rs:37-38`:
+
+      #[cfg(unix)]
+      pub mod server;
+
+  e o mesmo gate no re-export da linha 48. As duas constantes que o console consome vivem
+  DENTRO desse modulo — `MAX_LINE` em `server.rs:35` e `REPLY_TIMEOUT` em `server.rs:42` —
+  e nenhuma tem `cfg` proprio: herdam o do modulo. O gate e correcto na origem: o `server`
+  e o IPC sobre **UDS**, que nao existe em Windows. O que nao e cross-plataforma e o
+  **consumidor**: o `led-console-bin` nao declara gate nenhum e e compilado em todas as
+  plataformas da matriz.
+
+  EXTENSAO MEDIDA (grep, nao estimada). Cinco referencias a `led_daemon_bin::server` em
+  `limits.rs`, das quais o compilador nomeia **tres** — `:8`, `:36`, `:47`. As outras duas
+  (`:74`, `:88`) estao dentro do `mod tests`, que comeca em `:67`. Mais **4 ficheiros de
+  teste** do mesmo crate importam `server::{ControlPlane, Server}` sem gate: `sse.rs`,
+  `http_server.rs`, `ipc_contra_o_daemon.rs`, `sse_reconnect.rs`. Total: **1 ficheiro de
+  producao + 4 de teste**.
+
+  IMPACTO. O crate do console nao compila em Windows, logo nada dele corre la: nem os
+  testes, nem o binario. Isso toca duas coisas ja escritas no roadmap — o **G5**
+  (determinismo Linux/Windows; o probe `scripts/determinism_probe.sh` existe e nunca correu
+  em Windows) e o **D8 / H1** (empacotamento desktop com webview do SO).
+
+  A RAIZ E O ADR-0014, NAO O `limits.rs` — e esta e a parte que nao pode ser arredondada.
+  O `E0433` e um **sintoma de superficie**: o import cruza um `cfg` que nao devia cruzar.
+  A causa a montante e a decisao de transporte do IPC — **UDS owner-only** (ADR-0014), que
+  o Windows nao tem. Prova de que o sintoma nao e o problema: o gate esta em
+  `led-daemon-bin`, e o proprio `led-daemon` **tambem nao serve** em Windows pela mesma
+  razao. Fazer o `led-console-bin` compilar la produziria **um crate que compila e um
+  console que nao fala com daemon nenhum**.
+
+  CONSEQUENCIA PARA O G5 E O D8/H1: os dois **herdam uma decisao de arquitectura de
+  transporte IPC**, nao um fix de import. Quem os abrir tem de decidir primeiro por onde
+  o console fala com o daemon numa plataforma sem UDS — e isso e emenda ao ADR-0014, com
+  o ADR-0026 §11-12 (limites **derivados**, nunca reescritos) como restricao a preservar.
+  Planear o G5 ou o D8 a contar com um fix de uma linha aqui seria planear contra o facto.
+
+  PROVA DE ALHEAMENTO ao PR #5 (tres factos independentes):
+
+  1. `git blame`: a linha `:8` e de `4455a908` (2026-08-09) e a `:36` de `ffd82774`
+     (2026-08-10). As duas nascem com a fundacao do `led-console-bin`, ha ~34 dias.
+  2. `git log -1 -- crates/led-console-bin/src/limits.rs` = `ffd82774`. O ficheiro **nao e
+     tocado** desde 2026-08-10; o PR #5 nao lhe mexeu numa linha.
+  3. O changelog de 2026-08-10c ja registava o job Windows vermelho, e o de 2026-09-08
+     nomeia esta causa por escrito. E defeito conhecido, nunca aberto como divida.
+
+  EVIDENCIA PARA A CLASSIFICACAO — os dois lados, e o veredito no fim.
+
+  Puxa para CIMA: o crate que nao compila e **o console**, que e exactamente o que o D8
+  empacota; o G5 exige correr em Windows e nao consegue; e a divida esta silenciosa ha 34
+  dias precisamente porque o job e `allow-failure` — um vermelho permanente ensina a nao
+  olhar, e foi o que aconteceu.
+
+  Puxa para BAIXO: o Windows e `continue-on-error` **por decisao de arquitectura**
+  (`ci.yml:3-4`, ADR-0013: *«Windows e suporte e NAO orienta a arquitectura»*); nada hoje
+  depende dele; e a raiz e o UDS do ADR-0014, portanto corrigir este E0433 **nao** daria um
+  LUMYX funcional em Windows — daria um crate que compila.
+
+  VEREDITO: **Medium** (decidido pelo responsavel em 2026-09-12, sobre esta evidencia).
+  Nao `High` porque a **alcancabilidade nao se cumpre** — e o mesmo argumento que derrubou
+  o `High` do TD-019, e aplica-lo aqui mantem a escala coerente. Nao `Low` porque o `Low`
+  deste ledger e o TD-018, uma lacuna de `--help` mitigada pela mensagem de recusa; isto e
+  uma plataforma inteira que nao compila, no caminho escrito do G5/D8. `Medium` e a forma
+  do TD-017 e do TD-014: defeito real e nomeado, sem consumidor bloqueado hoje, que exige
+  decisao **antes** do marco que depende dele.
+
+  NENHUM FIX PROPOSTO, por instrucao. Registo so a restricao que qualquer correccao futura
+  tera de respeitar, e que e o que a torna decisao e nao edicao: o ADR-0026 §11-12 exige que
+  estes limites sejam **derivados** do daemon, *«nunca reescritos»* — o proprio gate
+  `os_limites_sao_os_do_gs3_e_nao_copias` existe para impedir uma segunda copia. Qualquer
+  saida tem de preservar isso.
+review_by: "antes de abrir trabalho no G5 (determinismo Linux/Windows) ou no D8 (empacotamento desktop) — o que vier primeiro. Nao bloqueia nada antes disso."
+```
+
+---
+
+## TD-022 — `o_daemon_recusa_a_linha_longa_por_si_proprio` faz `unwrap()` numa escrita que o daemon esta correcto em interromper
+
+```yaml
+td_id:     TD-022
+title:     "O teste mede uma corrida entre a sua propria escrita de 64 KiB e o fecho do daemon; o `unwrap()` do `writeln!` transforma o comportamento DESEJADO da F1-B num vermelho intermitente do gate"
+severity:  Medium
+status:    pending-verification
+origin:    "Primeira observacao 2026-08-13c (CLAUDE.md:629), segunda 2026-09-01 (CLAUDE.md:346), terceira 2026-09-22 com o panic capturado inteiro. Diagnosticado desde a primeira, NUNCA promovido a TD — por isso o audit_gate nunca o viu e foi redescoberto do zero tres vezes."
+context: |
+  MEDIDO HOJE, nao inferido. `scripts/baseline_watch.sh` (instrumento novo, escreve o
+  output para ficheiro e le o `$?` sem pipe — KB-013) apanhou-o a primeira passagem:
+
+      EXIT_CARGO=101
+      thread 'o_daemon_recusa_a_linha_longa_por_si_proprio' (89574) panicked at
+      crates/led-console-bin/tests/ipc_contra_o_daemon.rs:178:82:
+      called `Result::unwrap()` on an `Err` value:
+        Os { code: 32, kind: BrokenPipe, message: "Broken pipe" }
+      test result: FAILED. 7 passed; 1 failed
+
+  Prova preservada em /tmp/baseline_RED_20260922_140420.log (21321 bytes).
+
+  LOCALIZACAO REAL: `ipc_contra_o_daemon.rs:178`. O changelog de 2026-08-13c diz `:177`
+  — a citacao DERIVOU uma linha em cinco semanas. E o caso exacto que a lumyx-next-steps
+  §2 avisa: `file:line` envelhece, reverificar antes de afirmar.
+
+  CAUSA, lida no codigo dos dois lados:
+
+  1. `led-daemon-bin/src/server.rs:264-274` — assim que `n > MAX_LINE` e a linha nao
+     termina em `\n`, o daemon escreve a recusa (`:266`), faz `flush` (`:267`) e
+     `break` (`:274`), FECHANDO sem drenar. O comentario in-loco explica porque:
+     drenar e ler uma quantidade que o atacante escolhe, e prosseguir sem drenar
+     deixaria o resto da linha gigante ser analisado como pedido novo. **Fechar e a
+     decisao correcta da F1-B, e esta documentada como tal.**
+
+  2. `ipc_contra_o_daemon.rs:178` — o teste ainda esta a escrever `MAX_BODY + 10` bytes
+     quando esse fecho acontece, e o `writeln!(...).unwrap()` apanha EPIPE.
+
+  O teste e o daemon estao numa corrida: quem chega primeiro ao fim da escrita. Sob
+  carga (suite completa do workspace, 4 cores) o daemon ganha e o teste entra em panico.
+  Isolado, o teste ganha — medido: 0 falhas em 54 execucoes apos um vermelho.
+
+  O QUE O TESTE QUER PROVAR, lido do doc-comment `:164-166`: *«O daemon tambem recusa —
+  a guarda do console nao e a unica defesa»*. Isso esta nas assercoes `:181-182`
+  (`bad_request` + `demasiado longa`), e **essas nunca chegam a correr** quando o panic
+  dispara. O `unwrap()` da linha 178 nao afirma nada sobre o daemon: afirma que a
+  escrita do proprio teste coube antes do fecho, que e ruido de escalonador.
+impact: |
+  E um FALSO-VERMELHO, nunca um falso-verde: quando dispara, dispara alto, e nenhum
+  defeito real fica escondido por ele. E isso que limita a severidade a Medium.
+
+  O custo e outro e e de processo: `cargo test --workspace` e o gate de entrada de toda
+  a missao neste repositorio, e um gate que falha 1-em-N e passa no rerun ensina a
+  re-executar em vez de ler. No dia em que uma regressao a serio aparecer, o primeiro
+  reflexo treinado sera correr outra vez. Ja aconteceu uma vez em 2026-09-01: duas
+  falhas da suite foram reportadas como possivel regressao e a causa era carga.
+
+  Custo medido nesta sessao: um turno inteiro gasto a re-diagnosticar do zero um defeito
+  que ja estava escrito no CLAUDE.md, porque prosa de changelog nao tem `td_id` e o
+  `scripts/audit_gate.py` so ve o ledger.
+mitigation_now: |
+  Nenhuma automatica. Na pratica, quem apanha o vermelho re-executa e passa — que e
+  exactamente o habito que esta entrada existe para nomear como custo.
+required_fix: |
+  DO LADO DO TESTE, nunca do daemon. O daemon esta correcto e o ADR da F1-B fixa esse
+  fecho como decisao; mexer em `server.rs` para acomodar um teste seria inverter a
+  hierarquia (a lumyx-next-steps §3 regra 4 proibe).
+
+  Tolerar EPIPE — e SO EPIPE — no `writeln!` da linha 178, mantendo intactas as duas
+  asserçoes que provam a recusa. E seguro porque o daemon escreve a recusa e faz `flush`
+  ANTES de fechar (`server.rs:266-267`), logo a resposta ja esta no buffer de recepcao
+  do teste quando o EPIPE acontece: `read_line` continua a devolve-la.
+
+  PROIBIDO: apagar as asserçoes `:181-182`; marcar o teste `#[ignore]`; tolerar qualquer
+  `io::Error` em vez de so `BrokenPipe` (mascararia um erro de transporte a serio);
+  drenar ou adiar o fecho no daemon.
+
+  RISCO CONHECIDO E DELIBERADAMENTE NAO MITIGADO — a assercao fixa o errno.
+  `assert_eq!(e.kind(), BrokenPipe)` afirma um valor que o kernel escolhe. Este
+  repositorio ja mediu divergencia macOS/Linux desta classe exacta: 2026-08-17 (C0)
+  encontrou o mesmo alvo a falhar no `connect` em Linux e no `send` em macOS, e o mesmo
+  endereco a dar `PermissionDenied` numa plataforma e `BrokenPipe` na outra — e concluiu
+  por escrito que *«nenhum teste pode afirmar o errno»*. A falsificacao determinista
+  desta correcao correu SO em macOS.
+
+  Alargar o conjunto aceite (p.ex. incluir `ConnectionReset`) foi CONSIDERADO E
+  REJEITADO: seria escolher um errno que nao consigo observar — nao ha Linux nesta
+  maquina (medido em 2026-08-13d: sem docker/colima/podman/lima/vagrant/multipass) — e
+  acrescentaria um ramo que nenhum teste alcanca. Preferir o estrito: se o Linux
+  divergir, a mensagem `:193` imprime `{e:?}` e NOMEIA o errno real. Falha ruidosa e
+  diagnostica vale mais que tolerancia especulativa. E por isso que o status e
+  `pending-verification` e nao `closed`.
+pending_gate: |
+  O job `test (ubuntu-latest)` verde num PR que contenha esta correcao, LIDO NO LOG e
+  nao no simbolo de check — o precedente e a F7.2 (PR #4, 2026-09-08), onde o veredito
+  vinculante foi a linha `test result` do log.
+
+  O que o gate tem de decidir: se o `writeln!` interrompido em Linux devolve `BrokenPipe`
+  (⇒ a correcao esta completa, promover a `closed` com este run como `evidence_ref`) ou
+  outro errno (⇒ a mensagem de `:193` nomeia-o, e SO entao se decide o conjunto aceite,
+  com o valor medido em vez de adivinhado).
+
+  No log do ubuntu, distinguir panico em :190 (errno do writeln!) de reprovacao em :198
+  (recusa ausente) — correccoes diferentes.
+falsification_required: |
+  Repor o `unwrap()` cru na escrita tem de reproduzir o vermelho com `BrokenPipe` sob
+  carga de workspace. Controlo negativo obrigatorio: um erro de I/O que NAO seja EPIPE
+  tem de continuar a reprovar — sem isso, "tolerar EPIPE" e "ignorar erros de escrita"
+  ficam indistinguiveis, que e a forma do KB-012.
+
+  E a asserçao de recusa tem de continuar a discriminar: um daemon que aceitasse a linha
+  longa tem de reprovar em `:181`.
+review_by: 2026-10-07
 ```

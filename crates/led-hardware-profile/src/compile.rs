@@ -38,6 +38,11 @@ pub enum CompileError {
     /// Os pixels declarados por universo não cabem em `UNIVERSE_SIZE` com este formato de cor.
     /// O validador (Slice 2) já pega isto; aqui é a defesa de quem compila sem validar antes.
     PixelsExceedUniverse { pixels_per_universe: u16, channels_per_pixel: u16 },
+    /// A repartição pelas portas físicas recusou (ADR-0030 §§4/4-bis).
+    ///
+    /// **Repassado, nunca reinterpretado** — o dono da regra é o `reparticao`, e traduzir o
+    /// motivo aqui criaria uma segunda leitura do mesmo facto.
+    Reparticao(crate::RepartirError),
 }
 
 /// O que o chamador precisa para **construir** o driver. Dado puro: este crate descreve, o
@@ -68,34 +73,88 @@ pub fn compile_layout(
     device_id: DeviceId,
     first_universe: u16,
 ) -> Result<CompiledLayout, CompileError> {
-    let ppu = profile.limits.pixels_per_universe;
+    compile_layout_de(
+        Enderecamento {
+            ports: profile.capabilities.ports,
+            pixels_per_universe: profile.limits.pixels_per_universe,
+            max_pixels: profile.limits.max_pixels,
+            color: profile.capabilities.color,
+        },
+        pixel_count,
+        device_id,
+        first_universe,
+    )
+}
+
+/// Os campos do profile que decidem **endereçamento**, e mais nada.
+///
+/// Existe para quem já extraiu as primitivas e deixou o descritor desaparecer (ADR-0018
+/// decisão 7) — hoje, o `led-daemon-bin`. É uma vista sobre o profile, **nunca um segundo
+/// profile**: não tem identidade, potência, calibração nem transporte.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Enderecamento {
+    /// Saídas físicas do nó (ADR-0030 §5).
+    pub ports: u16,
+    pub pixels_per_universe: u16,
+    pub max_pixels: u32,
+    pub color: ColorFormat,
+}
+
+/// A **implementação** do endereçamento. [`compile_layout`] delega aqui.
+pub fn compile_layout_de(
+    e: Enderecamento,
+    pixel_count: u32,
+    device_id: DeviceId,
+    first_universe: u16,
+) -> Result<CompiledLayout, CompileError> {
+    let ppu = e.pixels_per_universe;
     if ppu == 0 {
         return Err(CompileError::ZeroPixelsPerUniverse);
     }
-    let channels = profile.capabilities.color.channels();
+    let channels = e.color.channels();
     if ppu as usize * channels > UNIVERSE_SIZE {
         return Err(CompileError::PixelsExceedUniverse {
             pixels_per_universe: ppu,
             channels_per_pixel: channels as u16,
         });
     }
-    if pixel_count > profile.limits.max_pixels {
+    if pixel_count > e.max_pixels {
         return Err(CompileError::ExceedsMaxPixels {
             requested: pixel_count,
-            max: profile.limits.max_pixels,
+            max: e.max_pixels,
         });
     }
 
+    // ADR-0030 §§4/4-bis: os píxeis são repartidos pelas portas físicas, e cada porta
+    // arranca **sempre em canal 0 de um universo inteiro**. Com `ports = 1` — que é o caso
+    // de 6 dos 8 presets, e de todos os que já foram validados em hardware — a repartição dá
+    // uma só fatia a começar em `first_universe`, e o endereçamento é **idêntico** ao que
+    // este código produzia antes de as portas existirem.
+    let fatias = crate::repartir_portas_de(
+        e.ports,
+        ppu,
+        e.max_pixels,
+        pixel_count as usize,
+        first_universe,
+    )
+        .map_err(CompileError::Reparticao)?;
+
     let mut assignments = Vec::with_capacity(pixel_count as usize);
-    for i in 0..pixel_count {
-        let universe_index = i / ppu as u32;
-        let slot = i % ppu as u32;
-        assignments.push(PixelPhysical {
-            device: device_id,
-            universe: first_universe + universe_index as u16,
-            channel: (slot as usize * channels) as u16,
-            format: profile.capabilities.color,
-        });
+    for porta in fatias {
+        for j in 0..porta.pixel_count {
+            let universe_index = (j / ppu as usize) as u16;
+            let slot = j % ppu as usize;
+            assignments.push(PixelPhysical {
+                device: device_id,
+                // `universe_start` já vem alinhado pelo §4-bis; aqui só se anda dentro da
+                // porta. É por isso que o excedente de uma porta NUNCA escorrega para a
+                // seguinte: o universo de partida da porta k+1 não depende de quantos
+                // píxeis a porta k recebeu.
+                universe: porta.universe_start + universe_index,
+                channel: (slot * channels) as u16,
+                format: e.color,
+            });
+        }
     }
     Ok(CompiledLayout::compile(&assignments))
 }

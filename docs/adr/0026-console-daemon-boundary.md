@@ -1,0 +1,365 @@
+# ADR-0026 — A fronteira console↔daemon: o console é cliente do IPC v1, e traduz sem interpretar
+
+- **Estado:** aceite
+- **Data:** 2026-08-07
+- **Relacionados:** ADR-0013 (engine headless, UI é cliente) · ADR-0014 (IPC e segurança) · ADR-0015 (preview lossy) · ADR-0016 (stack do console, **ainda provisório**) · ADR-0017 (blackout, **adiado**) · ADR-0023 (transporte, **congelado** na GS1.6)
+
+## Contexto e problema
+
+O ADR-0013 decidiu que a UI é um **processo separado**, e o ADR-0014 decidiu a **segurança do
+canal**. Nenhum dos dois diz **quem fala com o daemon, por onde, e o que acontece quando esse
+canal cai**.
+
+Sem essa decisão escrita, a primeira linha de código do console escolheria em silêncio. E a
+escolha cómoda — pôr um servidor HTTP dentro do `led-daemon-bin` — violaria o ADR-0013 (*"o
+output não partilha processo de falha"*) e desfaria a garantia que o GS3 estabeleceu: *as
+threads de ligação nunca tocam o `ShowRuntime`; enfileiram, e o laço aplica*.
+
+## Decisão
+
+```
+Browser ──HTTP/SSE──► led-console-bin ──UDS/IPC v1──► led-daemon ──► fio
+   (N)                   (1 processo)                 (1 processo)
+```
+
+### 1 · O console é **cliente** do IPC v1
+
+Não tem acesso privilegiado ao `ShowRuntime`. Fala o mesmo protocolo v1 que o `ledctl` já
+exercita em 14 testes de integração. Se o console e o `ledctl` divergirem, isso é um defeito
+visível — não uma superfície nova a apodrecer sozinha.
+
+### 2 · Processo separado (ADR-0013)
+
+Um pânico no parser HTTP mata o console, **não** o show: o daemon continua a ticar e o
+heartbeat continua a reenviar o último quadro válido.
+
+### 3 · Duas ligações UDS: comando e eventos
+
+Espelha a separação que o GS3 já fez por dentro. A ligação de eventos **nunca escreve**; a de
+comando serializa um pedido de cada vez. Um evento lento não atrasa um `play`.
+
+### 4 · Uma subscrição no daemon, fan-out para N browsers
+
+O console mantém **uma** ligação `subscribe`. Sem isto, cada separador aberto seria um
+subscritor no daemon, e a lista de subscritores cresceria com o comportamento do operador em
+vez de com a arquitetura.
+
+### 5 · SSE para eventos, POST para comandos — **não** WebSocket
+
+Três razões técnicas:
+
+1. **O fluxo de eventos já é unidirecional e orientado a linhas.** O IPC entrega uma linha
+   JSON por evento; o SSE transporta uma linha por evento. Quase 1:1 — nenhuma camada de
+   enquadramento nova para errar.
+2. **A assimetria é o ponto.** Um canal bidirecional *convida* alguém a enviar comandos por
+   ele, criando um **segundo caminho de comando** ao lado do POST. Com SSE isso não é sequer
+   representável — e "não representável" é mais forte que "proibido por convenção", tal como
+   *"sem TCP, `0.0.0.0` não é representável"* foi mais forte no GS3.
+3. **Reconexão vem do browser.** O `EventSource` reconecta com backoff sozinho. Com
+   WebSocket, isso seria código nosso, a testar sob queda de rede — o cenário mais difícil de
+   testar de todos.
+
+### 6 · Os códigos de erro atravessam **verbatim**
+
+O corpo carrega sempre `{"code":"<código do daemon>","detail":"…"}`. O estado HTTP transporta
+**apenas** significado de transporte e **nunca substitui** o código:
+
+| Situação | HTTP | `code` |
+|---|---|---|
+| Daemon recusou | `409` | `no_show_loaded`, `not_armed`, … |
+| JSON malformado | `400` | `bad_request` |
+| Laço não respondeu | `504` | `engine_busy` |
+| UDS inacessível | `503` | `console.daemon_offline` |
+
+Mapear `refused_by_policy` para 403 e parar aí perderia a razão. Foi para o código significar
+o mesmo dos dois lados que o contrato foi congelado na GS1.6.
+
+### 7 · `OFFLINE` é um **estado**, não um erro
+
+Quando o UDS cai, o console **não** apaga o ecrã nem devolve zeros. Devolve o último snapshot
+conhecido, marcado com **`stale_ms`**, e o estado `OFFLINE`. Um `frames: 4210` de há dois
+minutos apresentado como atual seria a mentira mais fácil desta arquitetura.
+
+### 8 · A cadeia de evidência não colapsa
+
+```
+software_sent           ← OutputStats.frames_sent           (sabemos)
+network_delivered       ← NOT_MEASURED sem instrumentação   (não sabemos)
+controller_received     ← WLED live:true                    (só com hardware)
+controller_acknowledged ← WLED lm == protocolo              (só com hardware)
+led_verified            ← observação humana                 (nunca automático)
+```
+
+O console reporta **até onde a evidência chega** e `NOT_MEASURED` a partir daí. Nunca um
+booleano.
+
+### 9 · **OBSERVABILITY ≠ PHYSICAL EVIDENCE**
+
+Esta é a regra que este ADR existe sobretudo para fixar.
+
+`lumyx_frames_total`, `OutputStats.frames_sent` e `frames_sent` do `DeviceStatus` são
+**observabilidade operacional**: dizem que o processo tentou e que a chamada local teve
+sucesso. Um `sendto` UDP para um destino **inexistente** tem sucesso local — foi exatamente
+assim que o `lumyx-hwcheck` se apanhou a si próprio a reportar `PASS` de heartbeat contra um
+IP que não existia.
+
+Estas métricas **não constituem prova** de `network_delivered`, `controller_received`,
+`controller_acknowledged` nem `led_verified`.
+
+**A UI nunca pode apresentar uma métrica local como prova física.** Um contador a crescer é o
+dado mais tentador de mostrar como "está a funcionar", e é o mais local de todos.
+
+### 9-bis · `/api/metrics` é **proxy read-only** — o browser tem **uma só origem**
+
+*(Acrescentado em 2026-08-09, na F2, por decisão do responsável.)*
+
+O exporter Prometheus **já existe** e é servido por `led_hal::serve_metrics` — um
+`TcpListener` **noutro processo**, que não é o console. Um browser a chamá-lo diretamente
+abriria uma **segunda origem**, ao lado do console, e essa é exatamente a forma de a
+arquitetura da decisão 5 ser contornada sem ninguém reparar: um caminho do browser que não
+passa pelo tradutor.
+
+**Decisão:** a superfície pública do console passa a incluir `GET /api/metrics`, e o browser
+**nunca** fala com `led_hal::serve_metrics`.
+
+```
+Browser ──HTTP──> led-console-bin ──HTTP──> led_hal::serve_metrics
+                  (única origem)            (exporter existente)
+```
+
+**O proxy é uma passagem, não um cálculo.** Repassa o corpo **verbatim** e o
+`Content-Type: text/plain; version=0.0.4` **inalterado**. Explicitamente proibido:
+
+- criar lógica de métricas nova;
+- **recalcular** qualquer valor;
+- **agregar** séries;
+- alterar o formato de exposição do Prometheus;
+- criar uma segunda origem para o browser.
+
+Um proxy que agregasse seria uma **segunda fonte de verdade** sobre observabilidade — a
+mesma classe que a decisão 15 proíbe. E como a decisão 9 já diz, estas métricas continuam a
+ser **observabilidade, nunca prova física**: passá-las pelo console **não** as promove a
+evidência, e a UI continua proibida de as pôr ao lado de um elo da cadeia.
+
+**O endereço do exporter é dado injetado**, não descoberto nem escrito à mão aqui — a mesma
+disciplina do `Available{}` do ADR-0024. O console não sabe fabricar métricas; só sabe onde
+perguntar.
+
+### 9-ter · O servidor HTTP **pertence ao console**, e é escrito à mão
+
+*(Acrescentado em 2026-08-09, na F4.)*
+
+```
+Browser ──HTTP/SSE──> led-console-bin ──IPC v1 (UDS 0600)──> led-daemon
+                             └────────HTTP────> led_hal::serve_metrics
+```
+
+**O que o browser nunca faz**, agora garantido por código e não só por intenção: falar UDS ·
+falar com o `led-daemon` diretamente · tocar no `ShowRuntime` ou no `OutputManager` ·
+alcançar o `led_hal::serve_metrics`. O console é a **única** origem.
+
+**Sem framework, e a razão é medida.** O workspace não tem nenhum — verificado: zero `axum`,
+`hyper`, `actix`, `warp`, `tiny_http`. E já tem **dois** servidores HTTP escritos à mão pela
+mesma razão (`led_hal::serve_metrics`, `led_readmodel::serve_readmodel`). A superfície são 11
+rotas, sem query-strings, sem upload, sem cookies. Um framework traria uma árvore de
+dependências para um problema que o `std` resolve, contra a convenção *"add a dependency only
+with a reason"*.
+
+**A `ROTAS` é o router.** O encaminhamento percorre a tabela que os gates já auditam; não há
+um segundo sítio onde acrescentar caminhos. Um caminho fora da tabela **não existe** — 404
+antes sequer de se olhar para o método.
+
+**Métodos.** Comando é **sempre** `POST`; leitura é **sempre** `GET`. O método errado é
+**405** com `Allow:`, nunca um 404 — e nunca uma execução. Se um comando fosse alcançável por
+`GET`, uma simples `<img src="/api/transport/play">` numa página qualquer dispararia o show.
+
+**Erros atravessam sem tradução semântica.** O `code` é o do daemon, verbatim; o estado HTTP é
+**transporte**, e o significado continua no `code`. `OFFLINE` é **503** e é um **estado**
+(§7) — nunca um `200` com um instantâneo inventado, que é o modo de falha mais caro desta
+camada: um ecrã verde sobre um palco morto.
+
+**SSE continua separado dos comandos** (§5). `/api/events` anuncia-se `text/event-stream`; o
+fan-out para N browsers fica para a fatia seguinte, e o `Content-Type` é fixado agora para o
+contrato não mudar depois.
+
+**Loopback-only, verificado antes do bind.** `bind_permitido` corre **antes** de o socket
+abrir: um endereço que não devia existir nunca chega a existir. Enquanto o `ClientRegistry`
+do ADR-0014 estiver **vazio**, não há console em LAN — e isto não é promessa de autenticação
+futura, é a condição atual.
+
+### 9-quater · `/api/profiles` responde **501**, e é uma decisão
+
+*(Acrescentado em 2026-08-10, na F7.)*
+
+**501 significa:** *"a rota é conhecida pelo contrato, mas a capacidade ainda não está
+disponível através da fronteira autorizada."*
+
+As três respostas possíveis dizem coisas **diferentes**, e só uma é verdadeira:
+
+| Resposta | Afirma | Verdade? |
+|---|---|---|
+| `404` | a rota não existe | **não** — existe, e está no contrato gerado |
+| `200 []` | o catálogo existe e está **vazio** | **não** — o catálogo tem 8 presets |
+| `501` | a rota existe; a capacidade não chega aqui | **sim** |
+
+**`200 []` é a pior das três.** Um operador que veja uma lista vazia conclui que **não há
+hardware configurado** — quando o que não há é *caminho até ao catálogo*. Manda-o procurar o
+defeito no sítio errado; é a mesma classe de *blame* invertido que o `413` do
+`PedidoDemasiadoGrande` já corrigiu, e que o §7 proíbe em geral.
+
+**Porque não se resolve simplesmente.** O catálogo vive no `led-hardware-profile`. Há duas
+saídas, e **ambas custam algo que está proibido**:
+
+1. **Importar o catálogo para o console** — traz *domínio* para dentro do tradutor. O gate
+   `nenhuma_segunda_fonte_de_verdade_no_console` recusa-o **pelo nome** (§15).
+2. **Acrescentar um comando ao IPC v1** — o protocolo está **fechado**, e um comando novo é
+   versão nova de protocolo com migração de cliente, não uma edição.
+
+Nenhuma das duas é uma edição; ambas são decisões de arquitetura. Enquanto nenhuma for tomada,
+o 501 é a resposta **honesta**, e é preferível a qualquer das alternativas que *pareceriam*
+funcionar.
+
+> **Actualização (2026-08-31) — a decisão foi tomada, e confirma a saída 2.** O operador
+> decidiu que **um comando novo exige `PROTOCOL_V = 2`** (ADR-0027, Emenda 3). Este parágrafo
+> já o afirmava; o que muda é o **estatuto** das duas saídas:
+>
+> - a **saída 1 continua proibida** — o §15 não foi tocado, e o gate continua a recusá-la;
+> - a **saída 2 deixa de ser hipótese e passa a ser o caminho**, com um pré-requisito
+>   nomeado: o v2 tem de existir e ser **negociado por ligação**.
+>
+> **O 501 permanece, e não por inércia.** Enquanto o v2 não existir, a capacidade continua a
+> não chegar através da fronteira autorizada — que é exactamente o que o 501 afirma. Trocá-lo
+> agora voltaria a dizer algo falso, e as três respostas da tabela acima continuam a valer.
+
+**O que fica proibido, com gate:** devolver `200 []`; devolver `404`; escrever perfis à mão no
+console; declarar `led-hardware-profile` como dependência de produção; inventar um `cmd_ipc`
+que o IPC v1 não define. Cada um destes tem um teste, e dois deles foram falsificados.
+
+### 9-quinquies · O estado da subscrição upstream é **observável**, e o SSE do browser não o substitui
+
+**A regra, em duas frases.** O estado da subscrição console→daemon é observável em
+`GET /api/upstream`. O estado da ligação SSE do browser **MUST NOT** ser usado como proxy do
+estado da subscrição console→daemon.
+
+**O defeito que a obrigou a existir, observado ao vivo.** O show chegou ao fim, o daemon
+encerrou, e a interface continuou a mostrar o fluxo de eventos como estando de pé. Nada estava
+partido no browser: o `EventSource` **está** mesmo vivo, porque o console o mantém com
+comentários de keep-alive a cada 200 ms — e o keep-alive é escrito sem consultar a subscrição.
+O que morreu foi o elo a montante. A interface media *browser→console* e apresentava-o como se
+fosse *browser→daemon*.
+
+**Porque isto é da mesma família do §9.** *"`frames_sent` a crescer diz que o `sendto` local
+teve sucesso"* — e um `sendto` para um destino inexistente também tem. Aqui: *"o `onopen` do
+`EventSource` diz que a ligação ao console abriu"* — e ela abre na mesma com o daemon morto.
+Nos dois casos, o sinal mais fácil de observar é o mais **local**, e apresentá-lo como se
+fosse o elo seguinte é a mentira que este ADR existe para impedir.
+
+**Há duas ligações UDS, e elas divergem.** A decisão 3 já as separa: a de **comando**
+(`"lumyx-console"`, aberta por pedido) e a de **eventos** (`"lumyx-console-eventos"`, longa,
+uma por processo). `/api/state` mede a primeira; nada media a segunda. Durante o backoff do
+supervisor, o daemon pode estar alcançável e a subscrição não existir — e os dois indicadores
+**devem** divergir nesse instante, em vez de um colapsar o outro.
+
+**Rota própria, e não um campo em `/api/state`.** Três razões, e a terceira é a que decide.
+(1) `/api/state` é o instantâneo do **daemon**; um campo do console dentro dele seria um facto
+de uma camada no envelope de outra. (2) Com o daemon em baixo, `/api/state` devolve **503** —
+o campo desapareceria exactamente quando mais interessa. (3) O corpo de `/api/state` **não é
+construído pelo console**: é a linha do daemon repassada verbatim. Acrescentar-lhe um campo
+obrigaria o console a passar a **reescrever** essa linha, e essa propriedade vale mais do que a
+conveniência de ter tudo num sítio.
+
+**Não é um meta-evento no SSE.** O console difunde a linha do daemon **tal como veio** e nunca
+origina eventos; uma forma nova em `EventoPayload` — que é gerado do `event_to_json` do daemon
+— seria uma segunda fonte de verdade no fluxo. E tem uma falha própria: um meta-evento só
+chega se o canal funcionar, portanto **push não sabe reportar a sua própria ausência**. Com
+`GET`, um console morto não responde, e isso é a informação.
+
+**O corpo é `{"upstream": boolean}`, e mais nada.** Sem `v`, sem `ok`, sem `id`. Não é
+minimalismo: `v` é a versão do **IPC v1** e `ok` significa *"o comando IPC teve sucesso"* —
+ambos emitidos pelo daemon. Um corpo autorado pelo console que os incluísse afirmaria uma
+proveniência que não tem, que é o mesmo tipo de erro que esta secção corrige. Esta rota também
+não tem modo de falha próprio — a medição é a leitura de um `AtomicBool` local — logo não há
+corpo de erro a desenhar, e o `200` já diz que o pedido correu.
+
+**O que `upstream: true` significa, exaustivamente:** existe **agora** uma subscrição
+estabelecida entre o console e o daemon. Não significa `HEALTHY`, `STREAMING_READY`,
+`OUTPUT_OK`, `NETWORK_OK`, `HARDWARE_OK`, `LED_OK` nem `SHOW_RUNNING`. Nenhuma dessas
+conclusões é derivável daqui, e a cadeia de evidência da decisão 8 continua a valer intacta.
+
+**`null` é NOT_MEASURED.** Antes da primeira resposta não há valor, e ausência de resposta não
+é `false` — a mesma regra que o `stale_ms()` já segue ao ser `Option<u64>` em vez de fabricar
+um zero.
+
+**Fica de fora, deliberadamente:** `EstadoUi` (o ADR-0028 D3 mantém-se intacto — esta rota fala
+um booleano com produtor real, não o vocabulário de evidência sem produtor), `subscricoes_ipc`
+(é **cumulativo**, não é estado actual), `tentativas_de_ligacao` e `descartados`. Os dois
+últimos são medições reais e a sua ausência é uma lacuna nomeada, não um esquecimento:
+acrescentá-los aqui transformaria uma correcção de fronteira de verdade numa expansão de
+observabilidade, e um teste verde deixaria de dizer qual das propriedades está provada.
+
+### 10 · Loopback-only enquanto o ADR-0014 não der auth
+
+O console **recusa bind não-loopback**, como o `led-readmodel` já faz. O `ClientRegistry` do
+ADR-0014 está declarado e **vazio**; enquanto estiver, `0.0.0.0` não é uma opção de
+configuração — é uma recusa. Sem elevação de privilégio: o console corre como o mesmo
+utilizador, e o socket do daemon continua `0o600`.
+
+### 11 · Limites herdados do GS3, pelas mesmas razões
+
+**64 KiB** por corpo (`MAX_LINE` — sem ele, um cliente que nunca feche cresce sem limite) e
+**profundidade JSON 16** (`MAX_DEPTH` — `[[[[[…` estoura a pilha, e um cliente derrubaria o
+processo com uma linha de texto). Teto explícito de ligações SSE.
+
+### 12 · Timeout HTTP **derivado** do `REPLY_TIMEOUT`
+
+O daemon desiste de esperar pelo laço em `REPLY_TIMEOUT`. O timeout HTTP tem de ser
+**estritamente maior**: se fosse menor ou igual, o browser receberia "falhou" enquanto o
+daemon ainda aplicaria o comando — e o operador veria o show mudar depois de a UI ter dito que
+não mudou.
+
+`HTTP_TIMEOUT = REPLY_TIMEOUT + MARGEM`, com a margem nomeada. **Nunca um segundo número
+escrito à mão**, e há um teste que compara as duas constantes.
+
+### 13 · Backpressure só do lado do browser
+
+Lossy por contrato (ADR-0015), e a **direção importa**: um browser lento nunca atrasa a
+leitura do IPC, e o console nunca atrasa o daemon. Fila cheia → descarta o **mais antigo** e
+incrementa `console.dropped`, que é **reportado**, não escondido. O polling de `/api/state`
+corrige a deriva.
+
+### 14 · Sem `shutdown`, sem blackout
+
+`shutdown` é irreversível, tem duas fases e não há auth — fica no `ledctl`, que exige acesso
+ao socket. **Blackout não existe**: o ADR-0017 está adiado, e a ausência é a decisão.
+
+### 15 · Nenhuma segunda fonte de verdade
+
+O console **transporta** contratos; não os reimplementa. Nada de máquina de estados, regras de
+hardware, `Calibration`/LUT, MTU, `refresh_hz`, `HardwareProfile` ou serialização canónica
+dentro dele.
+
+## Alternativas rejeitadas
+
+| Alternativa | Porque não |
+|---|---|
+| HTTP dentro do `led-daemon-bin` | Viola o ADR-0013 e cria um segundo aplicador ao lado do laço |
+| WebSocket para tudo | Abre um segundo caminho de comando; reconexão passa a ser código nosso |
+| Uma subscrição IPC por browser | A carga no daemon passaria a depender de quantos separadores estão abertos |
+| Console a calcular saúde própria | Segunda fonte de verdade — a classe de defeito que a auditoria de 2026-08-07 fechou |
+
+## Consequências
+
+**Positivas.** O daemon fica intocado. A UI ganha uma fronteira testável sem browser. A
+distinção observabilidade↔evidência fica escrita antes de existir um ecrã que a possa violar.
+
+**Negativas.** Um processo a mais para iniciar e supervisionar. A ponte é superfície nova e
+precisa dos seus próprios gates.
+
+**Não coberto.** A stack de UI (ADR-0016, ainda provisório — depende de medição humana).
+Autenticação (ADR-0014). Preview de pixels (ADR-0015).
+
+## Critério de reversão
+
+Se o console vier a precisar de estado próprio que não seja derivável do daemon, isso é sinal
+de que uma decisão de domínio escorregou para ele — e a correção é devolvê-la ao daemon, não
+alargar o console.

@@ -225,11 +225,14 @@ fn um_heartbeat_inseguro_impede_a_saida() {
 fn resolver_um_endereco_nao_e_um_segundo_caminho() {
     let p = perfil("esp32-poe-wled-ddp");
     let addr = "127.0.0.1:4048".parse().unwrap();
-    let direto = OutputConfig::from_profile(&p, addr, 720, 1).unwrap();
+    // `0` e não `1`: este preset é DDP, que endereça por byte e ignora universos — o
+    // `resolve` devolve 0 para eles desde o ADR-0029 §7, e comparar contra 1 mediria a
+    // diferença de universo em vez da equivalência das três escritas do endereço.
+    let direto = OutputConfig::from_profile(&p, addr, 720, 0).unwrap();
 
     // As três formas de escrever o mesmo endereço têm de dar exatamente a mesma configuração.
     for spec in ["127.0.0.1", "127.0.0.1:4048", "ddp://127.0.0.1:4048"] {
-        let resolvido = OutputConfig::resolve(&p, spec, 720, 1).unwrap();
+        let resolvido = OutputConfig::resolve(&p, spec, 720).unwrap();
         assert_eq!(direto, resolvido, "`{spec}` divergiu — `resolve` deixou de delegar");
     }
 }
@@ -240,13 +243,13 @@ fn resolver_um_endereco_nao_e_um_segundo_caminho() {
 #[test]
 fn o_esquema_escrito_tem_de_concordar_com_o_profile() {
     let ddp = perfil("esp32-poe-wled-ddp");
-    let erro = OutputConfig::resolve(&ddp, "artnet://127.0.0.1", 720, 1).unwrap_err();
+    let erro = OutputConfig::resolve(&ddp, "artnet://127.0.0.1", 720).unwrap_err();
     assert!(erro.contains("contradiz o profile"), "{erro}");
-    assert!(OutputConfig::resolve(&ddp, "ddp://127.0.0.1", 720, 1).is_ok(), "concordar é aceite");
+    assert!(OutputConfig::resolve(&ddp, "ddp://127.0.0.1", 720).is_ok(), "concordar é aceite");
 
     let artnet = perfil("esp32-devkit-wled-artnet");
     assert!(
-        OutputConfig::resolve(&artnet, "ddp://127.0.0.1", 720, 1).is_err(),
+        OutputConfig::resolve(&artnet, "ddp://127.0.0.1@0", 720).is_err(),
         "e a recusa vale nos dois sentidos"
     );
 }
@@ -268,7 +271,7 @@ fn rgbw_poe_quatro_canais_no_fio_com_o_branco_subtraido() {
     let sock = socket();
     let addr = sock.local_addr().unwrap();
     let px = 6usize;
-    let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+    let cfg = OutputConfig::resolve(&p, &addr.to_string(), px).unwrap();
     // Cor com neutro embutido: min = 50.
     let dg = um_frame(cfg, &sock, vec![PixelColor { r: 200, g: 100, b: 50 }; px]);
 
@@ -310,7 +313,7 @@ fn mtus_diferentes_produzem_fragmentacoes_diferentes_e_nenhum_datagrama_excede_o
 
         let sock = socket();
         let addr = sock.local_addr().unwrap();
-        let cfg = OutputConfig::resolve(&p, &addr.to_string(), px, 1).unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), px).unwrap();
         let dg = um_frame(cfg, &sock, branco(px));
 
         assert_eq!(dg.len() as u32, previsto, "MTU {mtu}: previsto {previsto}, no fio {}", dg.len());
@@ -327,13 +330,16 @@ fn mtus_diferentes_produzem_fragmentacoes_diferentes_e_nenhum_datagrama_excede_o
 }
 
 /// **O primeiro universo é da instância, não do tipo** (ADR-0018) — e o fio obedece.
+///
+/// Desde o ADR-0029 §7 ele é **declarado na própria especificação** (`IP@N`), e este teste
+/// passou a exercitar esse caminho: antes chegava por um parâmetro que a CLI nunca expunha.
 #[test]
 fn o_primeiro_universo_e_respeitado_seja_qual_for() {
     let p = perfil("esp32-devkit-wled-artnet");
     for primeiro in [0u16, 1, 7, 100] {
         let sock = socket();
         let addr = sock.local_addr().unwrap();
-        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 400, primeiro).unwrap();
+        let cfg = OutputConfig::resolve(&p, &format!("{addr}@{primeiro}"), 400).unwrap();
         let dg = um_frame(cfg, &sock, branco(400));
 
         let mut universos: Vec<u16> = dg
@@ -358,7 +364,7 @@ fn cada_ordem_de_canais_produz_bytes_proprios() {
         p.capabilities.color = ColorFormat::Rgb(ordem);
         let sock = socket();
         let addr = sock.local_addr().unwrap();
-        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 4, 1).unwrap();
+        let cfg = OutputConfig::resolve(&p, &addr.to_string(), 4).unwrap();
         let dg = um_frame(cfg, &sock, vec![cor; 4]);
         let b: [u8; 3] = dg[0][DDP_HEADER..DDP_HEADER + 3].try_into().unwrap();
         vistos.push((ordem, b));
@@ -398,7 +404,16 @@ fn nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida() {
         &["RgbOrder::Rgb)", "RgbOrder::Grb)", "RgbOrder::Bgr)", "170", "487", "1462", "1500"];
 
     for (nome, fonte) in FONTES {
-        for linha in fonte.lines() {
+        // **Só produção.** O `mod tests` e tudo o que vem depois ficam de fora, pela mesma
+        // razão que o TD-015 fixou no `surface_gate` do `led-console-bin`: um gate não pode
+        // reprovar por causa de um teste que usa o número **para provar a regra**. O
+        // `repartir` do ADR-0029 é exercitado com `max_pixels` literais — são entradas de uma
+        // função pura, não valores físicos a escapar ao profile no caminho da saída.
+        //
+        // O corte é por `mod tests`, o mesmo que o `main.rs` já faz contra si próprio — e
+        // não por `#[cfg(test)]`, que não apanharia um `#[cfg(all(test, unix))]`.
+        let producao = fonte.split("mod tests").next().unwrap_or(fonte);
+        for linha in producao.lines() {
             let t = linha.trim_start();
             // Comentários e doc-comments podem (e devem) citar os números ao explicá-los.
             if t.starts_with("//") {
@@ -413,4 +428,90 @@ fn nenhum_valor_fisico_esta_escrito_a_mao_no_caminho_da_saida() {
             }
         }
     }
+}
+
+// ── C2b · TD-019 / DL-2 fechados no fio ─────────────────────────────────────
+
+/// **O defeito do TD-019, provado fechado nos bytes.**
+///
+/// Até ao C2b o arm sACN construía o mapa com `led_player::linear_assignments`, que tem
+/// `170` e `× 3` **escritos à mão** e recebe `RgbOrder` em vez de `ColorFormat`. O preset
+/// `generic-sk6812-rgbw-sacn` declara `pixels_per_universe: 128` e `Rgbw(Grb, MinSubtract)`,
+/// e é **alcançável**: o validador do ADR-0018 só recusa RGBW sobre DDP, nunca sobre sACN.
+///
+/// O que saía no fio era **RGB a 170 px/universo** — e não é palco escuro, é uma fita que
+/// acende com as cores e as posições trocadas, que é mais caro de diagnosticar porque parece
+/// funcionar.
+///
+/// Este teste mede as duas grandezas que o TD-019 nomeia, no fio e não no código.
+#[test]
+fn o_sacn_rgbw_honra_os_128_px_por_universo_e_os_quatro_canais() {
+    let p = perfil("generic-sk6812-rgbw-sacn");
+    assert_eq!(p.limits.pixels_per_universe, 128, "premissa do preset");
+    assert_eq!(p.capabilities.color.channels(), 4, "premissa do preset");
+
+    let sock = socket();
+    let addr = sock.local_addr().unwrap();
+    // 300 px: mais de dois universos a 128, e **menos** de dois a 170 — é isso que faz o
+    // teste distinguir as duas leituras em vez de as confundir.
+    let cfg = OutputConfig::from_profile(&p, addr, 300, 1).unwrap();
+    let dg = um_frame(cfg, &sock, branco(300));
+
+    assert_eq!(dg.len(), 3, "300 px a 128/universo são 3 universos; a 170 seriam 2");
+
+    // ── Os quatro canais, medidos no fio ───────────────────────────────────────────────
+    //
+    // ATENÇÃO ao que **não** discrimina, porque foi assim que este teste passou a mentir:
+    // os três datagramas medem **638 B** (126 de cabeçalho + 512 canais **preenchidos**)
+    // com 4 canais *e* com 3 — medido, não deduzido. Qualquer asserção sobre `d.len()`,
+    // exacta ou por limite, é **cega** a um colapso de formato. A versão anterior
+    // (`d.len() >= 126`) passava com o `ColorFormat` reduzido a `Rgb`, e o nome do teste
+    // prometia uma propriedade que ele não verificava (KB-012).
+    //
+    // O que discrimina é o **período** do padrão de pixel. `branco(300)` é
+    // `(r=200, g=100, b=50)`. Com `Rgbw(Grb, MinSubtract)` (ADR-0020): `W = min = 50`, o
+    // resíduo é `(150, 50, 0)`, e em ordem GRB seguido do branco sai `[50, 150, 0, 50]` —
+    // **quatro** bytes. Colapsado para `Rgb(Grb)` sairia `[100, 200, 50]` — **três** — e o
+    // desalinhamento já se vê no pixel 0.
+    const CANAIS: usize = 126; // primeiro byte de canal no datagrama sACN, medido
+    const PIXEL: [u8; 4] = [50, 150, 0, 50]; // resíduo em GRB + branco subtraído
+
+    for (i, d) in dg.iter().enumerate() {
+        assert_eq!(d.len(), 638, "datagrama {i}: 126 de cabeçalho + 512 canais");
+        // Oito pixels chegam para fixar o período: um formato de três canais desalinha
+        // logo no primeiro e nunca mais volta a coincidir.
+        for p in 0..8 {
+            let o = CANAIS + p * 4;
+            assert_eq!(
+                &d[o..o + 4],
+                &PIXEL[..],
+                "datagrama {i}, pixel {p}: esperava os 4 canais {:?}, veio {:?}",
+                PIXEL,
+                &d[o..o + 4]
+            );
+        }
+    }
+}
+
+/// **O caminho Art-Net e o caminho sACN partilham o endereçamento.**
+///
+/// É o §8 em forma executável: os dois arms passaram a pedir o layout ao mesmo dono, e um
+/// número de universos diferente entre eles significaria que a migração só cobriu metade.
+#[test]
+fn artnet_e_sacn_produzem_o_mesmo_numero_de_universos_depois_da_migracao() {
+    let sock_a = socket();
+    let art = perfil("esp32-devkit-wled-artnet");
+    let cfg_a = OutputConfig::from_profile(&art, sock_a.local_addr().unwrap(), 400, 1).unwrap();
+    let n_art = um_frame(cfg_a, &sock_a, branco(400)).len();
+
+    let sock_s = socket();
+    let mut sacn = perfil("generic-sk6812-rgbw-sacn");
+    // Mesmo empacotamento do Art-Net, para a comparação medir o CAMINHO e não o preset.
+    sacn.limits.pixels_per_universe = 170;
+    sacn.capabilities.color = art.capabilities.color;
+    let cfg_s = OutputConfig::from_profile(&sacn, sock_s.local_addr().unwrap(), 400, 1).unwrap();
+    let n_sacn = um_frame(cfg_s, &sock_s, branco(400)).len();
+
+    assert_eq!(n_art, n_sacn, "os dois protocolos divergiram no endereçamento");
+    assert_eq!(n_art, 3, "400 px a 170/universo são 3 universos");
 }

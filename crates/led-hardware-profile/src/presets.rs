@@ -39,6 +39,9 @@ pub struct PresetRow {
     pub color: ColorFormat,
     pub supports_discovery: bool,
     pub supports_metrics: bool,
+    /// Quantas saídas físicas o hardware tem. **Uma contagem, nunca um tamanho** — a
+    /// capacidade por porta deriva de `max_pixels` (ADR-0030 §4 e §5).
+    pub ports: u16,
     // ── Limits ──
     pub pixels_per_universe: u16,
     pub max_pixels: u32,
@@ -71,6 +74,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgb(RgbOrder::Grb),
         supports_discovery: true,
         supports_metrics: true,
+        ports: 1,
         pixels_per_universe: 170,
         max_pixels: 1_500,
         mtu_bytes: 1_500,
@@ -93,6 +97,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgb(RgbOrder::Grb),
         supports_discovery: true,
         supports_metrics: true,
+        ports: 1,
         pixels_per_universe: 170,
         max_pixels: 1_500,
         mtu_bytes: 1_500,
@@ -105,6 +110,10 @@ pub const PRESETS: &[PresetRow] = &[
     },
     // Controlador profissional falando sACN — nenhum código específico de Falcon existe
     // nem é necessário: o protocolo já resolve.
+    //
+    // **16 portas** (ADR-0030 §5): `16_384 / 16 = 1024` px por porta, divisão exacta. É o
+    // único dado real de hardware multi-porta que o repositório tem, e vem de folha de
+    // catálogo — **não** de medição. Nenhum controlador multi-porta foi observado.
     PresetRow {
         name: "falcon-f16v3-sacn",
         vendor: "Falcon",
@@ -116,6 +125,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgb(RgbOrder::Grb),
         supports_discovery: true,
         supports_metrics: false,
+        ports: 16,
         pixels_per_universe: 170,
         max_pixels: 16_384,
         mtu_bytes: 1_500,
@@ -127,6 +137,9 @@ pub const PRESETS: &[PresetRow] = &[
         brightness: 1.0,
     },
     // Idem Advatek: preset, zero código específico.
+    //
+    // **16 portas** (ADR-0030 §5): `16_320 / 16 = 1020` px por porta, também exacta. Mesma
+    // procedência que o Falcon — catálogo, não bancada.
     PresetRow {
         name: "advatek-pixlite16-sacn",
         vendor: "Advatek",
@@ -138,6 +151,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgb(RgbOrder::Grb),
         supports_discovery: true,
         supports_metrics: false,
+        ports: 16,
         pixels_per_universe: 170,
         max_pixels: 16_320,
         mtu_bytes: 1_500,
@@ -160,6 +174,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgb(RgbOrder::Grb),
         supports_discovery: true,
         supports_metrics: true,
+        ports: 1,
         pixels_per_universe: 170,
         max_pixels: 32_768,
         mtu_bytes: 1_500,
@@ -185,6 +200,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::MinSubtract),
         supports_discovery: false,
         supports_metrics: false,
+        ports: 1,
         pixels_per_universe: 128,
         max_pixels: 4_096,
         mtu_bytes: 1_500,
@@ -210,6 +226,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgbw(RgbOrder::Grb, crate::WhiteMode::MinSubtract),
         supports_discovery: true,
         supports_metrics: true,
+        ports: 1,
         pixels_per_universe: 128,
         max_pixels: 1_200,
         mtu_bytes: 1_500,
@@ -233,6 +250,7 @@ pub const PRESETS: &[PresetRow] = &[
         color: ColorFormat::Rgb(RgbOrder::Rgb),
         supports_discovery: false,
         supports_metrics: false,
+        ports: 1,
         pixels_per_universe: 170,
         max_pixels: 1_024,
         mtu_bytes: 1_500,

@@ -55,19 +55,46 @@ impl SacnDevice {
         cid: [u8; 16],
         source_name: impl Into<String>,
     ) -> std::io::Result<Arc<Self>> {
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+        Self::unicast_bound(id, dest, cid, source_name, None)
+    }
+
+    /// Unicast sender bound to an **explicit local address** — the same device as
+    /// [`SacnDevice::unicast`], which is this constructor with `None`.
+    ///
+    /// `bind` is where the datagrams leave from, so it is what chooses the egress interface on
+    /// a host with more than one address that reaches `dest`. It is **instance** data (which
+    /// cable this host uses to reach this node), not a capability of the node — see
+    /// [`crate::bind`] and `DdpDevice::bound`.
+    ///
+    /// Note the two unrelated senses of "source" here: `source_name` is the E1.31 *source name*
+    /// carried in the packet; `bind` is the IP **source address** on the wire.
+    pub fn unicast_bound(
+        id: DeviceId,
+        dest: SocketAddr,
+        cid: [u8; 16],
+        source_name: impl Into<String>,
+        bind: Option<SocketAddr>,
+    ) -> std::io::Result<Arc<Self>> {
+        let socket = crate::bind::bind_sender(bind)?;
         Ok(Self::build(id, socket, Dest::Unicast(dest), cid, source_name.into()))
     }
 
     /// Multicast sender: each universe goes to its own sACN group (239.255.<hi>.<lo>:5568).
     /// This is the production default for scaling to many controllers — but the network
     /// path MUST have IGMP snooping, or multicast floods/dies (see `/security`).
+    ///
+    /// **No `bind` parameter, deliberately.** For multicast the egress interface comes from
+    /// `IP_MULTICAST_IF` (or the route), not from the bind, and `std::net::UdpSocket` does not
+    /// expose it — a bind here would fix the source address while the packet still left by
+    /// whichever interface the kernel chose, which is a guarantee this constructor could not
+    /// keep. Unicast is the path the daemon and the player use, and it is where the choice is
+    /// offered (see [`crate::bind`]).
     pub fn multicast(
         id: DeviceId,
         cid: [u8; 16],
         source_name: impl Into<String>,
     ) -> std::io::Result<Arc<Self>> {
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+        let socket = crate::bind::bind_sender(None)?;
         socket.set_multicast_ttl_v4(SACN_MULTICAST_TTL)?;
         socket.set_multicast_loop_v4(true)?; // same-host receivers (and tests) get a copy
         Ok(Self::build(id, socket, Dest::Multicast, cid, source_name.into()))

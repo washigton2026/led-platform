@@ -826,6 +826,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "led-console-bin"
+version = "0.1.0"
+dependencies = [
+ "led-daemon",
+ "led-daemon-bin",
+ "led-hal",
+]
+
+[[package]]
 name = "led-core"
 version = "0.1.0"
 
@@ -891,6 +900,7 @@ dependencies = [
  "led-audio",
  "led-core",
  "led-hal",
+ "led-triple",
  "pollster",
  "wgpu",
 ]
@@ -939,6 +949,10 @@ dependencies = [
  "ed25519-dalek",
  "led-core",
 ]
+
+[[package]]
+name = "led-triple"
+version = "0.1.0"
 
 [[package]]
 name = "led-xlights"

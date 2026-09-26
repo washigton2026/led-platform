@@ -1,0 +1,19 @@
+{"frames":94,"pixels":720,"duration_ms":8100,"avg_interval_ms":87.10,"beats":0,"hash":"0x23b8ee876a18e5a5"}
+output: DDP 192.168.2.162:4048 (pixel-native)
+origem: 0.0.0.0:0 (a tabela de rotas escolhe)
+{"pass":1,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":2,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":3,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":4,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":5,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":6,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":7,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":8,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":9,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":10,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":11,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":12,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":13,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":14,"played":94,"failed":0,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+{"pass":15,"played":48,"failed":46,"duration_ms":8100,"hash":"0x23b8ee876a18e5a5"}
+BURN-IN ABORT: 46 failed frames on pass 15

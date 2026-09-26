@@ -82,6 +82,15 @@ fn erro_code(l: &str) -> String {
         .unwrap_or_default()
 }
 
+fn erro_detalhe(l: &str) -> String {
+    parse(l)
+        .unwrap()
+        .get("error")
+        .and_then(|e| e.get("detail").cloned())
+        .and_then(|c| c.as_str().map(String::from))
+        .unwrap_or_default()
+}
+
 // ── 1. Conexão ────────────────────────────────────────────────────────────────
 #[test]
 fn conexao_e_handshake() {
@@ -167,10 +176,18 @@ fn subscritor_morto_e_podado() {
         a.envia(r#"{"v":1,"id":2,"cmd":"subscribe"}"#);
         assert_eq!(f.cp.subscribers(), 1);
     }
-    // Duas emissões: a 1ª descobre o canal morto, a 2ª confirma a poda.
-    for _ in 0..2 {
+    // **Barreira causal, não `yield_now()`.**
+    //
+    // A poda só acontece quando o `send` falha, e ele só falha depois de a thread escritora
+    // do subscritor notar o socket fechado e sair (largando o `Receiver`). Isso é assíncrono:
+    // `yield_now()` não é sincronização, é uma sugestão ao escalonador. Com ele, este teste
+    // reprovava em cerca de 3 de 5 execuções — flake **anterior** a esta fatia, encontrado ao
+    // correr a suíte repetidamente. É a mesma classe do TD-003, e a correção é a mesma:
+    // esperar pela **condição observável**, com prazo.
+    let limite = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while f.cp.subscribers() != 0 && std::time::Instant::now() < limite {
         f.cp.broadcast(r#"{"event":"x"}"#);
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
     assert_eq!(f.cp.subscribers(), 0, "ligação morta tem de ser removida");
 }
@@ -269,4 +286,139 @@ fn token_errado_e_recusado() {
     let r = c.envia(r#"{"v":1,"id":3,"cmd":"shutdown","confirm":"cfm-inventado"}"#);
     assert_eq!(erro_code(&r), "confirmation_required", "{r}");
     assert!(!f.flag.load(Ordering::Relaxed), "token errado não encerra");
+}
+
+/// A fronteira dos 64 KiB é uma **linha**, não uma zona — e é o `+1` do `take(MAX_LINE + 1)`
+/// que a mantém no sítio certo.
+///
+/// Um teto imposto durante a leitura tem uma forma fácil de errar: cortar um byte cedo e
+/// recusar um pedido legítimo de exatamente 64 KiB. Este teste anda um passo para cada lado.
+/// Sem ele, `take(MAX_LINE)` passaria em tudo o resto e partiria o caso da fronteira.
+#[test]
+fn um_passo_de_cada_lado_do_teto_muda_o_veredito() {
+    use led_daemon_bin::server::MAX_LINE;
+
+    // Um `hello` válido, enchido no campo `client` até dar exatamente MAX_LINE bytes.
+    let molde = |enchimento: usize| {
+        format!(r#"{{"v":1,"id":1,"cmd":"hello","client":"{}"}}"#, "A".repeat(enchimento))
+    };
+    let base = molde(0).len();
+    let no_teto = molde(MAX_LINE - base);
+    assert_eq!(no_teto.len(), MAX_LINE, "o molde tem de assentar no teto exato");
+
+    let f = subir("teto");
+    let mut c = Cliente::ligar(&f).unwrap();
+    let r = c.envia(&no_teto);
+    assert_eq!(
+        campo(&r, "client").len(),
+        MAX_LINE - base + 2, // +2 pelas aspas do JSON
+        "uma linha de exatamente {MAX_LINE} bytes é legítima e tem de ser aceite: {}",
+        &r[..r.len().min(120)]
+    );
+
+    // Um byte acima: recusado — e a ligação fecha, por isso a escrita pode partir a meio.
+    // Um `writeln!().unwrap()` aqui rebentaria com `BrokenPipe` e o teste culparia o cliente
+    // por aquilo que o daemon fez de propósito.
+    let acima = molde(MAX_LINE - base + 1);
+    assert_eq!(acima.len(), MAX_LINE + 1);
+    let mut c2 = Cliente::ligar(&f).unwrap();
+    let _ = c2.s.write_all(acima.as_bytes());
+    let _ = c2.s.write_all(b"\n");
+    let _ = c2.s.flush();
+    let r2 = c2.le();
+    assert_eq!(erro_code(&r2), "bad_request", "um byte acima do teto tem de ser recusado: {r2}");
+
+    // O **código** não chega para distinguir: JSON malformado também é `bad_request`. Se o
+    // teto fosse `take(MAX_LINE)` sem o `+1`, a linha seria **truncada** e o daemon
+    // responderia `bad_request` por JSON inválido — mesma resposta, motivo errado, e o resto
+    // da linha ficaria no socket a ser lido como um pedido novo. Estas duas asserções são o
+    // que separa "recusei porque é longa" de "engasguei-me com um fragmento".
+    assert!(
+        erro_detalhe(&r2).contains("demasiado longa"),
+        "a recusa tem de ser por comprimento, não por JSON truncado: {r2}"
+    );
+    let mut sobra = String::new();
+    let n = c2.r.read_line(&mut sobra).unwrap_or(0);
+    assert_eq!(n, 0, "a ligação devia ter fechado; o resto da linha voltou como pedido: {sobra}");
+}
+
+// ── ADR-0031, fatia 1-A: `accepts` derivado da fonte única ───────────────────
+//
+// O que estes três testes **não** provam, escrito para não ser arredondado: não há v2, não há
+// estado de versão por ligação, e a decisão 3 (`max(∩)`) continua por implementar. O invariante
+// 4 do ADR — resposta na versão *da ligação* — é **NOT MEASURED**, e não pode deixar de o ser
+// com uma só versão suportada: com um elemento, «versão da ligação» e «versão do daemon» são
+// indistinguíveis. É a lição do ADR-0029 §8, onde com um alvo «por nó» e «agregado» eram iguais.
+
+/// **I1** — o `hello` em `v:1` continua a ser aceite. É o chão da decisão 1 do ADR-0031, e o
+/// chão não é negociável: nenhuma mudança em `SUPORTADAS` o pode derrubar.
+#[test]
+fn o_hello_em_v1_continua_a_ser_aceite() {
+    let f = subir("adr0031-i1");
+    let mut c = Cliente::ligar(&f).expect("ligar");
+    let r = c.hello();
+    assert!(r.contains(r#""ok":true"#), "o hello em v:1 tem de ser aceite; linha: {r}");
+}
+
+/// **I2** — `accepts` **ausente** no pedido continua a ser lido como `[1]` (decisão 2).
+///
+/// Um cliente v1 literal, que nunca ouviu falar do campo, não pode passar a ser recusado por
+/// esta fatia. Duas asserções, porque a primeira sozinha não chega: além de o `hello` ser
+/// aceite, a ligação tem de ficar mesmo **estabelecida** — se o handshake fosse aceite mas
+/// não marcasse `hello_done`, o comando seguinte levaria `unauthenticated` e o campo ausente
+/// teria partido a ligação num sítio diferente daquele onde se olha.
+#[test]
+fn accepts_ausente_no_pedido_continua_a_ser_lido_como_v1() {
+    let f = subir("adr0031-i2");
+    let mut c = Cliente::ligar(&f).expect("ligar");
+
+    let r = c.envia(r#"{"v":1,"id":1,"cmd":"hello","client":"cliente-v1-literal"}"#);
+    assert!(
+        r.contains(r#""ok":true"#),
+        "um cliente sem o campo `accepts` tem de continuar a ser aceite; linha: {r}"
+    );
+
+    let p = c.envia(r#"{"v":1,"id":2,"cmd":"ping"}"#);
+    assert!(
+        p.contains(r#""pong":true"#),
+        "a ligação tinha de ficar estabelecida pelo hello sem `accepts`; linha: {p}"
+    );
+}
+
+/// **I3** — o `accepts` da resposta é **derivado** de `proto::SUPORTADAS`, nunca um literal.
+///
+/// O esperado é construído **aqui**, a partir da fonte única, e deliberadamente **não** por
+/// chamada a `accepts_json()` — isso compararia a função consigo própria e passaria com
+/// qualquer valor. Assim:
+///
+/// - um literal plantado no `server.rs` (`"[1,2]"`) faz o observado divergir do derivado → reprova;
+/// - acrescentar uma versão a `SUPORTADAS` move **os dois lados juntos** → continua verde, que
+///   é exactamente a propriedade que o ADR-0031 decisão 2 exige («não pode divergir dele»).
+#[test]
+fn o_accepts_do_hello_e_derivado_da_fonte_unica() {
+    // Sem esta guarda o teste seria vacuoso com `SUPORTADAS` vazio: o esperado seria `[]` e
+    // qualquer coisa que também fosse `[]` passaria. Zero extracções é FALHA, nunca "nada a
+    // verificar" (KB-012).
+    assert!(
+        !led_daemon_bin::proto::SUPORTADAS.is_empty(),
+        "SUPORTADAS vazio tornaria este teste vacuoso"
+    );
+
+    let esperado = format!(
+        "[{}]",
+        led_daemon_bin::proto::SUPORTADAS
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+
+    let f = subir("adr0031-i3");
+    let mut c = Cliente::ligar(&f).expect("ligar");
+    let r = c.hello();
+
+    assert!(
+        r.contains(&format!(r#""accepts":{esperado}"#)),
+        "o `accepts` do hello tem de ser {esperado}, derivado de SUPORTADAS; linha: {r}"
+    );
 }

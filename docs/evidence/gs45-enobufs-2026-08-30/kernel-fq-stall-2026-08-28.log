@@ -1,0 +1,76 @@
+Timestamp               Ty Process[PID:TID]
+2026-08-28 07:25:49.652 Df kernel[0:55b5] fq_if_add_fcentry: num: 1, scidx: 7, flowsrc: 1, flow: 0xbba6a6c9, iface: en7, B:61884
+2026-08-28 07:25:49.652 Df kernel[0:55b5] [ 1104.795417]: fq_detect_dequeue_stall:num: 1, scidx: 7, flow: 0xbba6a6c9, iface: en7 grp:
+2026-08-28 08:12:07.025 Df kernel[0:42d4] fq_if_add_fcentry: num: 2, scidx: 7, flowsrc: 1, flow: 0x9b530106, iface: en7, B:12418
+2026-08-28 08:12:07.025 Df kernel[0:42d4] [ 3882.152892]: fq_detect_dequeue_stall:num: 2, scidx: 7, flow: 0x9b530106, iface: en7 grp:
+2026-08-28 08:12:07.032 Df kernel[0:42d4] fq_if_add_fcentry: num: 3, scidx: 7, flowsrc: 1, flow: 0x82236114, iface: en7, B:69128
+2026-08-28 08:12:07.032 Df kernel[0:42d4] [ 3882.159245]: fq_detect_dequeue_stall:num: 3, scidx: 7, flow: 0x82236114, iface: en7 grp:
+2026-08-28 08:38:58.996 Df kernel[0:6c81] fq_if_add_fcentry: num: 4, scidx: 7, flowsrc: 1, flow: 0x846ed75c, iface: en7, B:8305
+2026-08-28 08:38:58.996 Df kernel[0:6c81] [ 5494.016029]: fq_detect_dequeue_stall:num: 4, scidx: 7, flow: 0x846ed75c, iface: en7 grp:
+2026-08-28 08:42:40.185 Df kernel[0:769] [ 5715.142419]: fq_detect_dequeue_stall:num: 5, scidx: 7, flow: 0x949709fc, iface: en7 grp:
+2026-08-28 08:42:40.521 Df kernel[0:1945] fq_if_add_fcentry: num: 5, scidx: 7, flowsrc: 1, flow: 0x9a9c49c2, iface: en7, B:11141
+2026-08-28 08:42:40.521 Df kernel[0:1945] [ 5715.540381]: fq_detect_dequeue_stall:num: 6, scidx: 7, flow: 0x9a9c49c2, iface: en7 grp:
+2026-08-28 09:27:53.019 Df kernel[0:629e] fq_if_add_fcentry: num: 6, scidx: 7, flowsrc: 1, flow: 0x8451455f, iface: en7, B:69054
+2026-08-28 09:27:53.019 Df kernel[0:629e] [ 8427.984220]: fq_detect_dequeue_stall:num: 7, scidx: 7, flow: 0x8451455f, iface: en7 grp:
+2026-08-28 09:27:53.973 Df kernel[0:1311] fq_if_add_fcentry: num: 7, scidx: 7, flowsrc: 1, flow: 0x9582b42d, iface: en7, B:12727
+2026-08-28 09:27:53.973 Df kernel[0:1311] fq_detect_dequeue_stall:num: 8, scidx: 7, flow: 0x9582b42d, iface: en7 grp:
+2026-08-28 09:51:49.925 Df kernel[0:8498] fq_if_add_fcentry: num: 8, scidx: 7, flowsrc: 1, flow: 0x80e27217, iface: en7, B:8305
+2026-08-28 09:51:49.925 Df kernel[0:8498] fq_detect_dequeue_stall:num: 9, scidx: 7, flow: 0x80e27217, iface: en7 grp:
+2026-08-28 09:55:26.943 Df kernel[0:9117] fq_if_add_fcentry: num: 9, scidx: 7, flowsrc: 1, flow: 0xbf372ab9, iface: en7, B:8305
+2026-08-28 09:55:26.943 Df kernel[0:9117] [10082.055842]: fq_detect_dequeue_stall:num: 10, scidx: 7, flow: 0xbf372ab9, iface: en7 grp:
+2026-08-28 11:01:28.776 Df kernel[0:d570] fq_if_add_fcentry: num: 10, scidx: 7, flowsrc: 1, flow: 0x88ab3a17, iface: en7, B:517086
+2026-08-28 11:01:28.776 Df kernel[0:d570] [14043.892758]: fq_detect_dequeue_stall:num: 11, scidx: 7, flow: 0x88ab3a17, iface: en7 grp:
+2026-08-28 11:10:03.551 Df kernel[0:14bb8] fq_if_add_fcentry: num: 11, scidx: 7, flowsrc: 1, flow: 0xa055fd65, iface: en7, B:8305
+2026-08-28 11:10:03.551 Df kernel[0:14bb8] [14558.656540]: fq_detect_dequeue_stall:num: 12, scidx: 7, flow: 0xa055fd65, iface: en7 grp:
+2026-08-28 11:23:30.353 Df kernel[0:15059] fq_if_add_fcentry: num: 12, scidx: 7, flowsrc: 1, flow: 0x8d2e35df, iface: en7, B:49052
+2026-08-28 11:23:30.353 Df kernel[0:15059] [15365.457991]: fq_detect_dequeue_stall:num: 13, scidx: 7, flow: 0x8d2e35df, iface: en7 grp:
+2026-08-28 11:23:30.774 Df kernel[0:1508a] fq_if_add_fcentry: num: 13, scidx: 7, flowsrc: 1, flow: 0xb6106dd4, iface: en7, B:96624
+2026-08-28 11:23:30.774 Df kernel[0:1508a] [15365.879553]: fq_detect_dequeue_stall:num: 14, scidx: 7, flow: 0xb6106dd4, iface: en7 grp:
+2026-08-28 11:23:31.616 Df kernel[0:150f0] fq_if_add_fcentry: num: 14, scidx: 7, flowsrc: 1, flow: 0x90ff8969, iface: en7, B:8730
+2026-08-28 11:23:31.616 Df kernel[0:150f0] [15366.721195]: fq_detect_dequeue_stall:num: 15, scidx: 7, flow: 0x90ff8969, iface: en7 grp:
+2026-08-28 11:27:08.681 Df kernel[0:1945] fq_if_add_fcentry: num: 15, scidx: 7, flowsrc: 1, flow: 0xada33c01, iface: en7, B:11137
+2026-08-28 11:27:08.681 Df kernel[0:1945] [15583.786232]: fq_detect_dequeue_stall:num: 16, scidx: 7, flow: 0xada33c01, iface: en7 grp:
+2026-08-28 11:27:08.738 Df kernel[0:15639] fq_if_add_fcentry: num: 16, scidx: 7, flowsrc: 1, flow: 0xa4664919, iface: en7, B:8305
+2026-08-28 11:27:08.738 Df kernel[0:15639] [15583.843342]: fq_detect_dequeue_stall:num: 17, scidx: 7, flow: 0xa4664919, iface: en7 grp:
+2026-08-28 11:38:18.721 Df kernel[0:15b1f] fq_if_add_fcentry: num: 17, scidx: 7, flowsrc: 1, flow: 0x81df36dd, iface: en7, B:36072
+2026-08-28 11:38:18.721 Df kernel[0:15b1f] [16253.826342]: fq_detect_dequeue_stall:num: 18, scidx: 7, flow: 0x81df36dd, iface: en7 grp:
+2026-08-28 11:38:20.244 Df kernel[0:15be2] fq_if_add_fcentry: num: 18, scidx: 7, flowsrc: 1, flow: 0xb32b32a0, iface: en7, B:430468
+2026-08-28 11:38:20.244 Df kernel[0:15be2] [16255.349165]: fq_detect_dequeue_stall:num: 19, scidx: 7, flow: 0xb32b32a0, iface: en7 grp:
+2026-08-28 11:57:54.263 Df kernel[0:42d4] fq_if_add_fcentry: num: 19, scidx: 7, flowsrc: 1, flow: 0x9bf50afe, iface: en7, B:15208
+2026-08-28 11:57:54.263 Df kernel[0:42d4] [17429.368334]: fq_detect_dequeue_stall:num: 20, scidx: 7, flow: 0x9bf50afe, iface: en7 grp:
+2026-08-28 11:57:54.267 Df kernel[0:163e3] fq_if_add_fcentry: num: 20, scidx: 7, flowsrc: 1, flow: 0x989a423a, iface: en7, B:67546
+2026-08-28 11:57:54.267 Df kernel[0:163e3] [17429.372106]: fq_detect_dequeue_stall:num: 21, scidx: 7, flow: 0x989a423a, iface: en7 grp:
+2026-08-28 12:03:48.733 Df kernel[0:17096] fq_if_add_fcentry: num: 21, scidx: 7, flowsrc: 1, flow: 0xb5301d91, iface: en7, B:8305
+2026-08-28 12:03:48.733 Df kernel[0:17096] [17783.837638]: fq_detect_dequeue_stall:num: 22, scidx: 7, flow: 0xb5301d91, iface: en7 grp:
+2026-08-28 12:21:45.244 Df kernel[0:178b8] fq_if_add_fcentry: num: 22, scidx: 7, flowsrc: 1, flow: 0x96d54ad4, iface: en7, B:142762
+2026-08-28 12:21:45.244 Df kernel[0:178b8] [18860.297025]: fq_detect_dequeue_stall:num: 23, scidx: 7, flow: 0x96d54ad4, iface: en7 grp:
+2026-08-28 12:36:40.302 Df kernel[0:169b9] fq_if_add_fcentry: num: 23, scidx: 7, flowsrc: 1, flow: 0x9b1873b1, iface: en7, B:10838
+2026-08-28 12:36:40.302 Df kernel[0:169b9] fq_detect_dequeue_stall:num: 24, scidx: 7, flow: 0x9b1873b1, iface: en7 grp:
+2026-08-28 12:36:40.340 Df kernel[0:193e8] fq_if_add_fcentry: num: 24, scidx: 7, flowsrc: 1, flow: 0x8016d74a, iface: en7, B:21806
+2026-08-28 12:36:40.340 Df kernel[0:193e8] [19755.393288]: fq_detect_dequeue_stall:num: 25, scidx: 7, flow: 0x8016d74a, iface: en7 grp:
+2026-08-28 12:36:40.521 Df kernel[0:193e8] fq_if_add_fcentry: num: 25, scidx: 7, flowsrc: 1, flow: 0xbb210cac, iface: en7, B:9407
+2026-08-28 12:36:40.521 Df kernel[0:193e8] [19755.573796]: fq_detect_dequeue_stall:num: 26, scidx: 7, flow: 0xbb210cac, iface: en7 grp:
+2026-08-28 12:36:41.206 Df kernel[0:19452] fq_if_add_fcentry: num: 26, scidx: 7, flowsrc: 1, flow: 0x8607c7c9, iface: en7, B:338988
+2026-08-28 12:36:41.206 Df kernel[0:19452] [19756.259175]: fq_detect_dequeue_stall:num: 27, scidx: 7, flow: 0x8607c7c9, iface: en7 grp:
+2026-08-28 12:36:41.551 Df kernel[0:193e7] fq_if_add_fcentry: num: 27, scidx: 7, flowsrc: 1, flow: 0x9da09bb7, iface: en7, B:8841
+2026-08-28 12:36:41.551 Df kernel[0:193e7] [19756.603601]: fq_detect_dequeue_stall:num: 28, scidx: 7, flow: 0x9da09bb7, iface: en7 grp:
+2026-08-28 12:44:04.270 Df kernel[0:1a6fc] fq_if_add_fcentry: num: 28, scidx: 7, flowsrc: 1, flow: 0x987f5b5e, iface: en7, B:8305
+2026-08-28 12:44:04.270 Df kernel[0:1a6fc] [20198.896073]: fq_detect_dequeue_stall:num: 29, scidx: 7, flow: 0x987f5b5e, iface: en7 grp:
+2026-08-28 12:44:04.980 Df kernel[0:1945] fq_if_add_fcentry: num: 29, scidx: 7, flowsrc: 1, flow: 0xacf413d9, iface: en7, B:8602
+2026-08-28 12:44:04.980 Df kernel[0:1945] fq_detect_dequeue_stall:num: 30, scidx: 7, flow: 0xacf413d9, iface: en7 grp:
+2026-08-28 12:44:24.645 Df kernel[0:1acec] fq_if_add_fcentry: num: 30, scidx: 7, flowsrc: 1, flow: 0x966fc5fa, iface: en7, B:168324
+2026-08-28 12:44:24.645 Df kernel[0:1acec] [20219.271553]: fq_detect_dequeue_stall:num: 31, scidx: 7, flow: 0x966fc5fa, iface: en7 grp:
+2026-08-28 12:50:38.894 Df kernel[0:1b1ad] fq_if_add_fcentry: num: 31, scidx: 7, flowsrc: 1, flow: 0xa27d71a3, iface: en7, B:8305
+2026-08-28 12:50:38.894 Df kernel[0:1b1ad] [20593.520338]: fq_detect_dequeue_stall:num: 32, scidx: 7, flow: 0xa27d71a3, iface: en7 grp:
+2026-08-28 13:08:10.771 Df kernel[0:1c0e9] fq_if_add_fcentry: num: 32, scidx: 7, flowsrc: 1, flow: 0x9704b7f4, iface: en7, B:8305
+2026-08-28 13:08:10.771 Df kernel[0:1c0e9] [21645.338888]: fq_detect_dequeue_stall:num: 33, scidx: 7, flow: 0x9704b7f4, iface: en7 grp:
+2026-08-28 13:15:23.423 Df kernel[0:1945] fq_if_add_fcentry: num: 33, scidx: 7, flowsrc: 1, flow: 0x9cf09f3c, iface: en7, B:8754
+2026-08-28 13:15:23.423 Df kernel[0:1945] [22077.990923]: fq_detect_dequeue_stall:num: 34, scidx: 7, flow: 0x9cf09f3c, iface: en7 grp:
+2026-08-28 13:20:31.149 Df kernel[0:42d4] fq_if_add_fcentry: num: 34, scidx: 7, flowsrc: 1, flow: 0x99bc78ef, iface: en7, B:56222
+2026-08-28 13:20:31.149 Df kernel[0:42d4] [22385.716575]: fq_detect_dequeue_stall:num: 35, scidx: 7, flow: 0x99bc78ef, iface: en7 grp:
+2026-08-28 13:41:53.142 Df kernel[0:1f421] fq_if_add_fcentry: num: 35, scidx: 7, flowsrc: 1, flow: 0x99bc78ef, iface: en7, B:30336
+2026-08-28 13:41:53.142 Df kernel[0:1f421] [23667.710214]: fq_detect_dequeue_stall:num: 36, scidx: 7, flow: 0x99bc78ef, iface: en7 grp:
+2026-08-28 14:01:28.222 Df kernel[0:20560] fq_if_add_fcentry: num: 36, scidx: 7, flowsrc: 1, flow: 0xae1e2253, iface: en7, B:10186
+2026-08-28 14:01:28.222 Df kernel[0:20560] [24842.789525]: fq_detect_dequeue_stall:num: 37, scidx: 7, flow: 0xae1e2253, iface: en7 grp:
+2026-08-28 14:08:51.666 Df kernel[0:42d4] fq_if_add_fcentry: num: 37, scidx: 7, flowsrc: 1, flow: 0xabef0581, iface: en7, B:60450
+2026-08-28 14:08:51.666 Df kernel[0:42d4] fq_detect_dequeue_stall:num: 38, scidx: 7, flow: 0xabef0581, iface: en7 grp:

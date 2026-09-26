@@ -40,6 +40,9 @@ HardwareProfile
  ├─ schema_version                 versionamento do schema (migração é explícita)
  ├─ Identity      vendor · model · firmware · firmware_version · serial
  ├─ Capabilities  protocol · output_interface · color · supports_discovery · supports_metrics
+ │                · ports   (ADR-0030 §5: contagem de saídas físicas — capacidade
+ │                           declarativa, NÃO um limite; a capacidade por porta é
+ │                           DERIVADA de max_pixels, nunca declarada ao lado dele)
  ├─ Limits        pixels_per_universe · max_pixels · refresh_hz
  ├─ Power         voltage_v · max_current_a          (DECLARADO, não medido)
  └─ Calibration   gamma · brightness

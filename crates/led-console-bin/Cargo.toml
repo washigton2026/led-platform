@@ -1,0 +1,32 @@
+[package]
+name = "led-console-bin"
+version = "0.1.0"
+edition = "2021"
+
+# ADR-0026 — a ponte console↔daemon. **Cliente** do IPC v1, como o `ledctl`; nunca uma
+# autoridade de domínio. Depende do `led-daemon` (os tipos do contrato congelado) e do
+# `led-daemon-bin` (o protocolo v1 e os seus limites) — e de mais nada, porque tudo o que
+# fosse preciso além disso seria domínio a escorregar para dentro do tradutor.
+[dependencies]
+led-daemon = { path = "../led-daemon" }
+led-daemon-bin = { path = "../led-daemon-bin" }
+
+# **Só para testes.** O proxy de `/api/metrics` (ADR-0026 §9-bis) é medido contra o exporter
+# REAL (`led_hal::serve_metrics`), nunca contra um mock: se o console e o exporter divergirem
+# no formato, é precisamente isso que o teste tem de apanhar — e um mock concordaria sempre
+# comigo. Em produção o console fala com o exporter por TCP e **não** conhece o `led-hal`;
+# por isso é dev-only e o grafo de dependências de produção não muda.
+[dev-dependencies]
+led-hal = { path = "../led-hal" }
+
+[lib]
+name = "led_console_bin"
+path = "src/lib.rs"
+
+# O processo do console (ADR-0028 D6). O nome do binario segue a convencao do
+# `led-daemon-bin`, cujo executavel se chama `led-daemon`: o sufixo `-bin` e do crate, nao do
+# binario. Sem este processo, a garantia do ADR-0013 — "o output nao partilha processo de
+# falha com a UI" — nao chega a ser exercida, porque nao ha processo nenhum.
+[[bin]]
+name = "led-console"
+path = "src/main.rs"
