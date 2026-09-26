@@ -1061,7 +1061,7 @@ title:     "`now_ms` faz load-calcula-store em vez de `fetch_max`: uma perda de 
 severity:  High
 status:    closed
 closed_by: "13d2f41 (2026-09-17) — `load`/`max`/`store` substituido por `fetch_max(AcqRel)`; detector endurecido no mesmo ficheiro."
-evidence_ref: docs/evidence/td-020-relogio-monotonico-2026-09-17.md
+evidence_ref: docs/evidence/td-020-reverificacao-2026-09-26.md
 required_test: concurrent_readers_never_see_rewind_during_correction
 source_files: crates/led-hal/src/shared_clock.rs
 negative_control: |
