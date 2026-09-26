@@ -206,6 +206,96 @@ fn o_daemon_recusa_a_linha_longa_por_si_proprio() {
     assert!(linha.contains("demasiado longa"), "{}", &linha[..linha.len().min(200)]);
 }
 
+/// **SONDA TD-022 — branch descartável `probe/td-022-linux`, NUNCA para merge.**
+///
+/// O `pending_gate` do TD-022 (:97–100) não pergunta se o teste acima fica verde em Linux:
+/// pergunta **que errno devolve o `writeln!` interrompido**. Um verde não responde, porque
+/// com buffers de socket grandes a escrita pode acabar antes do fecho e o ramo `if let Err`
+/// nunca corre. Esta sonda **força** a interrupção, de forma determinística:
+///
+/// 1. escreve a linha gigante em pedaços de 4 KiB até passar `MAX_LINE` (sem `\n`);
+/// 2. dorme — o daemon lê o excesso, escreve a recusa, faz `flush` e fecha
+///    (`server.rs:264-274`). **`thread::sleep` é deliberado e é a classe do TD-003**:
+///    aceitável só porque isto é uma sonda que nunca entra na baseline;
+/// 3. continua a escrever pedaços de 4 KiB até o `write` falhar, e **regista** o erro
+///    (`kind()` e `raw_os_error()`), em vez de o afirmar.
+///
+/// Só reprova se a interrupção **não** acontecer (a sonda não mediu nada) ou se a recusa não
+/// estiver no buffer. O errno é **registado, não afirmado**: é o valor que se quer medir.
+#[test]
+#[ignore = "sonda TD-022: so corre no workflow probe-td-022, com --ignored --exact"]
+fn sonda_td022_errno_da_escrita_interrompida() {
+    const PEDACO: usize = 4 * 1024;
+    let d = subir("sonda-td022");
+    let s = UnixStream::connect(&d.path).unwrap();
+    let mut w = s.try_clone().unwrap();
+    let mut r = BufReader::new(s);
+    writeln!(w, r#"{{"v":1,"id":1,"cmd":"hello","client":"sonda"}}"#).unwrap();
+    let mut _h = String::new();
+    r.read_line(&mut _h).unwrap();
+
+    let pedaco = vec![b'x'; PEDACO];
+    w.write_all(br#"{"v":1,"id":2,"cmd":"load","args":{"path":""#).unwrap();
+
+    // Fase 1 — passar o teto. `MAX_BODY + PEDACO` garante `n > MAX_LINE` do lado do daemon.
+    let mut escritos = 0usize;
+    let mut erro_fase1 = None;
+    while escritos <= led_console_bin::MAX_BODY + PEDACO {
+        match w.write_all(&pedaco) {
+            Ok(()) => escritos += PEDACO,
+            Err(e) => { erro_fase1 = Some(e); break; }
+        }
+    }
+
+    // Fase 2 — dar tempo ao daemon para ler o excesso e fechar (TD-003: sleep deliberado).
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Fase 3 — a escrita que TEM de ser interrompida.
+    let mut depois = 0usize;
+    let erro = match erro_fase1 {
+        Some(e) => Some(("fase1", e)),
+        None => {
+            let mut achado = None;
+            for _ in 0..256 {
+                match w.write_all(&pedaco) {
+                    Ok(()) => depois += PEDACO,
+                    Err(e) => { achado = Some(("fase3", e)); break; }
+                }
+            }
+            achado
+        }
+    };
+
+    let mut linha = String::new();
+    let lidos = r.read_line(&mut linha);
+
+    // O REGISTO — é isto que o log da CI tem de mostrar. Uma linha, grep-ável.
+    match &erro {
+        Some((fase, e)) => println!(
+            "SONDA-TD022 os={} fase={fase} kind={:?} raw_os_error={:?} display={e} \
+             escritos_antes={escritos} escritos_depois={depois} recusa_lida={:?} recusa={:?}",
+            std::env::consts::OS, e.kind(), e.raw_os_error(),
+            lidos.as_ref().map_err(|e| e.kind()), &linha[..linha.len().min(120)],
+        ),
+        None => println!(
+            "SONDA-TD022 os={} INTERRUPCAO_NAO_OBSERVADA escritos_antes={escritos} \
+             escritos_depois={depois}",
+            std::env::consts::OS,
+        ),
+    }
+
+    assert!(
+        erro.is_some(),
+        "a sonda nao mediu nada: a escrita nunca foi interrompida ({} KiB depois do teto)",
+        depois / 1024
+    );
+    assert!(
+        matches!(lidos, Ok(n) if n > 0) && linha.contains("bad_request"),
+        "a recusa nao estava no buffer quando o erro chegou: {:?}",
+        &linha[..linha.len().min(200)]
+    );
+}
+
 /// **Profundidade JSON acima de 16 é recusada** — `[[[[[…` estoura a pilha, e um cliente
 /// derrubaria o daemon com uma linha de texto (ADR-0026 §11).
 #[test]

@@ -1,0 +1,48 @@
+# SONDA TD-022 — branch descartavel `probe/td-022-linux`, NUNCA para merge.
+#
+# Pergunta do `pending_gate` (docs/technical-debt-ledger.md, TD-022 :97-100): que errno
+# devolve em LINUX o `writeln!` interrompido pelo fecho do daemon? Um `test (ubuntu-latest)`
+# verde nao responde — a escrita pode acabar antes do fecho. Esta sonda forca a interrupcao
+# e REGISTA o errno (linha `SONDA-TD022` no log).
+#
+# So ubuntu, so esta branch. O `ci.yml` dispara em main, baseline/** e pull_request, logo um
+# push aqui (sem PR) corre SO este workflow.
+
+name: probe-td-022
+
+on:
+  push:
+    branches: ["probe/td-022-linux"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  sonda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Deps de audio no Linux (cpal -> ALSA)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Sonda (3 passagens — exit lido sem pipe, KB-013)
+        shell: bash {0}
+        run: |
+          falhas=0
+          for i in 1 2 3; do
+            cargo test -p led-console-bin --test ipc_contra_o_daemon --locked \
+              -- --ignored --exact sonda_td022_errno_da_escrita_interrompida --nocapture \
+              > "sonda-$i.txt" 2>&1
+            code=$?
+            echo "=== passagem $i: exit $code"
+            grep -a 'SONDA-TD022' "sonda-$i.txt" || echo "SEM LINHA SONDA-TD022"
+            grep -a 'test result:' "sonda-$i.txt"
+            # KB-012: `test result: ok` e satisfeito por `0 passed; 1 filtered out`.
+            if ! grep -aq 'test result: ok\. 1 passed' "sonda-$i.txt"; then
+              echo "passagem $i: a sonda NAO correu ou reprovou"; cat "sonda-$i.txt"
+              falhas=$((falhas+1))
+            fi
+          done
+          exit $falhas
