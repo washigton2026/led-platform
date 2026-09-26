@@ -109,6 +109,7 @@ impl SharedClock {
 
 impl Default for SharedClock {
     fn default() -> Self { Self::new() }
+    // SONDA probe/ci-debt-gate-stale: comentario so para tornar a evidencia do TD-020 stale. NUNCA PARA MERGE.
 }
 
 // `Send + Sync` sao DERIVADOS pelo compilador, nunca afirmados a mao: todos os campos
