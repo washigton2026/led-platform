@@ -86,6 +86,7 @@ export const ROTAS: readonly Rota[] = [
   { verbo: "GET", caminho: "/api/version" },
   { verbo: "GET", caminho: "/api/events" },
   { verbo: "GET", caminho: "/api/upstream" },
+  { verbo: "GET", caminho: "/api/dropped" },
   { verbo: "GET", caminho: "/api/profiles" },
   { verbo: "GET", caminho: "/api/metrics" },
   { verbo: "POST", caminho: "/api/transport/load" },
@@ -230,6 +231,23 @@ export interface SaidaPorAlvo {
  */
 export interface EstadoUpstream {
   readonly upstream: boolean;
+}
+
+/**
+ * O corpo de `GET /api/dropped` — `console.dropped` (ADR-0026 §13-bis).
+ *
+ * `dropped`: eventos descartados no fan-out do console, em TODOS os browsers,
+ * desde o arranque do console. Monotonico dentro da instancia.
+ *
+ * `since`: o arranque do console, em ms Unix, fixado uma vez. Se mudar, o console
+ * reiniciou e o delta recomeca. NUNCA detetar o reinicio pela descida de
+ * `dropped`: um reinicio seguido de mais perdas daria um numero MAIOR.
+ *
+ * Facto do CONSOLE, nao do daemon: um reinicio do daemon nao o zera.
+ */
+export interface EstadoDescartes {
+  readonly dropped: number;
+  readonly since: number;
 }
 
 /**

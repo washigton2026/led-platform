@@ -420,6 +420,7 @@ fn encaminhar(
         "/api/version" => daemon(cfg, "version", ""),
         "/api/events" => eventos(),
         "/api/upstream" => upstream(fanout),
+        "/api/dropped" => descartes(fanout),
         "/api/metrics" => metricas(cfg),
         "/api/profiles" => perfis(),
         // Transporte: o comando é o segmento final, e vem da própria `ROTAS`.
@@ -464,6 +465,31 @@ fn upstream(fanout: &crate::fanout::Fanout) -> Saida {
     // `subscricao_viva()`, nunca `subscricoes_ipc()`: o segundo é **cumulativo** e diria "já
     // houve" quando a pergunta é "há agora".
     Saida::json(200, format!(r#"{{"upstream":{}}}"#, fanout.subscricao_viva()))
+}
+
+/// `GET /api/dropped` — **quantos eventos o console descartou?** (ADR-0026 §13-bis, TD-014)
+///
+/// `console.dropped`, a promessa do §13 que até aqui não tinha rota. Corpo
+/// `{"dropped": u64, "since": u64}`, e mais nada — autorado pelo console, logo sem `v`/`ok`/`id`
+/// (a mesma razão do `/api/upstream`).
+///
+/// - `dropped`: descartes em **todos** os browsers desde o arranque do console. Monotónico
+///   dentro da instância — não desce quando um browser se desliga.
+/// - `since`: o arranque do console (ms Unix), fixado uma vez. É por ele, e nunca pela direção
+///   de `dropped`, que o cliente sabe que o console reiniciou e recomeça o delta.
+///
+/// É um `GET`, não um evento no SSE: o §9-quinquies fica intocado (o console nunca origina
+/// eventos), e um console morto não responde — que é a informação. Lê dois inteiros locais;
+/// não toca no daemon nem no hot-path.
+fn descartes(fanout: &crate::fanout::Fanout) -> Saida {
+    Saida::json(
+        200,
+        format!(
+            r#"{{"dropped":{},"since":{}}}"#,
+            fanout.descartados_desde_arranque(),
+            fanout.arranque_ms()
+        ),
+    )
 }
 
 /// Fala com o daemon e **repassa a resposta dele**.
