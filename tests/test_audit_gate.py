@@ -231,6 +231,45 @@ def test_pending_verification_malformed_review_by_is_critical():
 
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
+def test_open_and_wontfix_are_visible_not_ok():
+    """open/wontfix não são fiscalizados, mas têm de APARECER e não podem contar como OK.
+
+    Antes: `if status != 'closed': return` em silêncio, e o resumo contava-os como OK —
+    o ledger real dava «20 OK» com 6 TD abertos. O exit não muda (não são Critical).
+    """
+    import io, contextlib
+    ledger_text = textwrap.dedent("""
+    ```yaml
+    td_id:     TD-VIS-OPEN
+    title:     "divida aberta de teste"
+    severity:  High
+    status:    open
+    ```
+
+    ```yaml
+    td_id:     TD-VIS-WONTFIX
+    title:     "divida aceite de teste"
+    severity:  Low
+    status:    wontfix
+    ```
+    """)
+    tmp = make_ledger(ledger_text)
+    try:
+        g = audit_gate.Gate(WORKSPACE)
+        tds = audit_gate.parse_ledger(tmp)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = g.run(tds)
+        texto = out.getvalue()
+        assert code == 0, f"open/wontfix não são Critical — o exit tem de ser 0, foi {code}"
+        assert '[OPEN]' in texto and 'TD-VIS-OPEN' in texto, f"open não impresso:\n{texto}"
+        assert '[WONTFIX]' in texto and 'TD-VIS-WONTFIX' in texto, f"wontfix não impresso:\n{texto}"
+        assert '0 OK · 1 open · 1 wontfix' in texto, f"resumo conta open/wontfix como OK:\n{texto}"
+        print("✅ test_open_and_wontfix_are_visible_not_ok: PASS")
+    finally:
+        tmp.unlink()
+
+
 TESTS = [
     test_extract_passed_count,
     test_evidence_git_hash,
@@ -241,6 +280,7 @@ TESTS = [
     test_pending_verification_within_deadline_is_ok,
     test_pending_verification_past_deadline_is_critical,
     test_pending_verification_malformed_review_by_is_critical,
+    test_open_and_wontfix_are_visible_not_ok,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 
