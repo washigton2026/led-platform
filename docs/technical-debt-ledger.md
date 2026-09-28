@@ -1257,7 +1257,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-09-26
 closed_by: "3c60ab8 (correcao do lado do teste) + sonda Linux run 36245228354: o writeln! interrompido devolve BrokenPipe (errno 32) em Linux, 3/3 — o mesmo que em macOS. Conjunto aceite NAO alargado."
-evidence_ref: docs/evidence/td-022-brokenpipe-linux-2026-09-26.md
+evidence_ref: docs/evidence/td-022-reverificacao-2026-09-28.md
 required_test: o_daemon_recusa_a_linha_longa_por_si_proprio
 source_files: crates/led-console-bin/tests/ipc_contra_o_daemon.rs
 negative_control: |
