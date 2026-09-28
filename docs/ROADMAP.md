@@ -8,8 +8,9 @@
 > Este documento é o mapa completo: **o que já existe com evidência**, **o que falta**, e
 > **em que ordem**, com o que bloqueia o quê.
 >
-> Data desta revisão: **2026-09-26** · HEAD `320ff94` **== `origin/baseline/f2-f71`**
-> (`git ls-remote`, 2026-09-26 — publicado por push, com o **PR #6** aberto) · **1135 testes** em 105 suítes (macOS; **1131** no Ubuntu — os 4 do
+> Data desta revisão: **2026-09-26** (factos de estado atualizados a **2026-09-28**) · base
+> `57cf21d` **== `origin/baseline/f2-f71`**, `main` = `b86464b` (`git ls-remote`, 2026-09-28);
+> PRs **#7, #8, #9, #11, #12, #13** em draft, **nenhum mergeado** — o #8 primeiro · **1135 testes** em 105 suítes (macOS; **1131** no Ubuntu — os 4 do
 > `network_guard` são macOS-only) · `led-core` **1.4.0** (constante de contrato; não re-medida
 > nesta revisão)
 >
@@ -610,7 +611,7 @@ passo, com o seu «sim». **Nenhum marco antes do M6 se declara «pronto para sh
 |---|---|---|---|
 | 0.1 | ✅ **Publicar os 4 commits** (`ce959a7…320ff94`). **Feito** — `git ls-remote` == `320ff94` (2026-09-26). | 🟠 | `git ls-remote` == HEAD local |
 | 0.2 | ✅ **Ler o run da CI no log** — run `36226221020` (PR #6): ubuntu **105 · 1131/0/9**, macOS **105 · 1135/0/9**, clippy **correu** nos dois, miri **7/0/0**. Windows ❌ esperado (TD-021). | 🟢 | log lido job a job |
-| 0.3 | 🔴 **TD-022 NÃO fechar** — ubuntu verde não prova interrupção do `writeln!` em Linux; falta sonda determinística (ver `pending_gate` :97–100). Sonda **preparada** na branch descartável `probe/td-022-linux` (nunca para merge); em macOS regista `BrokenPipe` / errno 32; **Linux por medir**. | 🟢 sonda · 🟠 ledger | sonda em Linux regista o errno observado; só então se decide `closed` |
+| 0.3 | 🟡 **TD-022 — medido, fecho por mergear.** Sonda determinística em Linux (branch descartável `probe/td-022-linux`, run `36245228354`, lido no log): `kind=BrokenPipe raw_os_error=Some(32)`, **3/3**, recusa no buffer. Falsificações F1–F3 re-executadas (2026-09-26). Conjunto aceite **não** alargado. O ledger `closed` vive no **PR #7** (draft, por mergear). | 🟢 sonda · 🟠 ledger | PR #7 mergeado com a CI lida no log |
 | 0.3b | ✅ **Merge do PR #6** — feito (2026-09-26, `b86464b`, merge commit: hashes C1–C4 preservados). **Falta** ler a CI do merge na `main` no log. | 🟠 | CI do merge lida no log |
 | 0.4 | **TD candidato**: o hook de pre-commit valida o **worktree**, não o índice (deu «20 OK» com índice de 19 TD). Registar como TD e corrigir. | 🟢 | teste que falha com índice ≠ worktree |
 | 0.5 | **`show.gif`**: está trackeado **e** em `.gitignore` (`*.gif`) e é regenerado por `~/lumyx-e2e.sh`, logo aparece sempre como M. Decidir: `git rm --cached` ou fixar. | 🟣🟠 | worktree limpo após um e2e |
@@ -805,8 +806,18 @@ compilação. Se for preciso paralelizar, é o primeiro candidato.
 
 ## VI.6 — Próxima ação
 
-**M0.1, M0.2 e M0.3b estão feitos** (publicado, CI do PR #6 lida no log, PR mergeado em
-`b86464b`). Próximos, por ordem: **ler a CI do merge na `main`** (0.3b), **correr a sonda do
-TD-022 em Linux** (0.3 — push da branch descartável, com «sim»), e registar os TD candidatos
-**0.4** e **0.8**. Depois, **M1** (PROTOCOL_V=2). Em paralelo e desde já, na trilha humana:
-**6.0** (WLAN → cabo nos nós 2–5).
+*(Atualizado 2026-09-28.)* **M0.1, M0.2 e M0.3b estão feitos**; a sonda do TD-022 em Linux
+**correu** (0.3). Próximos, por ordem:
+
+1. **Merge do PR #8** (fix do TD-020 stale) — a `main` tem o debt gate **vermelho** até ele
+   entrar. O merge é do operador.
+2. Depois, empilhados sobre ele: **#7** (TD-022 closed), **#9** (debt gate na CI), **#11** (o
+   hook julga o índice), **#12** (audit_gate mostra open/wontfix), **#13** (TD-014 →
+   `GET /api/dropped`, ADR-0026 §13-bis).
+3. Registar **TD-023..026** no ledger a partir da `main` atualizada (rascunho já decidido:
+   no_alloc do `led-hal` com contador global; `speed_factor` com relógio de parede; hook sobre
+   o worktree; `audit_gate` ignora o returncode do `git log`). O TD-027 (Miri do `audio-core`
+   no e2e) continua sem evidência.
+4. **M1** (PROTOCOL_V=2) — muda o protocolo IPC: exige autorização antes de começar.
+
+Em paralelo e desde já, na trilha humana: **6.0** (WLAN → cabo nos nós 2–5).
