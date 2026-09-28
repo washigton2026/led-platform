@@ -117,6 +117,35 @@ jobs:
       - name: Gate de compilação do contrato
         run: ./scripts/tsc_gate.sh
 
+  # ── Bloqueante: o debt gate (KB-012) também na CI, não só no hook local ─────
+  #
+  # Porque existe: o PR #6 mergeou na `main` com o `audit_gate.py` VERMELHO (TD-020 stale,
+  # 2026-09-26). O gate só corria no pre-commit local, e o hook não vê a alteração do
+  # próprio commit que a torna stale. A CI era o único sítio que a podia apanhar — e não
+  # corria o gate.
+  #
+  # `fetch-depth: 0` é OBRIGATÓRIO, não optimização. O detector de evidência stale corre
+  # `git log <hash>..HEAD -- <ficheiro>` e ignora o returncode: num checkout raso o `<hash>`
+  # não existe, o `git log` falha, o stdout vem vazio e o stale passa a VERDE em silêncio.
+  debt-gate:
+    name: debt gate (audit_gate.py)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: audit_gate.py (exit lido sem pipe — KB-013)
+        shell: bash {0}
+        run: |
+          python3 scripts/audit_gate.py > debt-gate.txt 2>&1
+          code=$?
+          cat debt-gate.txt
+          # KB-012: um gate que não viu nenhum TD passa por vacuidade. Exigir N > 0.
+          n=$(grep -aoE '— [0-9]+ TD entries' debt-gate.txt | grep -oE '[0-9]+')
+          echo "debt-gate: ${n:-0} TD lidos, exit ${code}"
+          if [ "${n:-0}" -eq 0 ]; then echo "debt-gate: 0 TD lidos — o gate não viu nada"; exit 1; fi
+          exit $code
+
   # ── Bloqueante: as construções `unsafe` do triple buffer, sob Miri ───────────
   #
   # Job próprio, e não um step da matriz `test`, pela MESMA razão que o `contract`:
