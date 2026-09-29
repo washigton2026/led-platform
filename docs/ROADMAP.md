@@ -8,10 +8,20 @@
 > Este documento é o mapa completo: **o que já existe com evidência**, **o que falta**, e
 > **em que ordem**, com o que bloqueia o quê.
 >
-> Data desta revisão: **2026-08-05** · HEAD `5416241` · `led-core` **1.4.0** · **791 testes**
+> Data desta revisão: **2026-09-26** (factos de estado atualizados a **2026-09-29**) · base
+> `57cf21d` **== `origin/baseline/f2-f71`**, `main` = `6ac22ff` (merge do #7; `git ls-remote`, 2026-09-29);
+> **mergeados:** #8 (`a922e14`), #9 (`82e5ba1`), #11 (`0f7857e`), #13 (`445d296`), #12 (`207c87f`) e #7 (`6ac22ff`); **#10 fechado** sem merge · **1143 testes** em 106 suítes (macOS; **1139** no Ubuntu — os 4 do
+> `network_guard` são macOS-only) · `led-core` **1.4.0** (constante de contrato; não re-medida
+> nesta revisão)
 >
-> *Revisão anterior (2026-08-03, HEAD `80c2a6c`) ficou 3 commits atrás e listava como
-> disponíveis frentes que já tinham sido entregues. Ver PARTE III.*
+> **O que é novo nesta revisão:** a **PARTE VI — Plano até 100 % operável**, com a definição
+> de «100 %», marcos M0–M10 **em ordem ratificada pelo dono (2026-09-26, decisões D-A e
+> D-B)**, passos numerados, tipo de gate por passo e o que só o humano mede. As Partes I–V foram corrigidas **só onde estavam factualmente caducadas** (números
+> de testes/TD/ADR, F7.2, D4); o histórico de decisões não foi reescrito.
+>
+> *Revisão anterior (2026-08-05, HEAD `5416241`, 791 testes) ficou 8 semanas atrás. A
+> anterior a essa (2026-08-03) listava como disponíveis frentes que já tinham sido
+> entregues. Ver PARTE III.*
 
 ---
 
@@ -185,20 +195,33 @@ Derivada de corrente nominal por die; **não medida no rig**.
 - `led-core` **1.4.0** · **61 itens** de superfície pública · baseline SemVer **commitado**
 - **5 seams Frozen**: `ProtocolOutput`, `DeviceDriver`, `IDevice`, `CompiledLayout`, `UniverseData`
 - `ColorFormat` é **Evolving** (foi o que permitiu RGBW e vai permitir RGB+CCT)
-- **31 ADRs** · **17 entradas de TD**: **10 fechadas** com evidência auditável, 2 `wontfix` com
-  gatilho de revisita, **5 abertas** (TD-013, TD-014, TD-017, TD-018, TD-019)
-- CI: **Linux + macOS bloqueantes, verdes** em `80c2a6c`; Windows não-bloqueante
+- **31 ADRs** · **20 entradas de TD** (`scripts/audit_gate.py`, 2026-09-25): **11 fechadas**
+  com evidência auditável (incl. TD-020), 1 `pending-verification` (**TD-022**), 2 `wontfix`
+  com gatilho de revisita (TD-011, TD-012), **6 abertas** (TD-013, TD-014, TD-017, TD-018,
+  TD-019, TD-021). Nenhuma em `diagnosed`.
+- CI (run `36226221020`, PR #6, HEAD `320ff94`, **lido no log** job a job):
+  `test (ubuntu-latest)` **105 suítes · 1131/0/9**, `test (macos-latest)` **105 · 1135/0/9**
+  (delta 4 = `network_guard` macOS-only), clippy `--all-targets --locked -D warnings`
+  **correu** nos dois (não `skipped`), `miri (led-triple)` **7/0/0, exit 0**, `contrato TS`
+  verde; `windows (allow-failure)` falha por TD-021 (esperado). O agregado «success» vem do
+  `allow-failure`, não de todos passarem. O Miri é gate bloqueante desde `2e603c9`.
+- **19 crates** em `crates/`: 18 com `src/lib.rs` (3 deles também binários —
+  `led-console-bin`, `led-daemon-bin`, `led-player`), `led-demo` só binário; `led-triple` (o triple buffer, `unsafe` isolado)
+  foi extraído do `led-pixel-engine`, que ficou com **0** `unsafe`. Construções `unsafe` em
+  `src/`: **8** (`led-triple` 5, `audio-core` 3); `led-hal` passou de 4 a 0 em `320ff94`.
 
-**Gates executados nesta revisão (2026-08-03, não citados de memória):**
+**Gates executados nesta revisão (2026-09-25, exit lido sem pipe — KB-013):**
 
 ```
-cargo test --workspace --locked --no-fail-fast
-  → 64 suítes · 771 passed · 0 failed · 8 ignored · exit 0
-cargo clippy --workspace --all-targets --locked -- -D warnings
-  → exit 0
+scripts/baseline_watch.sh  (cargo test --workspace)   → EXIT 0 · 105 suítes · 1135 passed · 0 failed · 9 ignored · 481 s
+cargo test -p led-hal -p led-console-bin  ×3           → EXIT 0 ×3 · 228 passed, 21 suítes
+cargo clippy --workspace --all-targets --locked -- -D warnings   → EXIT 0 (80 s, 0 warnings)
+python3 tests/test_audit_gate.py                       → 10 passed · 0 failed
 ```
 
-*(746 → 771 nesta sessão: +25 testes da 1ª fatia do E1, incl. o gate de alocação do render.)*
+> **Nenhum tempo medido em 2026-09-22/24 vale** — correram sob carga 64–96 (contaminada).
+> Os 481 s acima foram com load ~4; incluem parte da compilação e **não** são um baseline
+> de desempenho.
 
 ### ADRs — estado
 
@@ -323,7 +346,7 @@ verdade) e o contrato de tipos em [ADR-0027](adr/0027-contrato-tipos-rust-typesc
 | D1 | **Daemon**: engine headless, processo separado (ADR-0013) | ✅ **feito** (GS2) |
 | D2 | **IPC**: UDS owner-only, comandos tipados e versionados, nunca `0.0.0.0` (ADR-0014) | ✅ **feito** (GS3) |
 | D3 | **Shell do console**: HTTP + SSE + AppShell + design system + transporte + `load`/`unload` | ✅ **feito** |
-| D4 | **Preview WebGPU**: cópia downsampled, rate-limited, **lossy por contrato** (ADR-0015) | ⬜ depende de D3 |
+| D4 | **Preview WebGPU**: cópia downsampled, rate-limited, **lossy por contrato** (ADR-0015) | ⬜ **desbloqueado, não iniciado.** Mecanismo decidido: **evento no canal `subscribe`** (ADR-0015 Emenda 1); o ADR-0027 Emenda 4 classifica evento novo como **aditivo**, logo **não** depende do `PROTOCOL_V=2`. O bloqueio real é que o «fora do hot-path» **não existe no daemon**. A pré-condição `led-triple` (extracção + Miri limpo) está **feita** |
 | D5 | **Timeline visual**: waveform de áudio, clips, keyframes — o `led-sequencer` já tem o modelo | ⬜ depende de D3 |
 | D6 | **Blackout**: botão + confirmação em duas fases + log auditável. **Sem atalho de teclado nesta fatia** (ADR-0017, decisão 10) | ⬜ **desbloqueado, não landado** — o B1 fechou a 2026-09-01. A pré-condição **escape por device** deixou de faltar: aterrou com a máscara em `1030a7e` (2026-09-04). O bloqueio actual é outro — a decisão 6 (duas fases) exige `PROTOCOL_V = 2` e `PROTOCOL_V` é 1; ver ADR-0031 — **aceite**, com a metade **emissora** da decisão 2 já implementada (o `accepts` derivado de `SUPORTADAS`), e as decisões 1 e 3–7 **por implementar**: é o estado de versão **por ligação** e a segunda versão em `SUPORTADAS` que ainda faltam, não o documento |
 | D7 | **Editor de layout**: desenhar modelos, posicionar no palco | ⬜ depende de D3 |
@@ -340,7 +363,7 @@ verdade) e o contrato de tipos em [ADR-0027](adr/0027-contrato-tipos-rust-typesc
 |---|---|---|
 | 1 | **TD-014** — `console.dropped` tem contador e o [ADR-0026](adr/0026-console-daemon-boundary.md) §13 exige que a perda seja **reportada**; não há rota até ao operador | `docs/technical-debt-ledger.md` (aberto, Medium) |
 | 2 | **`/api/profiles` devolve 501** — à espera de uma de duas decisões de arquitectura | changelog 2026-08-10 (F7) |
-| 3 | **F7.2 Ubuntu não fecha** — falta a próxima falha para o instrumento produzir o `N` de alocações; o log da CI devolve HTTP 403 sem autenticação | changelog 2026-08-13d |
+| 3 | ~~**F7.2 Ubuntu não fecha**~~ ✅ **fechado em 2026-09-08** — a causa era o **gate** (contaminação por thread), não o caminho DDP; PR #4 mergeado, `test (ubuntu-latest)` verde lido **no log** | changelog 2026-08-13d → PR #4 |
 | 4 | **Confirmação de `load` não medida com leitor de ecrã** — é um segundo clique no mesmo botão, e num teclado sem foco visível é menos óbvio do que devia | changelog 2026-08-14 |
 | 5 | **`path` sem histórico nem completação** — o operador escreve o caminho inteiro de cada vez | changelog 2026-08-14 |
 
@@ -444,6 +467,11 @@ O que transforma "meu projeto" em "plataforma que outros usam".
 
 # PARTE III — Caminho crítico
 
+> **Substituída, para planeamento, pela [VI.4](#vi4--dependências-entre-marcos)** — ordem
+> ratificada pelo dono a 2026-09-26 (decisões D-A e D-B, VI.0). O diagrama e a lista abaixo
+> ficam como **registo histórico** da revisão de 2026-08/09 e não foram reescritos; onde
+> divergirem da VI.4, vale a VI.4.
+
 ```
         ┌── B1 ✅ ────────────────────┐   (decidido 2026-09-01 — ADR-0017 aceito)
         │                             ▼
@@ -519,3 +547,278 @@ espera por uma escolha, e nenhuma espera por hardware que não seja energizar o 
 
 **A afirmação que este documento não faz:** que o rig completo funciona. **1 nó de 5**,
 720 px de 6.200. Isso é a FASE G, e depende de energia, não de código.
+
+---
+
+# PARTE VI — Plano até 100 % operável
+
+> **Estado desta parte (2026-09-26):** a **ordem dos marcos** e as decisões **D-A** e **D-B**
+> foram **ratificadas pelo dono** (ver VI.0). O **C8** (instalação permanente) continua
+> **PROPOSTA**. A definição de «100 %» (C1–C9) foi escrita por mim a partir das Partes I–V e
+> não foi ratificada critério a critério — só a inclusão dos trajes (D-B). O que estiver
+> marcado 🟣 é decisão que **não** tomei.
+
+## VI.0 — Decisões ratificadas
+
+| # | Decisão do dono (2026-09-26) | Consequência neste plano |
+|---|---|---|
+| **D-A** | **O console pode vir antes da certificação no rig.** Substitui a premissa «hardware antes de features» da revisão de 2026-07-12. **Nenhum marco é «pronto para show» antes do marco do rig (M6).** | M1–M5 avançam sem esperar pelo rig; o rig é **trilha humana paralela desde já**, não bloqueante até ao M6. Tudo o que M1–M5 entregam fica, até ao M6, com o rótulo **«não pronto para show»** |
+| **D-B** | **Os trajes (FASE F, F3–F6) fazem parte do «LUMYX 100 %».** | Entra o critério **C9**; o M5 (ADR do F3) e o M8 (F3–F6) passam a estar **dentro** do 100 % |
+
+## VI.1 — O que «100 % operável» significa (critérios mensuráveis)
+
+O roadmap anterior não definia o ponto de chegada. Só há «100 %» quando **todos** os critérios
+abaixo tiverem evidência citável, cada um com o seu artefacto:
+
+| # | Critério | Prova exigida | Quem mede |
+|---|---|---|---|
+| **C1** | **Golden Slice completo**: um operador, **sem escrever Rust**, cria/importa → edita → pré-visualiza → configura → envia → executa → valida | run registado no rig real, com o `.lumyx` e o hash | 🔵 humano + rig |
+| **C2** | **Rig completo por cabo**: 5 nós, **6.200 px**, show de 3 min, **p99 de latência medido** | scrape de `--metrics` + hash de replay estável | 🔵 rig |
+| **C3** | **Certificação de longa duração**: burn-in **≥ 72 h limpo** (alvo 168 h) | `burnin-*.jsonl` + hash em `docs/certification/` | 🔵 rig + tempo |
+| **C4** | **Console do operador**: D3–D7 entregues, cada um com gate; acessibilidade **medida com leitor de ecrã real** | CI verde + relatório de a11y | 🟢 gates · 🔵 a11y/GPU |
+| **C5** | **Operação segura**: blackout com confirmação em duas fases e log auditável; `--require-all`; **TD-013** (autenticação pré-playback), **TD-014** (perda de frames chega ao operador) e **TD-017** (política do universo) fechados; requisito **9.C** (firmware em blackout ao perder o link) **medido** | testes + medição no rig | 🟢 · 🔵 |
+| **C6** | **Higiene de engenharia**: CI Linux + macOS + Miri + contrato TS verdes; **todo** o TD aberto ou fechado ou `wontfix` com gatilho | `audit_gate.py` + run da CI **lido no log** | 🟢 |
+| **C7** | **Instalável e documentado**: binários assinados, documentação de **operador**, licença decidida | artefactos assinados (cosign) + docs | 🟠 · 🟣 |
+| **C8** | **Instalação permanente** (**PROPOSTA**): scheduler/playlist por horário e dia | teste de agendamento + run longo | 🟢 · 🔵 |
+| **C9** | **Trajes** (**D-B**): F3–F6 entregues; os **critérios de validação** e os **gates** do [ADR-0022](adr/0022-wearable-playback-autonomo-sync-deterministico.md) cumpridos, mais os do ADR do F3 (M5) | evidência por critério/gate do ADR-0022, medida em traje real | 🟢 · 🔵 traje |
+
+**C8 continua PROPOSTA** — vem da descrição «instalação comercial que corre sozinha», que não
+está confirmada como decisão de produto. Hoje **não existe** código de agendamento (E7 —
+verificado: só há `--loop` no player).
+
+**Fora dos critérios, de propósito:** paridade completa de efeitos (E1) e drones (M10). São
+frentes **abertas sem ponto de chegada**: podem continuar depois dos 100 % sem invalidar o
+C1–C9.
+
+## VI.2 — Legenda dos passos
+
+| Marca | Tipo de gate | Significa |
+|---|---|---|
+| 🟢 | **landável aqui** | prova-se com `cargo test` / `clippy` / `tsc` / `audit_gate` neste ambiente |
+| 🟠 | **precisa de autorização** | push, doc versionada, alteração de ADR/CI |
+| 🔵 | **precisa do humano / hardware** | rig, GPU real, leitor de ecrã, traje, tempo de parede |
+| 🟣 | **decisão / ADR** | escolha que não é código |
+
+Regras que valem para todos os passos: **exit lido sem pipe (KB-013)**; verde da CI lido **no
+log**, não no ✔️; `NaoMedido ≠ Pass`; nenhum tempo medido sob carga > 6 conta; um commit por
+passo, com o seu «sim». **Nenhum marco antes do M6 se declara «pronto para show» (D-A).**
+
+## VI.3 — Marcos
+
+### M0 — Fechar pendentes *(curto; desbloqueia o resto)*
+
+| # | Passo | Tipo | Critério de aceitação |
+|---|---|---|---|
+| 0.1 | ✅ **Publicar os 4 commits** (`ce959a7…320ff94`). **Feito** — `git ls-remote` == `320ff94` (2026-09-26). | 🟠 | `git ls-remote` == HEAD local |
+| 0.2 | ✅ **Ler o run da CI no log** — run `36226221020` (PR #6): ubuntu **105 · 1131/0/9**, macOS **105 · 1135/0/9**, clippy **correu** nos dois, miri **7/0/0**. Windows ❌ esperado (TD-021). | 🟢 | log lido job a job |
+| 0.3 | 🟡 **TD-022 — medido, fecho por mergear.** Sonda determinística em Linux (branch descartável `probe/td-022-linux`, run `36245228354`, lido no log): `kind=BrokenPipe raw_os_error=Some(32)`, **3/3**, recusa no buffer. Falsificações F1–F3 re-executadas (2026-09-26). Conjunto aceite **não** alargado. O ledger `closed` vive no **PR #7** (draft, por mergear). | 🟢 sonda · 🟠 ledger | PR #7 mergeado com a CI lida no log |
+| 0.3b | ✅ **Merge do PR #6** — feito (2026-09-26, `b86464b`, merge commit: hashes C1–C4 preservados). **Falta** ler a CI do merge na `main` no log. | 🟠 | CI do merge lida no log |
+| 0.4 | **TD candidato**: o hook de pre-commit valida o **worktree**, não o índice (deu «20 OK» com índice de 19 TD). Registar como TD e corrigir. | 🟢 | teste que falha com índice ≠ worktree |
+| 0.5 | **`show.gif`**: está trackeado **e** em `.gitignore` (`*.gif`) e é regenerado por `~/lumyx-e2e.sh`, logo aparece sempre como M. Decidir: `git rm --cached` ou fixar. | 🟣🟠 | worktree limpo após um e2e |
+| 0.6 | **TD-018** (sintaxe do universo no `--help` do daemon). *(O TD-017 passou para o M2.)* | 🟢 | `--help` mostra a sintaxe obrigatória |
+| 0.7 | **Deriva de doc** que restar em `CLAUDE.md`. **Não** reescrever o changelog histórico. | 🟠 | grep dos números contra medição |
+| 0.8 | **TD candidato**: `probe_linux()` (`led-hal/src/network_guard.rs:228`) — o bloqueio de WiFi (ADR-0005) no SO do show ao vivo, usado no pré-voo do daemon — tem **zero testes**; os 4 testes que só correm em macOS (1135 vs 1131) são do parser macOS. Registar como TD. | 🟢 | teste do `probe_linux` a correr no job ubuntu |
+
+### M1 — PROTOCOL_V = 2 *(pré-requisito do D6)*
+
+Hoje `PROTOCOL_V = 1` e `SUPORTADAS` tem **um** elemento. O ADR-0031 está **aceite**; a metade
+**emissora** da decisão 2 está feita.
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 1.1 | Estado de versão **por ligação** no daemon | 🟢 | teste: duas ligações, versões distintas |
+| 1.2 | Segunda versão em `SUPORTADAS`; o daemon **lê** o `accepts` do pedido | 🟢 | teste de negociação + recusa por versão |
+| 1.3 | Decisões 3–7 do ADR-0031, **uma por commit** | 🟢 | cada uma com o seu teste |
+| 1.4 | Regenerar o contrato TS; gate `tsc --noEmit` | 🟢 | job `contrato TS` verde |
+| 1.5 | **Falsificação:** mutar o `accepts` e ver o teste falhar | 🟢 | mutação apanhada |
+
+### M2 — Segurança *(D6 + TD-013 / TD-014 / TD-017)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 2.1 | **D6** — botão + **confirmação em duas fases** (decisão 6 do ADR-0017; exige M1) | 🟢 | teste do fluxo de duas fases |
+| 2.2 | **D6** — **log auditável** de cada blackout (quem/quando/estado) | 🟢 | entrada no log por comando |
+| 2.3 | **D6** — **sem atalho de teclado** nesta fatia (decisão 10) | 🟢 | teste que prova a ausência |
+| 2.4 | **TD-013**: autenticar o artefacto recortado **antes** do playback | 🟢 | teste com artefacto adulterado é recusado |
+| 2.5 | **TD-014**: rota da perda (`console.dropped`) até ao operador (ADR-0026 §13 exige que seja **reportada**) | 🟢 | teste: perda → aviso visível |
+| 2.6 | **TD-017**: 🟣 decidir a política do universo fora dos 15 bits e alinhar daemon e player | 🟣🟢 | os dois binários recusam/aceitam o mesmo |
+
+*O requisito **9.C** do ADR-0017 (firmware em blackout ao perder o link) **não** está aqui: é
+medição física e vive no **M6** (6.6).*
+
+### M3 — D4: preview WebGPU *(fecha o elo vazio do Golden Slice)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 3.1 | **Tap de preview no daemon**, fora do hot-path: cópia **downsampled**, rate-limited, **lossy** (ADR-0015). Evento novo no canal `subscribe` — aditivo, **sem** PROTOCOL_V=2. | 🟢 | teste: o tap não altera o hash do frame enviado |
+| 3.2 | **Gate de alocação**: o hot-path continua com **0** alocações com o tap ativo | 🟢 | `no_alloc` verde com o tap ligado |
+| 3.3 | **Política de perda**: consumidor lento perde frames de preview, **nunca** atrasa o envio | 🟢 | teste com consumidor bloqueado |
+| 3.4 | Tipo do evento **gerado** para TS (ADR-0027) | 🟢 | `tsc` verde |
+| 3.5 | Renderer WebGPU no `console-web`: pontos instanciados, sem `fillRect` | 🟢 build · 🔵 GPU | compila; **fps medido em GPU real** |
+| 3.6 | 🟣 **Comportamento sem WebGPU** (browser sem suporte): degradar, avisar ou bloquear | 🟣 | decisão registada em ADR |
+| 3.7 | Medir **6.200 px** e **≥ 10k px** em GPU real | 🔵 | fps citado com a **condição** |
+
+*O achado que fundamenta o D4: Canvas2D dá **3 fps a 10k pontos** — o preview tem de ser WebGPU.*
+
+### M4 — D5 / D7 / profiles / a11y *(superfície sobre domínio que já existe)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 4.1 | **D5** — read-model da timeline exposto no contrato (o `led-sequencer` já tem o modelo) | 🟢 | tipos TS gerados |
+| 4.2 | D5 — waveform de áudio, clips, keyframes, blend, marcadores de batida | 🟢 build · 🔵 a11y | edição não-destrutiva provada por replay |
+| 4.3 | D5 — undo/redo | 🟢 | teste de ida-e-volta |
+| 4.4 | **D7** — editor de layout: modelos, posicionamento (fecha o **E3**) | 🟢 · 🔵 | layout desenhado == layout compilado (`RigBuilder`, sem conflitos por construção) |
+| 4.5 | `/api/profiles` devolve 501 — 🟣 escolher: IPC v2 (M1) **ou** catálogo no console | 🟣🟢 | rota deixa de devolver 501 |
+| 4.6 | `path` sem histórico/completação no `load` | 🟢 | teste de UI |
+| 4.7 | Confirmação de `load` **medida com leitor de ecrã** | 🔵 | relatório de a11y |
+| 4.8 | Uma fatia por PR, cada uma com o gate do ADR-0028 (o único `fetch` continua em `transport/api.ts`) | 🟢 | gate de fronteira verde |
+
+### M5 — ADR do F3 *(decisão; dentro do 100 % por D-B)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 5.1 | 🟣 **F3**: firmware próprio × preset WLED — **ADR próprio antes de qualquer código** (o ADR-0022 deixa-o explicitamente fora do seu escopo) | 🟣 | ADR aceite |
+| 5.2 | 🟣 **Requisito explícito do ADR do F3:** **resolver o conflito com a invariante «sem WiFi em show ao vivo»** (ADR-0005) — os trajes **não podem ter cabo**. O ADR **tem de decidir** isto; este plano **não propõe** a solução | 🟣 | a decisão consta do ADR, com a sua justificação |
+
+*Enquadramento que o ADR do F3 terá de respeitar ou emendar explicitamente, **citado e não
+interpretado**: o ADR-0022 já fixa o sincronismo **antes** do número (D4), **nenhum rádio no
+caminho crítico** (Q2), e o ADR-0005 **intacto** (critério V7, gate G7).*
+
+### M6 — Rig *(FASE G — trilha humana paralela **desde já**; é o marco «pronto para show»)*
+
+Nada aqui é código; tudo tem comando pronto. **Corre em paralelo de M1–M5 e não os bloqueia
+(D-A)**, mas **nenhum marco é «pronto para show» antes de o M6 fechar**. Ordem interna
+**obrigatória**: cada passo só vale se o anterior passou.
+
+| # | Passo | Tipo | Comando / aceitação |
+|---|---|---|---|
+| 6.0 | **WLAN → cabo** nos nós 2–5 (o G1 migrou **1 nó** a 2026-08-28; o rig de 5 robôs era Art-Net por WiFi) | 🔵 | cada nó responde por Ethernet |
+| 6.1 | **G2**: energizar os nós 2–5 (6.200 px) | 🔵 | `led-player robot_sequence.lumyx --ddp <ip>` por nó |
+| 6.2 | Medir **portas físicas** (ADR-0030): hoje **NÃO MEDIDO** | 🔵 | controlador multi-porta observado |
+| 6.3 | **G7**: RGBW `dtype 0x33` sobre DDP | 🔵 | o validador deixa de avisar |
+| 6.4 | **C2**: show de **3 min**, 6.200 px, cabo, **p99 medido** | 🔵 | scrape + hash estável |
+| 6.5 | **G6**: chaos físico — puxar o cabo com o show a correr | 🔵 | degradação por nó, sem derrubar o resto |
+| 6.6 | Requisito **9.C** do ADR-0017 — o firmware entra em blackout ao perder o link | 🔵 | medido; **não medido hoje** |
+| 6.7 | **G4**: Falcon / FPP | 🔵 | mesmo player, `--artnet`/`--ddp` |
+| 6.8 | **G5**: determinismo Linux/Windows | 🟢 CI · 🔵 | `./scripts/determinism_probe.sh` |
+| 6.9 | **TD-019**: o critério D custa **três** sítios, incl. o harness do burn-in de certificação | 🔵 | fecha com o burn-in |
+| 6.10 | **G3**: burn-in **72 h → 168 h**, lançado **fora da sessão** | 🔵 | `launchctl load ~/Library/LaunchAgents/com.lumyx.burnin.plist` |
+| 6.11 | **C1**: o operador percorre o Golden Slice inteiro | 🔵 | run registado |
+
+### M7 — Instalação permanente e paridade *(C8 continua PROPOSTA; E1 é contínuo)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 7.1 | 🟣 Confirmar que **instalação permanente** é decisão de produto (é o que justifica o C8) | 🟣 | ADR ou nota no roadmap |
+| 7.2 | **E7**: scheduler/playlist por horário e dia | 🟢 | teste com relógio injetado |
+| 7.3 | **E1**: ~25 efeitos em tranches de ~5, no molde `ComputeKernel` + ADR-0021, **cada um** com o gate de alocação e de pureza | 🟢 | contagem sobe, 0 alocações |
+| 7.4 | **E5**: export `.fseq` (interop FPP) — hoje **zero** ocorrências | 🟢 | round-trip com um leitor de referência |
+| 7.5 | **E6**: upload de configuração para o controlador (hoje à mão) | 🟢 · 🔵 | config aplicada e lida de volta |
+| 7.6 | **E2**: preview 3D (depende do M3) | 🟢 · 🔵 | Z deixa de ser ignorado |
+| 7.7 | E4 (vídeo→pixel) e E8 (faces/canto) | 🟢 | sem gatilho — baixa prioridade |
+
+### M8 — Trajes F3–F6 *(FASE F; dentro do 100 % por D-B)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 8.1 | Pré-condições: **ADR do F3 aceite** (M5) e **TD-013 fechado** (M2.4) — sem isto, nada sai da bancada | 🟣🟢 | ver 5.1–5.2 e 2.4 |
+| 8.2 | **F3**: player embarcado, conforme o ADR do F3 | 🔵 | traje toca sozinho |
+| 8.3 | **F4**: sync multi-traje — start comum + medição de **drift** (`SharedClock`/`net_time` existem) | 🟢 · 🔵 | drift medido durante o número |
+| 8.4 | **F5**: orçamento de bateria, corrente, peso, calor | 🔵 | ver ADR-0022 |
+| 8.5 | **F6**: degradação segura — um traje que falha não derruba o número | 🟢 · 🔵 | teste de falha por traje |
+
+### M9 — Distribuição *(FASE H; fecha C7)*
+
+| # | Passo | Tipo | Aceitação |
+|---|---|---|---|
+| 9.1 | **D8**: empacotamento desktop com webview do SO (depende de D3, D4) | 🟢 · 🔵 | app arranca sem dev server |
+| 9.2 | Binários assinados por plataforma (cosign já corre) | 🟠 | assinatura verificável |
+| 9.3 | 🟣 Licença e modelo de distribuição | 🟣 | decisão registada |
+| 9.4 | Documentação de **operador** (hoje a doc é de arquiteto) | 🟠 | um operador conclui o C1 só com a doc |
+| 9.5 | Guia de migração xLights → LUMYX (o código já faz; falta o texto) | 🟠 | guia testado com o projeto real |
+| 9.6 | H5: catálogo de presets da comunidade (cada placa é **uma linha**) | 🟢 | preset novo sem código |
+
+### M10 — Drones *(decisão pendente; fora do 100 %)*
+
+Existe um repositório **separado**, `~/drone-platform` (núcleo de segurança G2: validação
+contínua, atribuição húngara em `drone-formations`, `ShowIntent` determinístico, export `.skyc`
+bloqueado por validação). **Não está neste repositório** e o lugar dele no roadmap do LUMYX
+**não foi decidido**. G2 não pode ser afirmado «validado» (ver memória do projeto).
+
+| # | Passo | Tipo |
+|---|---|---|
+| 10.1 | 🟣 Decidir: integrar na timeline comum, ou manter separado com contrato partilhado | 🟣 |
+| 10.2 | Se integrar: ADR de fronteira (o `ShowIntent` é o contrato natural) | 🟣 |
+
+## VI.4 — Dependências entre marcos
+
+Duas setas diferentes: **══►** é dependência **técnica** (o passo não compila/não prova sem o
+anterior); **──►** é **ordem ratificada** (prioridade do dono, sem dependência técnica).
+
+```
+TRILHA DE SOFTWARE (landável aqui, pela ordem ratificada)
+
+M0 ──► M1 ══► M2 ──► M3 ──► M4 ──► M5 ──► M7 ──► M8 ──► M9
+        │      │ (D6 exige PROTOCOL_V=2)   │             ▲
+        │      │                           │             │
+        │      └══ 2.4 TD-013 ═════════════╪═════════════╣ (8.1)
+        │                                  └══ M5 ═══════╝ (ADR do F3 antes de código F3)
+        └══ 4.5 /api/profiles (se a escolha for IPC v2)
+M3 (D4) ══► 7.6 E2 (3D) · M3 + M4 ══► 9.1 D8
+
+TRILHA HUMANA (paralela desde já — D-A)
+
+M6 rig: 6.0 cabo ─ 6.1 G2 ─ 6.2 ─ 6.3 ─ 6.4 3 min p99 ─ 6.5 ─ 6.6 9.C ─ … ─ 6.10 burn-in ─ 6.11 C1
+
+PORTÕES
+
+«pronto para show»  ⇐  M6 fechado            (nenhum marco antes disso — D-A)
+C1 (Golden Slice)   ⇐  M2 + M3 + M4 + M6
+C9 (trajes)         ⇐  M5 + M8 (+ TD-013 de M2)
+100 %               ⇐  C1–C9 com evidência (C8 enquanto PROPOSTA)
+
+M10 fora do 100 %; E1 (7.3) é contínuo e não bloqueia nada.
+```
+
+**Caminho crítico até C1:** `M0 → M1 → M2 → M3 → M4` na trilha de software, e o **M6** a
+fechar por cima, na trilha humana. **Caminho crítico até 100 %:** o anterior **+** `M5 → M8`
+(trajes) **+** `M9` (distribuição).
+
+**O que isto não diz:** M3 **não** depende tecnicamente de M1/M2 (o evento de preview é
+aditivo); vem depois por **ordem ratificada** (segurança antes de preview), não por
+compilação. Se for preciso paralelizar, é o primeiro candidato.
+
+**O passo que mais tempo de parede custa** é o **6.10** (burn-in 168 h): convém lançá-lo
+**assim que o 6.1–6.4 passem**, e continuar M1–M5 enquanto ele corre.
+
+## VI.5 — O que este plano NÃO promete
+
+- **Que o rig completo funcione.** Hoje há **1 nó de 5** provado (720 px de 6.200). É o M6.
+- **Que algo seja «pronto para show» antes do M6** (D-A).
+- **Que o preview atinja um fps.** Só o 3.7, em GPU real, o diz.
+- **Que o `9.C` valha.** O firmware entrar em blackout ao perder o link é um **requisito**,
+  não uma garantia (ADR-0017).
+- **Como os trajes funcionam sem cabo e sem WiFi ao vivo.** É o que o ADR do F3 (5.2) tem de
+  decidir; o plano não o antecipa.
+- **Nenhum número de mercado.** Metas comerciais (receita, nº de instalações, prazo de
+  desistência) **não constam de nenhum documento do repositório** e não entram neste plano.
+- **Que E1/M10 tenham fim.** São frentes abertas.
+
+## VI.6 — Próxima ação
+
+*(Atualizado 2026-09-29.)* **M0.1, M0.2 e M0.3b estão feitos**; a sonda do TD-022 em Linux
+**correu** (0.3). Próximos, por ordem:
+
+1. ✅ **PR #8 mergeado** (fix do TD-020 stale; `a922e14`, 2026-09-28) e ✅ **PR #9 mergeado**
+   (debt gate na CI; `82e5ba1`, 2026-09-28).
+2. ✅ Mergeados a 2026-09-29: **#11** (o hook julga o índice; `0f7857e`), **#13** (TD-014 →
+   `GET /api/dropped`, ADR-0026 §13-bis; `445d296`), **#12** (audit_gate mostra open/wontfix;
+   `207c87f`) e **#7** (TD-022 closed; `6ac22ff`). **#10** fechado sem merge (controlo negativo).
+   CI da `main` em `6ac22ff`: debt gate `13 OK · 5 open · 2 wontfix`, exit 0.
+3. Registar **TD-023..026** no ledger a partir da `main` atualizada (rascunho já decidido:
+   no_alloc do `led-hal` com contador global; `speed_factor` com relógio de parede; hook sobre
+   o worktree; `audit_gate` ignora o returncode do `git log`). O TD-027 (Miri do `audio-core`
+   no e2e) continua sem evidência.
+4. **M1** (PROTOCOL_V=2) — muda o protocolo IPC: exige autorização antes de começar.
+
+Em paralelo e desde já, na trilha humana: **6.0** (WLAN → cabo nos nós 2–5).
