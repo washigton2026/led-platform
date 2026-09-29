@@ -12,7 +12,7 @@
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { App, Daemon, Eventos, Gestao, Indisponivel, Transporte } from "./App";
+import { App, Daemon, Descartes, Eventos, Gestao, Indisponivel, Transporte } from "./App";
 import { ESPERADO } from "./marcacao.esperada";
 import type { EventoCru } from "./transport/api";
 
@@ -171,6 +171,16 @@ const CASOS: ReadonlyArray<readonly [keyof typeof ESPERADO, JSX.Element]> = [
       aoComandar={NADA}
       resultado={{ tipo: "recusado", cmd: "play", code: "no_show_loaded", detail: "NoShowLoaded" }}
     />,
+  ],
+  // ADR-0026 §13-bis (TD-014). Não medido ≠ zero perdas; primeira leitura sem delta.
+  ["DESCARTES_NAO_MEDIDO", <Descartes leitura={null} />],
+  [
+    "DESCARTES_PRIMEIRA",
+    <Descartes leitura={{ atual: { dropped: 7, since: 1790000000000 }, delta: null }} />,
+  ],
+  [
+    "DESCARTES_COM_PERDA",
+    <Descartes leitura={{ atual: { dropped: 192, since: 1790000000000 }, delta: 96 }} />,
   ],
 ];
 

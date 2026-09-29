@@ -13,17 +13,20 @@
 
 import { useEffect, useState } from "react";
 import { caminhoMudou, caminhoUtilizavel, cliqueArmar, LIMPA } from "./confirmacao";
+import { deltaDescartes, iniciarPolling, INTERVALO_DESCARTES_MS } from "./descartes";
 import { descreveEvento, ehProgresso } from "./eventos";
 import { marcaDeEstado, rotulosDeFluxo } from "./ligacoes";
 import { Campo, estilos, Indicador, Seccao } from "./ui";
 import {
   carregar,
   comandar,
+  lerDescartes,
   lerEstado,
   lerUpstream,
   subscreverEventos,
   TRANSPORTE,
   type ComandoTransporte,
+  type EstadoDescartes,
   type EstadoDoDaemon,
   type EventoCru,
   type Ligacao,
@@ -74,6 +77,25 @@ export function App() {
       clearInterval(t);
     };
   }, []);
+
+  // `console.dropped` (ADR-0026 §13-bis): a leitura atual e o delta face à anterior.
+  // `null` = não medido. O polling tem o seu próprio tecto (≤ 1 Hz), independente do estado.
+  const [descartes, setDescartes] = useState<{
+    atual: EstadoDescartes;
+    delta: number | null;
+  } | null>(null);
+  useEffect(
+    () =>
+      iniciarPolling(
+        lerDescartes,
+        (lido) =>
+          setDescartes((antes) =>
+            lido === null ? null : { atual: lido, delta: deltaDescartes(antes?.atual ?? null, lido) },
+          ),
+        INTERVALO_DESCARTES_MS,
+      ),
+    [],
+  );
 
   const [progresso, setProgresso] = useState<{
     ultima: EventoCru | null;
@@ -137,6 +159,7 @@ export function App() {
 
       <hr style={estilos.regua} />
       <Eventos eventos={eventos} fluxo={fluxo} upstream={upstream} progresso={progresso} />
+      <Descartes leitura={descartes} />
     </main>
   );
 }
@@ -296,6 +319,34 @@ export function Gestao({
           significa que <strong>o operador a afirma</strong>, e o show fica armado.
         </p>
       ) : null}
+    </Seccao>
+  );
+}
+
+/**
+ * `console.dropped` (ADR-0026 §13-bis, TD-014): quantos eventos o **console** descartou por
+ * browsers lentos. Sem isto, uma lista de eventos incompleta parece silêncio.
+ *
+ * `null` é **não medido** — nunca `0`, que afirmaria que nada se perdeu.
+ */
+export function Descartes({
+  leitura,
+}: {
+  leitura: { atual: EstadoDescartes; delta: number | null } | null;
+}) {
+  return (
+    <Seccao id="h-descartes" titulo="DROPPED">
+      {leitura === null ? (
+        <p style={estilos.detalhe}>not measured</p>
+      ) : (
+        <dl style={estilos.lista}>
+          <Campo rotulo="Dropped since console start" valor={String(leitura.atual.dropped)} />
+          <Campo
+            rotulo="Since last read"
+            valor={leitura.delta === null ? "—" : `+${leitura.delta}`}
+          />
+        </dl>
+      )}
     </Seccao>
   );
 }

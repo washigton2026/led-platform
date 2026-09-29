@@ -61,6 +61,14 @@ pub const ROTAS: &[Rota] = &[
     },
     Rota {
         verbo: Verbo::Get,
+        caminho: "/api/dropped",
+        cmd_ipc: None,
+        razao: "console.dropped (ADR-0026 §13-bis): eventos descartados no fan-out para os \
+                browsers, global e cumulativo desde o arranque do console (`since`). Facto do \
+                CONSOLE, nunca do daemon; o delta e do cliente",
+    },
+    Rota {
+        verbo: Verbo::Get,
         caminho: "/api/profiles",
         cmd_ipc: None,
         razao: "catalogo de presets, estatico; nenhum valor fisico e recalculado aqui",
