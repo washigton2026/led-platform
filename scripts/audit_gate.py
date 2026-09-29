@@ -120,6 +120,19 @@ class Gate:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.findings: list[tuple[str, str, str]] = []
+        # TD que o gate não fiscaliza (open, wontfix, …): não são achados, mas também não
+        # são «OK». Contá-los como OK fazia «20 OK» esconder 6 TD abertos.
+        self.nao_fechados: list[tuple[str, str]] = []
+
+    def visivel(self, td_id: str, status: str, td: dict) -> None:
+        self.nao_fechados.append((status or '(sem status)', td_id))
+        icone = {'open': '⬜', 'wontfix': '⏸ '}.get(status, '❔')
+        etiqueta = f"[{(status or 'sem status').upper()}]"
+        sev = td.get('severity', '?').strip() or '?'
+        titulo = td.get('title', '').strip().strip('"')
+        if len(titulo) > 90:
+            titulo = titulo[:87] + '...'
+        print(f"  {icone} {etiqueta:<9} {td_id}: {status or 'sem status'} — {sev} — {titulo}")
 
     def report(self, level: str, td_id: str, msg: str) -> None:
         self.findings.append((level, td_id, msg))
@@ -160,8 +173,9 @@ class Gate:
             self.ok(td_id, f"pending-verification (valid) — gate: {gate_desc}")
             return
 
-        # ── not closed — nothing to enforce ───────────────────────────────────
+        # ── not closed — nothing to enforce, mas VISÍVEL (nunca contado como OK) ─
         if status != 'closed':
+            self.visivel(td_id, status, td)
             return
 
         # ── closed: enforce evidence_ref + negative_control ───────────────────
@@ -235,10 +249,14 @@ class Gate:
         for td in tds:
             self.check(td)
         criticals = [f for f in self.findings if f[0] == CRITICAL]
+        por_status: dict[str, int] = {}
+        for st, _ in self.nao_fechados:
+            por_status[st] = por_status.get(st, 0) + 1
+        resto = ''.join(f" · {n} {st}" for st, n in sorted(por_status.items()))
         print(f"\n{'='*60}")
         print(f"Result: {len(criticals)} Critical, "
               f"{len(self.findings)-len(criticals)} Warning, "
-              f"{len(tds)-len(self.findings)} OK")
+              f"{len(tds)-len(self.findings)-len(self.nao_fechados)} OK{resto}")
         if criticals:
             print("Gate FAILED — fix Critical findings before closing TDs.")
             return 1
