@@ -8,9 +8,9 @@
 > Este documento é o mapa completo: **o que já existe com evidência**, **o que falta**, e
 > **em que ordem**, com o que bloqueia o quê.
 >
-> Data desta revisão: **2026-09-26** (factos de estado atualizados a **2026-09-28**) · base
-> `57cf21d` **== `origin/baseline/f2-f71`**, `main` = `82e5ba1` (`git ls-remote`, 2026-09-28);
-> **#8 mergeado** (`a922e14`, 2026-09-28) e **#9 mergeado** (`82e5ba1`, 2026-09-28); PRs **#7, #11, #12, #13** em draft, por mergear · **1135 testes** em 105 suítes (macOS; **1131** no Ubuntu — os 4 do
+> Data desta revisão: **2026-09-26** (factos de estado atualizados a **2026-09-29**) · base
+> `57cf21d` **== `origin/baseline/f2-f71`**, `main` = `6ac22ff` (merge do #7; `git ls-remote`, 2026-09-29);
+> **mergeados:** #8 (`a922e14`), #9 (`82e5ba1`), #11 (`0f7857e`), #13 (`445d296`), #12 (`207c87f`) e #7 (`6ac22ff`); **#10 fechado** sem merge · **1143 testes** em 106 suítes (macOS; **1139** no Ubuntu — os 4 do
 > `network_guard` são macOS-only) · `led-core` **1.4.0** (constante de contrato; não re-medida
 > nesta revisão)
 >
@@ -806,14 +806,15 @@ compilação. Se for preciso paralelizar, é o primeiro candidato.
 
 ## VI.6 — Próxima ação
 
-*(Atualizado 2026-09-28.)* **M0.1, M0.2 e M0.3b estão feitos**; a sonda do TD-022 em Linux
+*(Atualizado 2026-09-29.)* **M0.1, M0.2 e M0.3b estão feitos**; a sonda do TD-022 em Linux
 **correu** (0.3). Próximos, por ordem:
 
 1. ✅ **PR #8 mergeado** (fix do TD-020 stale; `a922e14`, 2026-09-28) e ✅ **PR #9 mergeado**
    (debt gate na CI; `82e5ba1`, 2026-09-28).
-2. Por mergear: **#7** (TD-022 closed), **#11** (o
-   hook julga o índice), **#12** (audit_gate mostra open/wontfix), **#13** (TD-014 →
-   `GET /api/dropped`, ADR-0026 §13-bis).
+2. ✅ Mergeados a 2026-09-29: **#11** (o hook julga o índice; `0f7857e`), **#13** (TD-014 →
+   `GET /api/dropped`, ADR-0026 §13-bis; `445d296`), **#12** (audit_gate mostra open/wontfix;
+   `207c87f`) e **#7** (TD-022 closed; `6ac22ff`). **#10** fechado sem merge (controlo negativo).
+   CI da `main` em `6ac22ff`: debt gate `13 OK · 5 open · 2 wontfix`, exit 0.
 3. Registar **TD-023..026** no ledger a partir da `main` atualizada (rascunho já decidido:
    no_alloc do `led-hal` com contador global; `speed_factor` com relógio de parede; hook sobre
    o worktree; `audit_gate` ignora o returncode do `git log`). O TD-027 (Miri do `audio-core`
