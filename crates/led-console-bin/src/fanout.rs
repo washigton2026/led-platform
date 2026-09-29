@@ -50,13 +50,19 @@ impl Subscriber {
     }
 
     /// Entrega **sem bloquear**. Fila cheia ⇒ descarta o mais antigo e conta.
-    fn entrega(&self, linha: &str) {
+    ///
+    /// Devolve **quantos** descartou nesta entrega, para o [`Fanout`] os somar ao contador
+    /// global (ADR-0026 §13-bis).
+    fn entrega(&self, linha: &str) -> u64 {
         let mut f = self.fila.lock().expect("fila");
+        let mut descartou = 0;
         while f.len() >= self.capacidade {
             f.pop_front();
             self.descartados.fetch_add(1, Ordering::Relaxed);
+            descartou += 1;
         }
         f.push_back(linha.to_string());
+        descartou
     }
 }
 
@@ -82,6 +88,21 @@ pub struct Fanout {
     estabelecida: AtomicBool,
     /// Tentativas de ligação, com ou sem sucesso. Torna o backoff **observável**.
     tentativas: AtomicU64,
+    /// `console.dropped` (ADR-0026 §13-bis): eventos descartados **em todos os browsers**,
+    /// desde o arranque desta instância. Só cresce — **não** desce quando um browser se
+    /// desliga, ao contrário de [`Fanout::descartados_totais`], que soma só os ligados.
+    descartados_desde_arranque: AtomicU64,
+    /// O arranque desta instância do console, em ms Unix. Fixado **uma vez**, na construção.
+    /// É o que o cliente usa para detetar um reinício (§13-bis) — nunca a direção do contador.
+    arranque_ms: u64,
+}
+
+/// Agora, em milissegundos Unix. Um relógio antes de 1970 é um relógio partido, e dá 0.
+fn agora_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// A prova de posse da subscrição upstream. Enquanto existir, `subscricao_viva()` é `true`.
@@ -112,11 +133,28 @@ impl Drop for GuardaSubscricao<'_> {
 
 impl Fanout {
     pub fn novo() -> Self {
-        Self { capacidade: FILA_POR_BROWSER, ..Default::default() }
+        Self::com_arranque(FILA_POR_BROWSER, agora_unix_ms())
     }
 
     pub fn com_capacidade(capacidade: usize) -> Self {
-        Self { capacidade: capacidade.max(1), ..Default::default() }
+        Self::com_arranque(capacidade, agora_unix_ms())
+    }
+
+    /// Com o instante de arranque **explícito** — para os testes poderem simular um reinício
+    /// sem depender de o relógio avançar um milissegundo.
+    pub fn com_arranque(capacidade: usize, arranque_ms: u64) -> Self {
+        Self { capacidade: capacidade.max(1), arranque_ms, ..Default::default() }
+    }
+
+    /// `console.dropped` (ADR-0026 §13-bis): descartes em todos os browsers desde o arranque.
+    /// Monotónico dentro de uma instância.
+    pub fn descartados_desde_arranque(&self) -> u64 {
+        self.descartados_desde_arranque.load(Ordering::Relaxed)
+    }
+
+    /// O arranque desta instância do console, em ms Unix (`since` em `/api/dropped`).
+    pub fn arranque_ms(&self) -> u64 {
+        self.arranque_ms
     }
 
     /// Regista que uma subscrição foi **efetivamente estabelecida** — depois de o
@@ -202,8 +240,12 @@ impl Fanout {
 
     /// Difunde uma linha do daemon. **Nunca bloqueia**, seja qual for o estado dos browsers.
     pub fn difundir(&self, linha: &str) {
+        let mut descartou = 0;
         for s in self.subs.lock().expect("subs").iter() {
-            s.entrega(linha);
+            descartou += s.entrega(linha);
+        }
+        if descartou > 0 {
+            self.descartados_desde_arranque.fetch_add(descartou, Ordering::Relaxed);
         }
     }
 
@@ -240,6 +282,50 @@ mod tests {
     }
 
     /// **ADR-0026 §13.** Um browser que não lê nunca bloqueia a difusão.
+    /// **ADR-0026 §13-bis.** `console.dropped` conta os descartes de TODOS os browsers.
+    #[test]
+    fn console_dropped_conta_os_descartes_de_todos_os_browsers() {
+        let f = Fanout::com_capacidade(4);
+        let _a = f.ligar();
+        let _b = f.ligar();
+        assert_eq!(f.descartados_desde_arranque(), 0, "sem perdas, zero — nao um valor fabricado");
+        for i in 0..100 {
+            f.difundir(&format!(r#"{{"n":{i}}}"#));
+        }
+        // Dois browsers parados, capacidade 4: cada um perde 96.
+        assert_eq!(f.descartados_desde_arranque(), 192, "a perda de CADA browser entra no total");
+    }
+
+    /// **ADR-0026 §13-bis.** Monotónico dentro da instância: um browser que se desliga leva
+    /// consigo o seu contador, mas as perdas dele **não** saem de `console.dropped`.
+    #[test]
+    fn console_dropped_nao_desce_quando_o_browser_se_desliga() {
+        let f = Fanout::com_capacidade(4);
+        let lento = f.ligar();
+        for i in 0..100 {
+            f.difundir(&format!(r#"{{"n":{i}}}"#));
+        }
+        assert_eq!(f.descartados_desde_arranque(), 96);
+        f.desligar(lento.id());
+        assert_eq!(f.descartados_totais(), 0, "a soma dos LIGADOS desce — e por isso nao serve");
+        assert_eq!(
+            f.descartados_desde_arranque(),
+            96,
+            "console.dropped DESCEU quando o browser saiu — deixou de ser monotonico"
+        );
+    }
+
+    /// **ADR-0026 §13-bis.** `since` é fixado na construção e não muda com a atividade.
+    #[test]
+    fn o_arranque_e_fixado_uma_vez() {
+        let f = Fanout::com_arranque(4, 1_790_000_000_000);
+        let _a = f.ligar();
+        for i in 0..50 {
+            f.difundir(&format!(r#"{{"n":{i}}}"#));
+        }
+        assert_eq!(f.arranque_ms(), 1_790_000_000_000);
+    }
+
     #[test]
     fn browser_lento_nao_aplica_backpressure_e_a_perda_e_contada() {
         let f = Fanout::com_capacidade(4);
