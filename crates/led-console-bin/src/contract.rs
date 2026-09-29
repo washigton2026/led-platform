@@ -359,6 +359,29 @@ pub fn gerar_typescript() -> String {
          }\n\n",
     );
 
+    // ── /api/dropped ─────────────────────────────────────────────────────────
+    //
+    // O segundo corpo autorado pelo console (ADR-0026 §13-bis, TD-014). Mesma regra do
+    // `/api/upstream`: sem `v`, sem `ok`, sem `id`.
+    s.push_str(
+        "/**\n \
+         * O corpo de `GET /api/dropped` — `console.dropped` (ADR-0026 §13-bis).\n \
+         *\n \
+         * `dropped`: eventos descartados no fan-out do console, em TODOS os browsers,\n \
+         * desde o arranque do console. Monotonico dentro da instancia.\n \
+         *\n \
+         * `since`: o arranque do console, em ms Unix, fixado uma vez. Se mudar, o console\n \
+         * reiniciou e o delta recomeca. NUNCA detetar o reinicio pela descida de\n \
+         * `dropped`: um reinicio seguido de mais perdas daria um numero MAIOR.\n \
+         *\n \
+         * Facto do CONSOLE, nao do daemon: um reinicio do daemon nao o zera.\n \
+         */\n\
+         export interface EstadoDescartes {\n  \
+         readonly dropped: number;\n  \
+         readonly since: number;\n\
+         }\n\n",
+    );
+
     // ── Argumentos dos comandos (ADR-0027, Emenda 2) ─────────────────────────
     //
     // Ate aqui o contrato so descrevia o que se RECEBE. Os argumentos de um comando —

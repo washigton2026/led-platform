@@ -496,7 +496,14 @@ distinction: |
 td_id:     TD-014
 title:     "A perda de eventos por browser lento tem contador, tem ADR que exige reporte, e nenhum caminho ate ao operador"
 severity:  Medium
-status:    open
+status:    pending-verification
+fix_ref:   "branch fix/td-014 (2026-09-27): GET /api/dropped -> {dropped, since}, ADR-0026 §13-bis. Decisoes do operador: canal novo GET (nao SSE, /api/upstream intocado), contador GLOBAL cumulativo, delta no cliente, produtor = console, `since` = arranque do console."
+pending_gate: |
+  1. O PR de fix/td-014 MERGEADO na main, com a CI lida no log.
+  2. O OPERADOR ve o contador no console com uma perda INDUZIDA (um separador que abre
+     o SSE e nao le, e uma enchente de eventos): a seccao DROPPED mostra `dropped` a
+     crescer e `+N` em "Since last read". Visual = NOT_MEASURED ate la; nenhum teste
+     automatico o substitui.
 origin:    "Achado separado durante o fecho do F-01 (COMMAND 04), 2026-08-13. NAO incorporado ao F-01 por decisao do responsavel: e uma expansao de observabilidade, e F-01 era correccao de fronteira de verdade."
 context: |
   Verificado por grep, nao presumido:
@@ -551,7 +558,12 @@ falsification_required: |
   `browser_lento_...` ja faz) e afirme que o numero de descartes CHEGA ao cliente.
   Controle negativo obrigatorio: um browser que le tudo tem de reportar zero — sem
   isso, um campo que devolvesse sempre uma constante passaria.
-review_by: "proxima fatia de observabilidade do console"
+  FEITO em fix/td-014: `perda_induzida_faz_dropped_crescer_na_rota` (cresce) e
+  `browser_que_le_tudo_reporta_zero` (zero). Mutacao «rota devolve constante 96» ->
+  os dois reprovam; revertida -> verdes.
+# review_by retirado em 2026-09-27: era texto ("proxima fatia de observabilidade do
+# console"), que num pending-verification o audit_gate trata como Critical. Esta e essa
+# fatia; nenhum prazo novo foi decidido, e nao se inventa uma data.
 ```
 
 ---

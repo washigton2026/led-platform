@@ -325,7 +325,56 @@ escrito à mão**, e há um teste que compara as duas constantes.
 Lossy por contrato (ADR-0015), e a **direção importa**: um browser lento nunca atrasa a
 leitura do IPC, e o console nunca atrasa o daemon. Fila cheia → descarta o **mais antigo** e
 incrementa `console.dropped`, que é **reportado**, não escondido. O polling de `/api/state`
-corrige a deriva.
+corrige a deriva. *(Até 2026-09-27 o «reportado» não tinha rota — TD-014. A rota é a §13-bis.)*
+
+### 13-bis · `console.dropped` é observável em `GET /api/dropped` *(emenda, 2026-09-27 — TD-014)*
+
+**Decisões do operador (2026-09-27), e só estas:**
+
+1. **Canal novo e aditivo: uma rota `GET` própria**, `GET /api/dropped`. **Não** é um evento no
+   SSE e **não** é um campo em `/api/upstream`.
+2. **Contador global cumulativo.** Um só número para o console inteiro, **não** por browser. O
+   **delta** é calculado pelo cliente.
+3. **O produtor é o console**, não o daemon. A perda acontece no fan-out console→browser
+   (`fanout.rs`, fila cheia → descarta o mais antigo); o daemon nunca a vê.
+4. **Identificador de arranque.** O corpo leva `since`: o instante de arranque do console, em
+   milissegundos Unix, fixado **uma vez** quando o console arranca.
+
+**O corpo é `{"dropped": u64, "since": u64}`, e mais nada.** Sem `v`, sem `ok`, sem `id`, pela
+mesma razão do §9-quinquies: é um corpo **autorado pelo console**, e esses campos pertencem ao
+envelope do IPC v1, escrito pelo daemon.
+
+- **`dropped`** — quantos eventos o console descartou, **somados sobre todos os browsers**,
+  desde o arranque desta instância do console. **Monotónico dentro de uma instância:** nunca
+  desce. Em particular, **não** desce quando um browser se desliga — a soma dos contadores dos
+  browsers *ligados* desceria, e por isso não é esse o número exposto.
+- **`since`** — o arranque do console. Muda **só** quando o console reinicia. **Um reinício do
+  daemon não o muda nem zera `dropped`**: o contador vive no console.
+
+**Regra do cliente para o delta.** Se `since` for igual ao da leitura anterior, o delta é a
+diferença de `dropped`. Se `since` **mudou**, o console reiniciou: o cliente recomeça, e o delta
+dessa leitura é o `dropped` inteiro. **A regra «contador que desce ⇒ reinício» está proibida**:
+um reinício seguido de mais perdas do que antes produziria um contador *maior*, e o reinício
+ficaria invisível. É o `since` que o deteta, nunca a direção do número.
+
+**Tecto de frequência.** O cliente faz polling de `/api/dropped` **no máximo a 1 Hz**. A rota
+não empurra nada; o tecto é a cadência do pedido.
+
+**Fora do hot-path, por construção.** O incremento acontece no fan-out do **console**
+(processo `led-console-bin`), e a rota lê dois inteiros locais. Nenhuma linha do daemon, do
+render ou do envio muda.
+
+**Porque `GET` e não um evento.** Pelo argumento que o §9-quinquies já fixou: push não sabe
+reportar a sua própria ausência, e com `GET` um console morto não responde — isso é a
+informação. O §9-quinquies fica **intocado**: o console continua a **nunca originar eventos** no
+SSE, e o `/api/events` continua a levar só a linha do daemon *verbatim*.
+
+**`/api/upstream` fica intocado.** Continua a ser «`{"upstream": boolean}`, e mais nada»
+(§9-quinquies). O `descartados` que o §9-quinquies lista em *«Fica de fora, deliberadamente»*
+continua fora **dessa** rota; a lacuna nomeada lá é fechada aqui, numa rota própria.
+
+**`null` é NOT_MEASURED** no cliente, como no §9-quinquies: antes da primeira resposta não há
+valor, e ausência de resposta não é `0`.
 
 ### 14 · Sem `shutdown`, sem blackout
 

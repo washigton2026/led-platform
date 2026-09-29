@@ -14,12 +14,13 @@ import {
   type EstadoDoDaemon,
   type ArgsLoad,
   type EstadoUpstream,
+  type EstadoDescartes,
   type EventoPayload,
   type EventoTipado,
 } from "../../../crates/led-console-bin/contract/lumyx-contract.generated";
 
 /** Reexportados do contrato **gerado** — nunca redeclarados. */
-export type { EstadoDoDaemon, EventoPayload };
+export type { EstadoDescartes, EstadoDoDaemon, EventoPayload };
 
 /**
  * O que a UI sabe sobre a ligação. **Dois estados, e nenhum inventado.**
@@ -190,6 +191,26 @@ export async function lerUpstream(): Promise<boolean | null> {
     // forma, e revalidá-la aqui seria a segunda fonte de verdade do ADR-0026 §15.
     const corpo = (await r.json()) as EstadoUpstream;
     return typeof corpo.upstream === "boolean" ? corpo.upstream : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `GET /api/dropped` — **quantos eventos o console descartou?** (ADR-0026 §13-bis, TD-014)
+ *
+ * `dropped` é global e cumulativo desde o arranque do console; `since` é esse arranque.
+ * O delta é do cliente (`descartes.ts`). Devolve `null` para **não medido** — console
+ * inalcançável ou corpo ilegível —, nunca `{dropped: 0}`, que afirmaria que nada se perdeu.
+ */
+export async function lerDescartes(): Promise<EstadoDescartes | null> {
+  const rota = ROTAS.find((r) => r.caminho === "/api/dropped" && r.verbo === "GET");
+  if (!rota) return null;
+  try {
+    const r = await fetch(rota.caminho, { headers: { accept: "application/json" } });
+    if (!r.ok) return null;
+    const corpo = (await r.json()) as EstadoDescartes;
+    return typeof corpo.dropped === "number" && typeof corpo.since === "number" ? corpo : null;
   } catch {
     return null;
   }
