@@ -1389,3 +1389,200 @@ falsification_required: |
   longa tem de reprovar em `:181`.
 review_by: 2026-10-07
 ```
+
+---
+
+## TD-023 — O gate de alocacao do `led-hal` conta as alocacoes de todas as threads
+
+```yaml
+td_id:     TD-023
+title:     "`led-hal/tests/no_alloc.rs` usa um contador GLOBAL: alocacoes do libtest noutras threads entram na janela e o gate reprova sem o hot-path ter alocado"
+severity:  Medium
+status:    open
+origin:    "PR #8, run 36245590122 tentativa 2 (job macOS 108673138958, SHA 57cf21d, so docs): «calibrated hot path allocated 7 time(s) over 10000 frames»."
+required_test: zero_allocations_on_hot_path_with_calibration
+source_files: crates/led-hal/tests/no_alloc.rs
+context: |
+  crates/led-hal/tests/no_alloc.rs:10 — `static ALLOCS: AtomicUsize`, incrementado pelo
+  alocador em QUALQUER thread. :37 — `ALLOC_GATE` so serializa os corpos dos dois testes do
+  ficheiro; nao exclui as threads do libtest. :35 ja regista «7 phantom allocations that
+  vanished when run alone». Assercao em :90-94.
+impact: |
+  Falso-vermelho intermitente no job bloqueante `test (macos-latest)`. Nao gera falso-verde:
+  um contador que soma todas as threads nunca conta menos do que a thread do teste alocou.
+mitigation_now: |
+  Nenhuma automatica; re-run.
+required_fix: |
+  Candidata, nao implementada: atribuir por thread, como a F7.2 fez em
+  crates/led-protocols/tests/no_alloc.rs:64-95 (`E_A_THREAD_DO_TESTE`, `FORA_DA_THREAD`).
+  PROIBIDO: alargar a tolerancia, #[ignore], correr o teste isolado na CI.
+falsification_required: |
+  Alocacao injetada no hot-path -> vermelho no gate real; revertida -> verde sob carga.
+review_by: 2026-10-12
+```
+
+---
+
+## TD-024 — `speed_factor_paces_playback` afirma um limite de relogio de parede
+
+```yaml
+td_id:     TD-024
+title:     "`speed_factor_paces_playback` mede tempo de parede (<99 ms) que um runner partilhado pode exceder: falso-vermelho da classe do TD-006"
+severity:  Medium
+status:    open
+origin:    "PR #8, run 36245590122 tentativa 1 (job macOS 108414070581, SHA 57cf21d, so docs): «10x must be faster than real time, got 99ms»."
+required_test: speed_factor_paces_playback
+source_files: crates/led-player/src/lib.rs
+context: |
+  crates/led-player/src/lib.rs:361-368 — `play(..., Speed::Factor(10.0))` (:365) medido com
+  relogio real; assercoes `elapsed >= 8` (:367) e `elapsed < 99` (:368).
+impact: |
+  Falso-vermelho intermitente num job bloqueante; o que o teste quer provar (10x acelera)
+  fica misturado com a latencia do SO.
+mitigation_now: |
+  Nenhuma; re-run.
+required_fix: |
+  Por decidir (nao implementar antes): tempo injetado (relogio logico, como o Pacer do
+  daemon) ou afirmar as esperas calculadas em vez do tempo decorrido.
+  PROIBIDO: alargar a tolerancia (subir o 99 ou baixar o 8), #[ignore], retry automatico.
+falsification_required: |
+  Speed::Factor(10.0) a comportar-se como 1x (mutacao) -> vermelho; com a correcao -> verde
+  sob carga e sem depender do relogio real.
+review_by: 2026-10-12
+```
+
+---
+
+## TD-025 — O hook de pre-commit julgava o worktree, nao o indice
+
+```yaml
+td_id:     TD-025
+title:     "O hook de pre-commit corria o debt gate sobre o WORKTREE: validava um estado que nao ia ser commitado, e nao via o commit que torna uma evidencia stale"
+severity:  High
+status:    pending-verification
+origin:    "Descrito na mensagem de eb791fe: D1 — o gate lia o ledger do worktree (indice 19 TD / worktree 20 -> «20 OK»); D2 — o stale usava git log <hash>..HEAD, cego as alteracoes em stage (o commit C4, 320ff94, passou o hook)."
+pending_gate: |
+  A evidencia existe mas nao esta num formato que o gate aceite. tests/test_pre_commit_hook.sh:82
+  imprime «cenarios: passou=N falhou=M», que nao casa com o regex de scripts/audit_gate.py:84-85
+  exigido para `closed` (:181-245). Para fechar: o teste passa a emitir uma linha no formato do
+  gate, calculada a partir dos contadores reais; depois re-medir e criar docs/evidence/td-025-*.md
+  dentro do repo, num PR separado.
+source_files: scripts/pre-commit-hook.sh
+context: |
+  Correcao: PR #11 (eb791fe), mergeado na main em 0f7857e (2026-09-29): o indice vira um commit
+  candidato num worktree temporario e o gate corre la.
+  Medido 2026-09-29 com tests/test_pre_commit_hook.sh em origin/main 445d296 (os dois ficheiros
+  nao mudaram desde eb791fe):
+    hook de origin/main: S1-S4 PASS, «cenarios: passou=4 falhou=0», exit 0
+      (~/lumyx-evidence/2026-09-29/td025-hook-test-origin-main.txt)
+  .git/hooks/pre-commit reinstalado a partir de scripts/pre-commit-hook.sh da main; igual byte a
+  byte (sha256 f89f1fa9..., ~/lumyx-evidence/2026-09-29/pre-commit.origin-main).
+  Hoje o gate so aceita evidencia no formato do `cargo test` («N passed; 0 failed» ou
+  «test result: ok. N passed»).
+negative_control: |
+  O mesmo teste contra o hook antigo (57cf21d): S1 FAIL, S2 FAIL, S3 FAIL, S4 PASS,
+  «cenarios: passou=1 falhou=3», exit 1
+  (~/lumyx-evidence/2026-09-29/td025-hook-test-antigo-57cf21d.txt).
+review_by: 2026-10-12
+```
+
+---
+
+## TD-026 — O `audit_gate` ignora o returncode do `git log`: em clone raso o stale fica verde
+
+```yaml
+td_id:     TD-026
+title:     "`files_changed_since` nao le o returncode do `git log`: num clone raso o hash da evidencia nao existe, o `git log` falha e o detector de stale devolve «nao mudou»"
+severity:  High
+status:    open
+origin:    "Encontrado em 2026-09-26 ao desenhar o job debt gate (PR #9)."
+source_files: scripts/audit_gate.py
+context: |
+  scripts/audit_gate.py:101-113 — `subprocess.run(['git','log','--oneline',
+  f'{git_hash}..HEAD','--',p], capture_output=True)` (:107-108): so `stdout` e lido, o
+  `returncode` nunca; `except Exception: pass` (:112) engole o resto.
+  Medido 2026-09-29 num clone `--depth 1` de 84c146e: `git log --oneline e46151b..HEAD --
+  crates/led-console-bin/tests/ipc_contra_o_daemon.rs` -> exit 128 («fatal: bad revision»);
+  o gate sai 0 e da TD-022 `[OK]` sem ter podido verificar o stale.
+  O job de CI contorna-o com `fetch-depth: 0` (PR #9); fora dessa configuracao o gate e fragil.
+  CI, medido 2026-09-29: .github/workflows/ci.yml:134-136 — o job `debt-gate` faz
+  `actions/checkout@v4` com `fetch-depth: 0` explicito. No log desse job na main 84c146e
+  (run 36617074872): a entrada do checkout mostra `fetch-depth: 0`, o `git fetch` corre sem
+  `--depth`, e nao ha nenhuma linha `fatal`/`bad revision`. O gate captura o stderr do `git log`
+  (audit_gate.py:108), portanto uma falha dele nao apareceria nesse log.
+impact: |
+  Falso-verde do debt gate (a forma do KB-012) em qualquer checkout raso.
+mitigation_now: |
+  `fetch-depth: 0` no job `debt gate (audit_gate.py)` da CI.
+required_fix: |
+  Candidata, nao implementada: `git log` com returncode != 0 passa a Critical («nao
+  verificavel»), nunca «nao mudou».
+falsification_required: |
+  Clone raso -> exit != 0 com «nao verificavel»; clone completo -> igual a hoje.
+review_by: 2026-10-12
+```
+
+---
+
+## TD-027 — O `unsafe` do `audio-core` nao e exercido pelo Miri em nenhum gate versionado
+
+```yaml
+td_id:     TD-027
+title:     "As 3 construcoes `unsafe` do `audio-core` (ring buffer SPSC) nao estao sob Miri na CI; a unica via e um script opt-in fora do repositorio"
+severity:  Medium
+status:    open
+origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
+source_files: crates/audio-core/src/ring_buffer.rs
+context: |
+  crates/audio-core/src/ring_buffer.rs:24 (`unsafe impl Sync`), :55 e :75 (blocos `unsafe`).
+  .github/workflows/ci.yml:202 — o job `miri` corre so `cargo +nightly-2026-06-02 miri test
+  -p led-triple`. O `audio-core` so entra no laco do `~/lumyx-e2e.sh --miri` (linha 102),
+  que e opt-in e nao versionado. Nenhum artefacto em docs/evidence/ regista uma execucao
+  do Miri sobre o `audio-core`.
+impact: |
+  Uma regressao de memoria no ring buffer SPSC nao e apanhada por nenhum gate que corra
+  sozinho.
+mitigation_now: |
+  Nenhuma automatica.
+required_fix: |
+  Por decidir: estender o job `miri` da CI ao `audio-core` (com a mesma exigencia N > 0) ou
+  outra via versionada.
+falsification_required: |
+  Com o gate ligado: violar a disciplina SPSC do ring buffer (mutacao) -> Miri reporta UB e
+  o job reprova; revertida -> verde com N > 0.
+review_by: 2026-10-12
+```
+
+---
+
+## TD-028 — O detector de stale julga pelo commit no `git log`, nao pelo conteudo
+
+```yaml
+td_id:     TD-028
+title:     "`files_changed_since` usa `git log <hash>..HEAD -- <ficheiro>`: um merge que nao muda o conteudo do ficheiro torna a evidencia «stale» (falso-vermelho)"
+severity:  Medium
+status:    open
+origin:    "PR #7, run 36475926021 (job 109109510154, merge ref do PR): «TD-022: evidence is stale — source files changed after evidence was generated (hash 57cf21d): ['crates/led-console-bin/tests/ipc_contra_o_daemon.rs']», com o ficheiro inalterado."
+source_files: scripts/audit_gate.py
+context: |
+  scripts/audit_gate.py:101-113 (`files_changed_since`) decide por existencia de commits no
+  `git log`, nao por diferenca de conteudo.
+  Reproduzido em 2026-09-29 sobre a main 84c146e:
+    git log --oneline 57cf21d..84c146e -- crates/led-console-bin/tests/ipc_contra_o_daemon.rs
+      -> b86464b (merge do PR #6)
+    git diff --quiet 57cf21d 84c146e -- (o mesmo ficheiro) -> exit 0 (conteudo igual)
+  No PR #7 foi contornado com evidencia re-medida (docs/evidence/td-022-reverificacao-2026-09-28.md,
+  git-hash e46151b); o gate nao foi alterado.
+  O caso simetrico (conteudo mudado e depois revertido -> falso-verde?) nao foi medido.
+impact: |
+  Falso-vermelho do debt gate em merges que tocam a historia do ficheiro sem lhe mudar o
+  conteudo; obriga a re-medir evidencia valida.
+mitigation_now: |
+  Re-medir a evidencia sobre um commit posterior (como no PR #7).
+required_fix: |
+  Por decidir; candidata: comparar conteudo (`git diff --quiet <hash> HEAD -- <ficheiros>`).
+  Coordenar com o TD-026 (mesma funcao).
+falsification_required: |
+  Merge sem mudanca de conteudo -> OK; mudanca real no ficheiro -> Critical stale.
+review_by: 2026-10-12
+```
