@@ -815,10 +815,11 @@ compilação. Se for preciso paralelizar, é o primeiro candidato.
    `GET /api/dropped`, ADR-0026 §13-bis; `445d296`), **#12** (audit_gate mostra open/wontfix;
    `207c87f`) e **#7** (TD-022 closed; `6ac22ff`). **#10** fechado sem merge (controlo negativo).
    CI da `main` em `6ac22ff`: debt gate `13 OK · 5 open · 2 wontfix`, exit 0.
-3. Registar **TD-023..026** no ledger a partir da `main` atualizada (rascunho já decidido:
-   no_alloc do `led-hal` com contador global; `speed_factor` com relógio de parede; hook sobre
-   o worktree; `audit_gate` ignora o returncode do `git log`). O TD-027 (Miri do `audio-core`
-   no e2e) continua sem evidência.
+3. **TD-023..028** registados no ledger neste PR, com as severidades decididas a 2026-09-29
+   (no_alloc do `led-hal` com contador global; `speed_factor` com relógio de parede; hook sobre
+   o worktree; `audit_gate` ignora o returncode do `git log`; Miri do `audio-core` não exercido;
+   stale julgado por commit e não por conteúdo). O **TD-025** (High) entra como
+   `pending-verification`: a evidência existe, mas não num formato que o gate aceite.
 4. **M1** (PROTOCOL_V=2) — muda o protocolo IPC: exige autorização antes de começar.
 
 Em paralelo e desde já, na trilha humana: **6.0** (WLAN → cabo nos nós 2–5).
