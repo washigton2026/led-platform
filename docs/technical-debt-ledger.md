@@ -1459,16 +1459,16 @@ review_by: 2026-10-12
 td_id:     TD-025
 title:     "O hook de pre-commit corria o debt gate sobre o WORKTREE: validava um estado que nao ia ser commitado, e nao via o commit que torna uma evidencia stale"
 severity:  High
-status:    pending-verification
+status:    closed
+closed_on: 2026-10-01
+closed_by: "eb791fe (correcao, PR #11) + 7ee2f89 (o teste passa a emitir «test_pre_commit_hook: N passed; M failed» dos contadores reais). Re-medido sobre 7ee2f89: 4 passed; 0 failed, exit 0."
+evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-01.md
+required_test: test_pre_commit_hook
 origin:    "Descrito na mensagem de eb791fe: D1 — o gate lia o ledger do worktree (indice 19 TD / worktree 20 -> «20 OK»); D2 — o stale usava git log <hash>..HEAD, cego as alteracoes em stage (o commit C4, 320ff94, passou o hook)."
-pending_gate: |
-  A evidencia existe mas nao esta num formato que o gate aceite. tests/test_pre_commit_hook.sh:82
-  imprime «cenarios: passou=N falhou=M», que nao casa com o regex de scripts/audit_gate.py:84-85
-  exigido para `closed` (:181-245). Para fechar: o teste passa a emitir uma linha no formato do
-  gate, calculada a partir dos contadores reais; depois re-medir e criar docs/evidence/td-025-*.md
-  dentro do repo, num PR separado.
 source_files: scripts/pre-commit-hook.sh
 context: |
+  Ate 2026-10-01 estava pending-verification: a evidencia de 2026-09-29 so tinha a linha
+  «cenarios: passou=N falhou=M», que o regex de scripts/audit_gate.py:84 nao aceita.
   Correcao: PR #11 (eb791fe), mergeado na main em 0f7857e (2026-09-29): o indice vira um commit
   candidato num worktree temporario e o gate corre la.
   Medido 2026-09-29 com tests/test_pre_commit_hook.sh em origin/main 445d296 (os dois ficheiros
@@ -1480,10 +1480,11 @@ context: |
   Hoje o gate so aceita evidencia no formato do `cargo test` («N passed; 0 failed» ou
   «test result: ok. N passed»).
 negative_control: |
-  O mesmo teste contra o hook antigo (57cf21d): S1 FAIL, S2 FAIL, S3 FAIL, S4 PASS,
-  «cenarios: passou=1 falhou=3», exit 1
-  (~/lumyx-evidence/2026-09-29/td025-hook-test-antigo-57cf21d.txt).
-review_by: 2026-10-12
+  O mesmo teste contra o hook antigo (57cf21d), re-medido sobre 7ee2f89: S1 FAIL, S2 FAIL,
+  S3 FAIL, S4 PASS, «test_pre_commit_hook: 1 passed; 3 failed», exit 1. Com essa saida como
+  unica evidencia (TD-025 closed num clone temporario) o audit_gate sai com exit 1:
+  «CRITICAL TD-025: evidence_ref contains no 'N passed; 0 failed' line at all».
+  Ambos em docs/evidence/td-025-hook-julga-o-indice-2026-10-01.md, secs. 2 e 3.
 ```
 
 ---
