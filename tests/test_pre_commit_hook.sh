@@ -80,4 +80,7 @@ if [ $ec -eq 0 ] && git show --name-only --format= HEAD | grep -qx 'docs/_teste_
 else nok "S4 commit limpo: exit $ec / conteúdo ou índice errado"; cat "$T/out"; fi
 
 echo "cenarios: passou=$passou falhou=$falhou"
+# A mesma contagem no formato que o scripts/audit_gate.py aceita como evidência de `closed`
+# («N passed; M failed»). Calculada dos contadores reais: com M>0 o gate não a aceita.
+echo "test_pre_commit_hook: $passou passed; $falhou failed"
 [ $falhou -eq 0 ] && [ $passou -eq 4 ]
