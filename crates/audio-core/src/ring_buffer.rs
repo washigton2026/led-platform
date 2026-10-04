@@ -62,7 +62,7 @@ impl RingBuffer {
     /// advances the read cursor, returning `true`. Otherwise leaves the buffer untouched
     /// and returns `false`.
     pub fn pop_exact(&self, out: &mut [f32]) -> bool {
-        let w = self.write.load(Ordering::Acquire);
+        let w = self.write.load(Ordering::Relaxed);
         let r = self.read.load(Ordering::Relaxed);
         if w.wrapping_sub(r) < out.len() {
             return false;
