@@ -159,8 +159,9 @@ jobs:
   # buffer"*. Uma regressão ali é UB em produção, não um lint — e `cargo test` não a vê.
   # Antes deste job, a cobertura vivia só no `~/lumyx-e2e.sh --miri`, opt-in e fora do repo.
   #
-  # `led-triple` tem ZERO dependências (`cargo tree -p led-triple` é uma linha), por isso
-  # este job não precisa do `libasound2-dev` que o job `test` instala no Linux.
+  # `led-triple` tem ZERO dependências (`cargo tree -p led-triple` é uma linha), mas o passo
+  # do TD-027 corre o `audio-core`, que puxa `cpal` → `alsa-sys`: sem `libasound2-dev` a
+  # listagem falha no build script (medido no 1.º run do PR #17, exit 101 — falhou fechado).
   miri:
     name: miri (led-triple)
     runs-on: ubuntu-latest
@@ -189,6 +190,8 @@ jobs:
       # toolchain; lê-los do log é mais forte do que confiar no que o YAML pediu.
       - name: Toolchain efetivo (evidência, não suposição)
         run: rustc --version && cargo miri --version
+      - name: Deps de áudio (cpal → ALSA) para o passo do audio-core
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Miri — led-triple
         # `bash {0}` (sem -e), pela mesma razão do job `test`: o default do GitHub é
         # `bash -eo pipefail`, que mata o step no pipeline e leva o diagnóstico com ele.
