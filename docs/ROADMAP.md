@@ -611,13 +611,13 @@ passo, com o seu «sim». **Nenhum marco antes do M6 se declara «pronto para sh
 |---|---|---|---|
 | 0.1 | ✅ **Publicar os 4 commits** (`ce959a7…320ff94`). **Feito** — `git ls-remote` == `320ff94` (2026-09-26). | 🟠 | `git ls-remote` == HEAD local |
 | 0.2 | ✅ **Ler o run da CI no log** — run `36226221020` (PR #6): ubuntu **105 · 1131/0/9**, macOS **105 · 1135/0/9**, clippy **correu** nos dois, miri **7/0/0**. Windows ❌ esperado (TD-021). | 🟢 | log lido job a job |
-| 0.3 | 🟡 **TD-022 — medido, fecho por mergear.** Sonda determinística em Linux (branch descartável `probe/td-022-linux`, run `36245228354`, lido no log): `kind=BrokenPipe raw_os_error=Some(32)`, **3/3**, recusa no buffer. Falsificações F1–F3 re-executadas (2026-09-26). Conjunto aceite **não** alargado. O ledger `closed` vive no **PR #7** (draft, por mergear). | 🟢 sonda · 🟠 ledger | PR #7 mergeado com a CI lida no log |
-| 0.3b | ✅ **Merge do PR #6** — feito (2026-09-26, `b86464b`, merge commit: hashes C1–C4 preservados). **Falta** ler a CI do merge na `main` no log. | 🟠 | CI do merge lida no log |
-| 0.4 | **TD candidato**: o hook de pre-commit valida o **worktree**, não o índice (deu «20 OK» com índice de 19 TD). Registar como TD e corrigir. | 🟢 | teste que falha com índice ≠ worktree |
-| 0.5 | **`show.gif`**: está trackeado **e** em `.gitignore` (`*.gif`) e é regenerado por `~/lumyx-e2e.sh`, logo aparece sempre como M. Decidir: `git rm --cached` ou fixar. | 🟣🟠 | worktree limpo após um e2e |
-| 0.6 | **TD-018** (sintaxe do universo no `--help` do daemon). *(O TD-017 passou para o M2.)* | 🟢 | `--help` mostra a sintaxe obrigatória |
-| 0.7 | **Deriva de doc** que restar em `CLAUDE.md`. **Não** reescrever o changelog histórico. | 🟠 | grep dos números contra medição |
-| 0.8 | **TD candidato**: `probe_linux()` (`led-hal/src/network_guard.rs:228`) — o bloqueio de WiFi (ADR-0005) no SO do show ao vivo, usado no pré-voo do daemon — tem **zero testes**; os 4 testes que só correm em macOS (1135 vs 1131) são do parser macOS. Registar como TD. | 🟢 | teste do `probe_linux` a correr no job ubuntu |
+| 0.3 | ✅ **TD-022 closed.** Sonda determinística em Linux (run `36245228354`, lido no log): `kind=BrokenPipe raw_os_error=Some(32)`, **3/3**. PR #7 mergeado (`6ac22ff`, 2026-09-29); `audit_gate` a 2026-10-04: `TD-022: closed — 1131 tests passed, negative_control present`. | 🟢 sonda · 🟠 ledger | PR #7 mergeado com a CI lida no log |
+| 0.3b | 🟡 **Merge do PR #6** — feito (2026-09-26, `b86464b`). O run da CI **do próprio `b86464b`** (`36230472855`, success) existe mas não tem evidência lida; a CI da `main` foi lida no log em commits posteriores que o contêm (`6ac22ff`, `00009ef`, `159c1c6` — run `37235593443`). *(A VI.6 dava 0.3b como feito; fica a distinção.)* | 🟠 | CI do merge lida no log |
+| 0.4 | ✅ **TD-025 closed** — o hook julga o índice. PR #16 mergeado (`159c1c6`, 2026-10-04); CI da `main` (run `37235593443`) lida no log: `TD-025: closed — 4 tests passed, negative_control present, required_test 'test_pre_commit_hook' found`. | 🟢 | teste que falha com índice ≠ worktree |
+| 0.5 | 🟡 **`show.gif`: decidido _restore_** (operador, 2026-10-04; cópia do modificado e sha256 das duas versões na evidência). O critério **não** se cumpre com _restore_: o `~/lumyx-e2e.sh` volta a regenerar o ficheiro, e o M reaparece no próximo e2e. | 🟣🟠 | worktree limpo após um e2e |
+| 0.6 | 🟡 **TD-018** — accept escrito (2026-10-04), à espera da aprovação do operador (área protegida: `led-daemon-bin`). *(O TD-017 passou para o M2.)* | 🟢 | `--help` mostra a sintaxe obrigatória |
+| 0.7 | 🟡 **Deriva de doc** — números vivos do `CLAUDE.md` medidos (1143 macOS · 1139 Linux · 13 TDs fechados) no PR #19 (draft). **Não** reescrever o changelog histórico. | 🟠 | grep dos números contra medição |
+| 0.8 | 🟡 **TD-029 (High)** — `probe_linux()` (`led-hal/src/network_guard.rs:229`) e o pré-voo falham aberto em três pontos (operstate ilegível; só `up` bloqueia; `ProbeUnavailable` → `network_ok=true`), e nenhum teste distingue o resultado. Registado no PR #20 (draft); correção = R5, à espera de aprovação. | 🟢 | teste do `probe_linux` a correr no job ubuntu |
 
 ### M1 — PROTOCOL_V = 2 *(pré-requisito do D6)*
 
@@ -820,6 +820,7 @@ compilação. Se for preciso paralelizar, é o primeiro candidato.
    o worktree; `audit_gate` ignora o returncode do `git log`; Miri do `audio-core` não exercido;
    stale julgado por commit e não por conteúdo). O **TD-025** (High) entra como
    `pending-verification`: a evidência existe, mas não num formato que o gate aceite.
+   *(2026-10-04: **TD-025 closed** — PR #16 mergeado, `159c1c6`; CI da `main` run `37235593443` lida no log.)*
 4. **M1** (PROTOCOL_V=2) — muda o protocolo IPC: exige autorização antes de começar.
 
 Em paralelo e desde já, na trilha humana: **6.0** (WLAN → cabo nos nós 2–5).
