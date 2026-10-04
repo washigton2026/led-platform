@@ -1587,3 +1587,53 @@ falsification_required: |
   Merge sem mudanca de conteudo -> OK; mudanca real no ficheiro -> Critical stale.
 review_by: 2026-10-12
 ```
+
+---
+
+## TD-029 — O bloqueio de WiFi no Linux falha aberto em tres pontos, e nenhum teste distingue o resultado
+
+```yaml
+td_id:     TD-029
+title:     "A guarda do ADR-0005 em Linux (`probe_linux`, led-hal/src/network_guard.rs:229) e o pre-voo do daemon deixam o show arrancar sem verificar o WiFi: operstate ilegivel ou nao-`up`, e qualquer `ProbeUnavailable`, contam como rede OK"
+severity:  High
+status:    open
+origin:    "ROADMAP 0.8 (candidato) e plano consolidado 0.H; recon e falsificacao (agente separado) a 2026-10-04, por leitura do codigo — nao executado em Linux real. Severidade High decidida pelo operador: guarda de seguranca fail-open."
+source_files: crates/led-hal/src/network_guard.rs, crates/led-daemon-bin/src/preflight.rs
+context: |
+  Tres pontos, todos medidos no codigo:
+  (1) `probe_linux` (:260) — `if let Ok(state) = fs::read_to_string(&operstate_path)`: uma interface sem fio cujo
+      operstate nao se le e IGNORADA; o resultado final e `Ok(())`, "sem WiFi".
+  (2) `probe_linux` (:261) — so bloqueia `state == "up"`. [INFERIDO, doc do kernel citada de memoria, por confirmar]
+      `dormant` (L1 activo a espera de 802.1X/WPA) e `unknown` (que o kernel manda tratar como capaz de dados)
+      tambem passam como "sem WiFi".
+  (3) `preflight.rs:151-156` — `Err(ProbeUnavailable)` → `network_ok: true` ("prosseguindo com aviso"). Por isso o
+      ramo que ja existe para `/sys/class/net` ausente ou `read_dir` falhado (network_guard.rs:234-244) tambem deixa
+      o show arrancar; e uma correccao que so devolva `ProbeUnavailable` em (1) NAO bloquearia nada.
+  E o journal escreve `network_checked: sem WiFi ativo` (preflight.rs:141) no caso (1) — afirma que verificou.
+  Cobertura: `rg probe_linux crates/` devolve so a definicao (:229) e a chamada (:128). O ramo Linux e EXECUTADO no
+  job ubuntu por `led-hal/src/hal.rs:234` (`hal_with_guard_wifi_block_does_not_panic`), que aceita qualquer resultado
+  — executado sem oraculo. A decisao de rede do pre-voo e testada so com guarda FALSA (`GuardaFalsa`, alvo
+  192.168.2.156); o `WifiBlockGuard` real nunca e chamado pelo pre-voo em teste (os E2E usam loopback e saem em
+  `todos_loopback()`, preflight.rs:120). E o teste `sonda_indisponivel_prossegue_mas_nunca_afirma_ter_verificado`
+  (preflight.rs:462-471) FIXA o defeito (3): afirma `ProbeUnavailable` → `network_ok true`.
+  Drift doc/codigo: network_guard.rs:107 diz `/sys/class/net/wl*/operstate`; o codigo deteta por `wireless/` ou
+  `phy80211/` (:251-252).
+impact: |
+  Um show em Linux pode arrancar sobre WiFi activo — o que o ADR-0005 proibe (jitter de 31 ms medido na bancada de
+  2026-07-20) — com o journal a dizer que a rede foi verificada. Nao observado em Linux real.
+mitigation_now: |
+  Nenhuma automatica. Em macOS o pre-voo usa `probe_macos`; o ponto (3) aplica-se a qualquer plataforma.
+required_fix: |
+  Decisao do operador (toca a politica do ADR-0005 e area protegida): fail-closed no PRE-VOO, nao so na sonda —
+  `ProbeUnavailable` com alvo de rede → `network_ok: false` com mensagem explicita; override so por flag explicita,
+  registada no journal. Na sonda: operstate ilegivel → `ProbeUnavailable`; estados nao-`down` de uma interface sem
+  fio (pelo menos `up`, `dormant`, `unknown`) → tratados como activos, a confirmar na doc do kernel. A decisao da sonda
+  extraida para uma funcao pura sobre uma raiz injectavel (`probe_linux_em(raiz: &Path)`). O teste
+  preflight.rs:462 tem de ser INVERTIDO (nao apagado) na mesma fatia, com o porque no commit. Accept aprovado antes.
+falsification_required: |
+  Sonda, com sysfs falso em tempdir: wlan0 `up`, `dormant`, `unknown` → activo; `down` → inactivo; sem `wireless/` →
+  ignorada; operstate ilegivel → ProbeUnavailable (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
+  guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
+  override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
+review_by: 2026-10-31
+```
