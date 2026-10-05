@@ -1,0 +1,40 @@
+# Tripwire KB-012 (tests/test_gate_scripts.sh): linhas de código que olham para o resumo do libtest
+# sem fixar o N no próprio padrão — aceitam «ok. 0 passed». Formato: <ficheiro><TAB><linha sem indentação>.
+# Cada linha de gate é um TD-DRAFT (~/lumyx-evidence/2026-10-04/o5-w1/TD-DRAFT-KB012-gates.md).
+# Corrigir uma linha obriga a tirá-la daqui no mesmo commit; uma linha nova reprova.
+# scripts/baseline_watch.sh: contagem informativa; o veredito ali é o exit do cargo (KB-013).
+scripts/baseline_watch.sh	else echo ">>> verde ($(grep -c 'test result: ok' "$out") suites ok)"; fi
+scripts/gates/lumyx-e2e.sh	if cargo test -p audio-core --lib harmonic_gating 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p audio-core --test no_alloc 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p drone-trajectory --lib nan 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p integration-tests -- cluster_survives_chaotic_network_on_one_node 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p integration-tests -- failover_continues_when_one_node_fails 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p integration-tests -- hot_join_node_receives_frames_after_joining 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p integration-tests -- two_nodes_clock_within_drift_budget 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p integration-tests -- two_nodes_receive_identical_frame_count 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal -- chaos::tests::baseline_no_faults_all_frames_reach_device 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal -- chaos::tests::packet_loss_50pct_drops_approximately_half 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal -- chaos::tests::same_seed_same_drop_pattern 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal -- chaos::tests::system_survives_50pct_packet_loss_and_recovers 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal --lib heartbeat_resends 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal --lib network_guard 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal --test bench_latency -- hal_latency_scales_linearly_to_10k_pixels 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal --test bench_latency -- hal_send_frame_latency_within_budget 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal --test no_alloc 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-hal prometheus 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-layout rig 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-protocols artnet 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-show-recorder -- replay::tests::distributed_replay_1000_frames_no_divergence 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if cargo test -p led-show-recorder signing 2>&1 | grep -q "test result: ok"; then
+scripts/gates/lumyx-e2e.sh	if echo "$p13_out" | grep -q "test result: ok" && ! echo "$p13_out" | grep -q "FAILED"; then
+scripts/gates/lumyx-e2e.sh	if echo "$p13b_out" | grep -q "test result: ok" && ! echo "$p13b_out" | grep -q "FAILED"; then
+scripts/lumyx_guardian.sh	if cargo test -q -p integration-tests --test determinism_vector 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_guardian.sh	if cargo test -q -p led-hal --test bench_latency 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_guardian.sh	if cargo test -q -p led-show-recorder replay:: 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_guardian.sh	if cargo test -q -p led-show-recorder signing 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_red_team.sh	if cargo test -q -p led-hal shared_clock::tests::clock_backwards_correction_mid_show_stays_monotonic 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_red_team.sh	if cargo test -q -p led-show-recorder signing::tests::pinned_verify_rejects_resigned_tamper 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_red_team.sh	if cargo test -q -p led-show-recorder signing::tests::redteam_resigned_tamper_defeats_unpinned_verify 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_red_team.sh	if cargo test -q -p led-xlights 2>&1 | grep -q "test result: ok"; then
+scripts/lumyx_validator.sh	if echo "$e_out" | grep -q "test result: ok"; then
+scripts/lumyx_validator.sh	if echo "$f_out" | grep -q "test result: ok"; then
