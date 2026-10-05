@@ -10,6 +10,10 @@
 #   toolchain (drift já observado com rust-1.96.0) — isso é sinal real, não falso-vermelho.
 # - EXCEPÇÃO ao ponto acima: o job `miri` pina o nightly. Ali o drift NÃO é sinal — é ruído
 #   sobre um gate de segurança de memória, e um gate ruidoso é um gate ignorado.
+# - Imagem Linux FIXADA em `ubuntu-24.04`: o `ubuntu-latest` migra para 26.04 entre 2026-10-19
+#   e 2026-11-19 (changelog GitHub 2026-09-17). Mudar de SO tem de ser uma decisão com a CI lida,
+#   não um efeito colateral — ver TD-DRAFT da migração para Ubuntu 26.
+# - `actions/checkout@v7`: corre em Node 24 (a v4 corria em Node 20).
 name: CI
 
 on:
@@ -28,9 +32,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -83,9 +87,9 @@ jobs:
   # de um segundo toolchain, senão a suíte falha em máquinas que só têm Rust.
   contract:
     name: contrato TS (tsc --noEmit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Node 22 (LTS) explícito
         uses: actions/setup-node@v4
         with:
@@ -129,9 +133,9 @@ jobs:
   # não existe, o `git log` falha, o stdout vem vazio e o stale passa a VERDE em silêncio.
   debt-gate:
     name: debt gate (audit_gate.py)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: audit_gate.py (exit lido sem pipe — KB-013)
@@ -164,9 +168,9 @@ jobs:
   # listagem falha no build script (medido no 1.º run do PR #17, exit 101 — falhou fechado).
   miri:
     name: miri (led-triple)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Nightly PINADO, e não `@nightly`. CORRECÇÃO (run #82): a versão anterior deste
       # comentário dizia que o pino era "o toolchain exacto que produziu a evidência local".
       # Era FALSO — o canal datado `nightly-2026-06-02` empacota o master de 2026-06-01
@@ -339,7 +343,7 @@ jobs:
     runs-on: windows-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
         with:
