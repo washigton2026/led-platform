@@ -15,7 +15,7 @@ data: 2026-10-05
 # Corroborada pela run seguinte da main (37268800503, 79e52e2): mesmo resultado, 5/5.
 # Toolchain (linha do log):
 miri (led-triple)	UNKNOWN STEP	2026-10-05T05:39:28.5850186Z   nightly-2026-06-02-x86_64-unknown-linux-gnu installed - rustc 1.98.0-nightly (6bdf43094 2026-06-01)
-# Saída do passo audio-core — linhas tal como `gh run view 37268736600 --log --job 111631004086` as devolve:
+# Saída do passo audio-core — linhas de `gh run view 37268736600 --log --job 111631004086`, com os códigos ANSI removidos e as linhas em branco omitidas:
 miri (led-triple)	UNKNOWN STEP	2026-10-05T05:41:30.5654501Z      Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/audio_core-8c1b6e07d1ec0bcc)
 miri (led-triple)	UNKNOWN STEP	2026-10-05T05:41:30.5655090Z running 5 tests
 miri (led-triple)	UNKNOWN STEP	2026-10-05T05:41:30.5655576Z test ring_buffer::tests::pop_exact_returns_false_without_consuming_when_short ... ok
