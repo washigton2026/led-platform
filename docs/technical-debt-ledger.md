@@ -1392,32 +1392,55 @@ review_by: 2026-10-07
 
 ---
 
-## TD-023 — O gate de alocacao do `led-hal` conta as alocacoes de todas as threads
+## TD-023 — Os gates de alocacao contam as alocacoes de todas as threads (led-hal, led-sequencer, audio-core, led-pixel-engine)
 
 ```yaml
 td_id:     TD-023
-title:     "`led-hal/tests/no_alloc.rs` usa um contador GLOBAL: alocacoes do libtest noutras threads entram na janela e o gate reprova sem o hot-path ter alocado"
+title:     "Os gates `tests/no_alloc.rs` do led-hal, led-sequencer, audio-core e led-pixel-engine usam um contador GLOBAL: alocacoes do libtest noutras threads entram na janela e o gate reprova sem o caminho quente ter alocado"
 severity:  Medium
 status:    open
-origin:    "PR #8, run 36245590122 tentativa 2 (job macOS 108673138958, SHA 57cf21d, so docs): «calibrated hot path allocated 7 time(s) over 10000 frames»."
-required_test: zero_allocations_on_hot_path_with_calibration
-source_files: crates/led-hal/tests/no_alloc.rs
+origin:    "PR #8, run 36245590122 tentativa 2 (job macOS 108673138958, SHA 57cf21d, so docs): «calibrated hot path allocated 7 time(s) over 10000 frames». Mesma classe no led-sequencer: PR #20, run 37236057484, job 111535264226 (diff = so o ledger): «timeline render allocated 2 time(s) over 10000 frames» (180 vs 182). led-hal de novo no PR #17 (232 vs 237)."
+required_test: ruido_de_fundo_noutra_thread_nao_reprova
+source_files: crates/led-hal/tests/no_alloc.rs, crates/led-sequencer/tests/no_alloc.rs, crates/audio-core/tests/no_alloc.rs, crates/led-pixel-engine/tests/no_alloc.rs
 context: |
-  crates/led-hal/tests/no_alloc.rs:10 — `static ALLOCS: AtomicUsize`, incrementado pelo
-  alocador em QUALQUER thread. :37 — `ALLOC_GATE` so serializa os corpos dos dois testes do
-  ficheiro; nao exclui as threads do libtest. :35 ja regista «7 phantom allocations that
-  vanished when run alone». Assercao em :90-94.
+  Os quatro ficheiros tinham `static ALLOCS: AtomicUsize` incrementado pelo alocador em
+  QUALQUER thread (led-hal :10, led-sequencer :12, audio-core :13, led-pixel-engine :17 em
+  79e52e2). `ALLOC_GATE` (led-hal :37, led-pixel-engine :44) so serializa os corpos dos testes
+  do ficheiro; nao exclui as threads do libtest. O led-sequencer reprovou com UM so #[test] no
+  binario: a contaminacao nao vem de testes vizinhos, logo nenhum Mutex a resolve.
+  Consolida o TD-DRAFT-no-alloc-contador-global (2026-10-04), que nao entrou no ledger.
+  O led-protocols ja atribui por thread desde a F7.2 (950a497) e e a referencia.
+  Tambem com contador global (janela `MEDINDO`), sem flake observado, FORA deste TD por
+  ordem do operador: led-daemon-bin/tests/custo_do_fanout.rs:69 e no_alloc_canal.rs:66.
+  led-daemon-bin/tests/ipc_line_limit.rs mede memoria viva de OUTRA thread: nao e desta classe.
 impact: |
-  Falso-vermelho intermitente no job bloqueante `test (macos-latest)`. Nao gera falso-verde:
-  um contador que soma todas as threads nunca conta menos do que a thread do teste alocou.
+  Falso-vermelho intermitente no job bloqueante `test (macos-latest)`. O contador antigo nao gera
+  falso-verde: um contador que soma todas as threads nunca conta menos do que a thread do teste
+  alocou. O contador por thread tem um limite proprio: ver LIMITE em required_fix.
 mitigation_now: |
-  Nenhuma automatica; re-run.
+  Nenhuma automatica; re-run (1 por falha, regra de repeticao de jobs do Gauntlet).
 required_fix: |
-  Candidata, nao implementada: atribuir por thread, como a F7.2 fez em
-  crates/led-protocols/tests/no_alloc.rs:64-95 (`E_A_THREAD_DO_TESTE`, `FORA_DA_THREAD`).
+  Atribuir por thread, como a F7.2 fez em crates/led-protocols/tests/no_alloc.rs
+  (`E_A_THREAD_DO_TESTE`, `FORA_DA_THREAD`, janela `MEDINDO`), replicado nos quatro ficheiros
+  (um #[global_allocator] nao se partilha entre binarios; nao ha crate de utilitarios de teste).
+  Correcao proposta no ramo fix/td-023-contador-por-thread (R3.4, 2026-10-05).
+  LIMITE (aceite, como na F7.2): o gate passa a provar «zero alocacoes NA THREAD QUE EXECUTA o
+  caminho quente». Uma alocacao por frame delegada num worker persistente deixa de ser vista
+  (falsificador R3.4, ataque b2: verde; com o contador global: «9921 time(s)»). Um spawn por
+  frame continua a ser visto (o proprio spawn aloca na thread chamadora). Hoje nenhum caminho
+  medido delega noutra thread: FORA_DA_THREAD = 0 em todas as janelas dos gates principais
+  (medido em macOS; Linux = CI do PR).
   PROIBIDO: alargar a tolerancia, #[ignore], correr o teste isolado na CI.
 falsification_required: |
-  Alocacao injetada no hot-path -> vermelho no gate real; revertida -> verde sob carga.
+  Por ficheiro: (1) `ruido_de_fundo_noutra_thread_nao_reprova_*` — thread de fundo a alocar
+  em ciclo; a janela so fecha depois de >= 1000 alocacoes dela la dentro; exige contador
+  global >= 1000 E por thread == 0. Mutar `registar` para devolver sempre true (= contador
+  global) -> vermelho. (2) `o_contador_ainda_ve_o_que_e_alocado_na_thread_do_teste` (alloc,
+  alloc_zeroed e realloc, uma assercao cada) — mutar para devolver sempre false -> vermelho.
+  (3) Alocacao injetada no caminho quente -> vermelho.
+  Ao fechar: o rename/remocao destes testes nao fica vermelho em nenhum gate (o e2e Inv3/C3 aceita
+  0 testes; required_test e substring e o audit_gate so o verifica com o TD `closed`) — fixar N
+  por binario e os nomes completos na evidencia.
 review_by: 2026-10-12
 ```
 
