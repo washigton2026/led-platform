@@ -159,8 +159,9 @@ jobs:
   # buffer"*. Uma regressão ali é UB em produção, não um lint — e `cargo test` não a vê.
   # Antes deste job, a cobertura vivia só no `~/lumyx-e2e.sh --miri`, opt-in e fora do repo.
   #
-  # `led-triple` tem ZERO dependências (`cargo tree -p led-triple` é uma linha), por isso
-  # este job não precisa do `libasound2-dev` que o job `test` instala no Linux.
+  # `led-triple` tem ZERO dependências (`cargo tree -p led-triple` é uma linha), mas o passo
+  # do TD-027 corre o `audio-core`, que puxa `cpal` → `alsa-sys`: sem `libasound2-dev` a
+  # listagem falha no build script (medido no 1.º run do PR #17, exit 101 — falhou fechado).
   miri:
     name: miri (led-triple)
     runs-on: ubuntu-latest
@@ -189,6 +190,8 @@ jobs:
       # toolchain; lê-los do log é mais forte do que confiar no que o YAML pediu.
       - name: Toolchain efetivo (evidência, não suposição)
         run: rustc --version && cargo miri --version
+      - name: Deps de áudio (cpal → ALSA) para o passo do audio-core
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Miri — led-triple
         # `bash {0}` (sem -e), pela mesma razão do job `test`: o default do GitHub é
         # `bash -eo pipefail`, que mata o step no pipeline e leva o diagnóstico com ele.
@@ -223,6 +226,112 @@ jobs:
           fi
           echo "miri: ${passed} testes executados, exit ${code}"
           exit $code
+      - name: Miri — audio-core (ring buffer SPSC, TD-027)
+        # As 3 construções `unsafe` do `audio-core` vivem em `ring_buffer.rs` (:24, :55, :75).
+        # O crate inteiro sob Miri não cabe num job (>56 min medidos a 2026-10-03); o módulo
+        # cabe (~22 s locais). Um filtro reabre o falso-verde do KB-012, portanto:
+        #   - N_esperado vem de `-- --list` com o MESMO toolchain e filtro (não de grep na fonte,
+        #     que erra com `#[ignore]`, macros e módulos homónimos);
+        #   - N_executado vem do resumo do Miri, em ficheiro (KB-013);
+        #   - exige N_executado == N_esperado e N_esperado >= 5 (o valor medido): o piso apanha
+        #     o módulo renomeado ou testes removidos, que a igualdade sozinha deixaria passar;
+        #   - `#[ignore]` no módulo reprova: ninguém retira cobertura em silêncio.
+        shell: bash
+        run: |
+          set -euo pipefail
+          MOD=crates/audio-core/src/ring_buffer.rs
+          FILTRO='ring_buffer::tests::'
+          PISO=5
+          # Resultados fora da árvore: num checkout local não sujam o repo nem entram num `git add`.
+          OUT="${RUNNER_TEMP:-$(mktemp -d)}"
+          if grep -nE '#\[ignore|cfg_attr\(.*miri.*ignore' "$MOD"; then
+            echo "::error::$MOD tem testes ignorados — o gate do TD-027 não aceita cobertura retirada em silêncio."
+            exit 1
+          fi
+          # Saltar o corpo sob Miri (`if cfg!(miri) { return; }`, `#[cfg(not(miri))]`, iters=0, ou um
+          # `const` com `cfg!(miri)` noutro ficheiro do crate) tira a cobertura sem `#[ignore]` e sem
+          # mudar a contagem — falsificado (X8b, Y5a, Y5b). Regra: em TODO o crate (src, tests,
+          # build.rs, Cargo.toml), sem distinguir maiúsculas, a única linha de código que menciona
+          # miri é a que reduz o trabalho do teste SPSC — comparada pela linha INTEIRA, não por
+          # substring. Comentários `//` não executam e ficam de fora.
+          # Configuração de fora do crate manda no próprio Miri: um `.cargo/config*` com `[env]
+          # MIRIFLAGS="-Zmiri-disable-data-race-detector"` deu verde sobre um data race real (W4).
+          # O passo fixa o ambiente e recusa configuração que o possa sobrepor.
+          export MIRIFLAGS=""
+          cfgs=$(find . "${CARGO_HOME:-$HOME/.cargo}" -maxdepth 3 -path ./target -prune -o \
+                   \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' -o -name config -path "${CARGO_HOME:-$HOME/.cargo}/*" -o -name config.toml -path "${CARGO_HOME:-$HOME/.cargo}/*" \) -print 2>/dev/null || true)
+          for c in $cfgs; do
+            if grep -nE '^\s*\[env\]|rustflags|MIRIFLAGS|RUSTFLAGS' "$c"; then
+              echo "::error::$c pode alterar o Miri (env/rustflags) — o gate do TD-027 recusa correr sob configuração externa."
+              exit 1
+            fi
+          done
+          echo "ambiente efetivo: MIRIFLAGS='${MIRIFLAGS}' RUSTFLAGS='${RUSTFLAGS:-}' CARGO_ENCODED_RUSTFLAGS='${CARGO_ENCODED_RUSTFLAGS:-}'"
+          if [ -n "${RUSTFLAGS:-}${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+            echo "::error::RUSTFLAGS definido — o gate do TD-027 corre sem flags externas."
+            exit 1
+          fi
+          CRATE=crates/audio-core
+          [ -d "$CRATE" ] || { echo "::error::$CRATE não existe — a guarda seria vácua."; exit 1; }
+          ALLOW='        let iters: u64 = if cfg!(miri) { 200 } else { 20_000 };'
+          # Sem `-I`: um NUL faria o grep tratar o ficheiro como binário e saltá-lo (Z5a').
+          mencoes=$(grep -rnia 'miri' "$CRATE" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+          outras=$(printf '%s\n' "$mencoes" | awk -v f="$MOD" -v a="$ALLOW" 'NF { ln=$0; split(ln, p, ":");
+                     sub(/^[^:]*:[^:]*:/, "", ln); if (!(p[1] == f && ln == a)) print $0 }')
+          if [ -n "$outras" ]; then
+            echo "$outras"
+            echo "::error::$CRATE menciona miri fora da linha permitida — o gate do TD-027 não aceita código condicionado ao Miri."
+            exit 1
+          fi
+          # A linha permitida tem de existir: a sua ausência é sinal de que o ficheiro deixou de ser lido.
+          if ! printf '%s\n' "$mencoes" | awk -v f="$MOD" -v a="$ALLOW" '{ ln=$0; split(ln, p, ":");
+                 sub(/^[^:]*:[^:]*:/, "", ln); if (p[1] == f && ln == a) ok=1 } END { exit !ok }'; then
+            echo "::error::a linha permitida não foi encontrada em $MOD — a guarda deixou de ver o ficheiro."
+            exit 1
+          fi
+          # Código trazido de fora do crate escapa à guarda por texto (Z5c).
+          if grep -rnaE 'include!\(|#\[path' "$CRATE"; then
+            echo "::error::$CRATE usa include!/#[path] — código de fora do crate escaparia à guarda do TD-027."
+            exit 1
+          fi
+
+          set +e
+          cargo +nightly-2026-06-02 miri test -p audio-core --locked --lib "$FILTRO" -- --list > "$OUT/miri-list.txt" 2>&1
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then cat "$OUT/miri-list.txt"; echo "::error::listagem falhou (exit $code)"; exit "$code"; fi
+          esperado=$(grep -c ': test$' "$OUT/miri-list.txt" || true)
+
+          set +e
+          cargo +nightly-2026-06-02 miri test -p audio-core --locked --lib "$FILTRO" > "$OUT/miri-audio-core.txt" 2>&1
+          code=$?
+          set -e
+          cat "$OUT/miri-audio-core.txt"
+          if [ "$code" -ne 0 ]; then
+            # Só diagnóstico: o veredito já é o `exit "$code"` abaixo, e o pipefail não pode trocá-lo por 141.
+            set +o pipefail
+            grep -aoE 'Undefined Behavior: [^\n]+' "$OUT/miri-audio-core.txt" | head -5 | \
+              while IFS= read -r ub; do printf '::error::%s\n' "$ub"; done
+            exit "$code"
+          fi
+          executado=$(grep -aoE 'test result: ok\. [0-9]+ passed' "$OUT/miri-audio-core.txt" \
+                      | grep -aoE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+
+          if [ "$esperado" -lt "$PISO" ]; then
+            echo "::error::Miri audio-core: ${esperado} testes listados, piso ${PISO} (KB-012)."
+            exit 1
+          fi
+          if [ "$executado" -ne "$esperado" ]; then
+            echo "::error::Miri audio-core: ${executado} executados, ${esperado} esperados (KB-012)."
+            exit 1
+          fi
+          # O único teste com duas threads é o que exercita o `unsafe impl Sync` e a ordem
+          # Release/Acquire; tem de constar como executado, pelo nome.
+          if ! grep -q 'ring_buffer::tests::spsc_stress_no_loss_or_reorder_under_threads \.\.\. ok' "$OUT/miri-audio-core.txt"; then
+            echo "::error::o teste SPSC com threads não executou sob Miri."
+            exit 1
+          fi
+          echo "miri audio-core: ${executado}/${esperado} testes (piso ${PISO}), exit ${code}"
 
   # ── Não-bloqueante: Windows é suportado, mas não conduz o design ─────────────
   windows:
