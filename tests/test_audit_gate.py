@@ -453,6 +453,104 @@ def test_r41_td026_clone_raso_igual_a_completo():
 
 
 
+
+# ── R4.1 (falsificador): mutantes que sobreviviam com o pin regenerado ────────────
+
+def _req(ev: str) -> int:
+    return _gate(_workspace(ev))[0]
+
+
+def test_r41_neg_ok_com_real_failed_e_vermelho():
+    """HIGH-1: o `... ok` do controlo NEGATIVO (contra o código antigo) nunca prova o teste."""
+    ev = ("{PIN}\ntest t::alvo_passa ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n"
+          "NEG: test t::alvo_passa ... ok\nNEG: test result: ok. 5 passed; 0 failed\n")
+    assert _req(ev) == 1, "linha NEG não pode contar como teste que passou"
+    print("✅ test_r41_neg_ok_com_real_failed_e_vermelho: PASS")
+
+
+def test_r41_so_prefixo_de_log_ci_e_aceite():
+    base = "{PIN}\ntest result: ok. 3 passed; 0 failed\n"
+    for linha in ["nota # test t::alvo_passa ... ok", "> test t::alvo_passa ... ok",
+                  "o output dizia test t::alvo_passa ... ok", "<!-- test t::alvo_passa ... ok -->",
+                  "<!--\ntest t::alvo_passa ... ok\n-->", "    # test t::alvo_passa ... ok",
+                  "test t::alvo_passa ... ok extra"]:
+        assert _req(base + linha + "\n") == 1, f"aceitou como resultado: {linha!r}"
+    for linha in ["test t::alvo_passa ... ok", "   test alvo_passa ... ok",
+                  "job x\tSTEP y\t2026-10-05T05:41:30.565Z test t::alvo_passa ... ok"]:
+        assert _req(base + linha + "\n") == 0, f"recusou um resultado legítimo: {linha!r}"
+    print("✅ test_r41_so_prefixo_de_log_ci_e_aceite: PASS")
+
+
+def test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario():
+    """Mata M1 (harness lê comentários), M2 (N>=0) e M15 (aceita M failed > 0)."""
+    resumo = "test result: ok. 9 passed; 0 failed\n"  # N>0 global: o harness tem de ser julgado sozinho
+    assert _req("{PIN}\n" + resumo + "alvo_passa: 0 passed; 0 failed\n") == 1, "M2: N=0 no harness"
+    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 1 failed\n") == 1, "M15: harness com falhas"
+    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 10 failed\n") == 1, "M15: 10 failed"
+    assert _req("{PIN}\n" + resumo + "# alvo_passa: 4 passed; 0 failed\n") == 1, "M1: comentado"
+    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 0 failed\n") == 0
+    print("✅ test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario: PASS")
+
+
+def test_r41_nome_com_metacaracteres_e_literal():
+    """Mata M5 (sem re.escape): `a.b` não pode casar com `aXb`."""
+    ev = "{PIN}\ntest t::aXb ... ok\ntest result: ok. 1 passed; 0 failed\n"
+    assert _gate(_workspace(ev, required_test='a.b'))[0] == 1
+    ev = "{PIN}\ntest t::a.b ... ok\ntest result: ok. 1 passed; 0 failed\n"
+    assert _gate(_workspace(ev, required_test='a.b'))[0] == 0
+    print("✅ test_r41_nome_com_metacaracteres_e_literal: PASS")
+
+
+def test_r41_vigiado_ilegivel_ou_diretorio_e_critical():
+    """Mata M3/M4: PermissionError e IsADirectoryError nunca são «inalterado»."""
+    import os
+    ws = _workspace(EV_OK)
+    f = ws / 'src/alvo.rs'
+    if os.geteuid() != 0:          # root lê ficheiros 000 — aí não há erro a provar
+        os.chmod(f, 0)
+        try:
+            rc, crit = _gate(ws)
+        finally:
+            os.chmod(f, 0o644)
+        assert rc == 1 and any('not verifiable' in c[2] for c in crit), crit
+    f.unlink(); f.mkdir()
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('not verifiable' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_ilegivel_ou_diretorio_e_critical: PASS")
+
+
+def test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado():
+    """Mata M8 (stale só sobre source_files): um `watched:` extra (ex.: ci.yml) também conta."""
+    ws = _workspace(EV_OK)
+    extra = ws / 'ci.yml'
+    extra.write_text('a\n')
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text() + f"watched: ci.yml sha256:{_sha(extra)}\n")
+    assert _gate(ws)[0] == 0
+    extra.write_text('b\n')
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('ci.yml' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado: PASS")
+
+
+def test_r41_pins_nao_confiaveis_sao_critical():
+    """`watched:` comentado não fixa; duplicado, absoluto ou com `..` → Critical."""
+    rc, crit = _gate(_workspace("# {PIN}\n" + EV_OK.replace("{PIN}\n", "")))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), "pin comentado não pode valer"
+    ws = _workspace(EV_OK)
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text() + "watched: src/alvo.rs sha256:" + "0" * 64 + "\n")
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('pinned 2x' in c[2] for c in crit), crit
+    for mau in ["/etc/hosts", "../fora.txt"]:
+        ws = _workspace(EV_OK)
+        ev = ws / 'docs/ev.md'
+        ev.write_text(ev.read_text() + f"watched: {mau} sha256:" + "0" * 64 + "\n")
+        rc, crit = _gate(ws)
+        assert rc == 1 and any('escapes the workspace' in c[2] for c in crit), (mau, crit)
+    print("✅ test_r41_pins_nao_confiaveis_sao_critical: PASS")
+
+
 TESTS = [
     test_extract_passed_count,
     test_evidence_git_hash,
@@ -476,6 +574,13 @@ TESTS = [
     test_r41_ci_yml_e_declaravel,
     test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde,
     test_r41_td026_clone_raso_igual_a_completo,
+    test_r41_neg_ok_com_real_failed_e_vermelho,
+    test_r41_so_prefixo_de_log_ci_e_aceite,
+    test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario,
+    test_r41_nome_com_metacaracteres_e_literal,
+    test_r41_vigiado_ilegivel_ou_diretorio_e_critical,
+    test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado,
+    test_r41_pins_nao_confiaveis_sao_critical,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 

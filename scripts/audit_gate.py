@@ -9,7 +9,13 @@ Enforces the closure schema for Technical Debt entries:
      `watched: <path> sha256:<hex>`. Every source_file of the TD must be pinned, and the
      evidence is stale iff the file's current content hashes differently (TD-028). No git
      is involved, so a shallow clone cannot turn the check green (TD-026); an unreadable or
-     missing watched file is Critical («not verifiable»), never «unchanged».
+     missing watched file is Critical («not verifiable»), never «unchanged». Only lines that
+     START with `watched:` pin; a path pinned twice or outside the workspace is Critical.
+     LIMITS (by design, declared): the gate proves that the evidence was regenerated for the
+     current content, NOT that the verification was re-run — editing only the sha passes.
+     And the gate watches itself: any change to scripts/audit_gate.py or
+     tests/test_audit_gate.py must regenerate the TD-026/TD-028 evidence in the same commit.
+     A closed TD without source_files is not watched at all.
   4. status=pending-verification is valid state; becomes Critical if review_by has passed.
   5. "0 passed" / "0 tests" in evidence is explicitly rejected (KB-012: Miri N=0 pattern).
   6. For TDs with required_test: the named test must appear in a STRUCTURED RESULT LINE
@@ -103,13 +109,31 @@ def evidence_git_hash(content: str) -> str | None:
     return m.group(1) if m else None
 
 
-_WATCHED_RE = re.compile(r'^[ \t]*#?[ \t]*watched:[ \t]*(\S+)[ \t]+sha256:([0-9a-f]{64})[ \t]*$',
-                         re.MULTILINE)
+_WATCHED_RE = re.compile(r'^watched:[ \t]*(\S+)[ \t]+sha256:([0-9a-f]{64})[ \t]*$', re.MULTILINE)
+_HTML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
+
+
+def _sem_comentarios_html(content: str) -> str:
+    return _HTML_COMMENT.sub('', content)
 
 
 def evidence_watched(content: str) -> dict[str, str]:
-    """`watched: <path> sha256:<hex>` lines of an evidence file → {path: sha256}."""
-    return {m.group(1): m.group(2) for m in _WATCHED_RE.finditer(content)}
+    """`watched: <path> sha256:<hex>` lines of an evidence file → {path: sha256}. Only lines
+    that START with `watched:` count — a commented or quoted line pins nothing."""
+    return {m.group(1): m.group(2) for m in _WATCHED_RE.finditer(_sem_comentarios_html(content))}
+
+
+def watched_problems(content: str) -> list[str]:
+    """Pins that cannot be trusted: the same path pinned twice (which one would win?), and paths
+    that escape the workspace (absolute or with `..`) — in the pre-commit those would read the
+    working tree instead of the index."""
+    vistos: dict[str, int] = {}
+    for m in _WATCHED_RE.finditer(_sem_comentarios_html(content)):
+        vistos[m.group(1)] = vistos.get(m.group(1), 0) + 1
+    probs = [f"{p} pinned {n}x" for p, n in vistos.items() if n > 1]
+    probs += [f"{p} escapes the workspace" for p in vistos
+              if p.startswith('/') or '..' in Path(p).parts]
+    return probs
 
 
 def sha256_of(workspace: Path, path: str) -> str:
@@ -131,13 +155,24 @@ def stale_by_content(workspace: Path, watched: dict[str, str]) -> tuple[list[str
     return changed, unverifiable
 
 
+# The only prefix a result line may carry: none, or the GitHub Actions log prefix that
+# `gh run view --log` adds (`job<TAB>step<TAB>timestamp `). Anything else — `NEG:`, `#`, `>`,
+# prose — means the line is ABOUT a result, not a result: a negative control's `... ok` against
+# the old code must never prove that the test passed against the new one.
+_PREFIXO_RESULTADO = r'(?:[ \t]*|[^\t\n]+\t[^\t\n]+\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t]+)'
+
+
 def required_test_passed(content: str, name: str) -> bool:
-    """True iff a NON-comment line reports `name` as passed, in a structured result line:
-    libtest `test [path::]name ... ok` (any log prefix allowed) or a harness summary
-    `name: N passed; 0 failed` with N > 0."""
+    """True iff a STRUCTURED result line reports `name` as passed: libtest
+    `test [path::]name ... ok`, or a harness summary `name: N passed; 0 failed` with N > 0.
+    The line may only carry the CI log prefix (see `_PREFIXO_RESULTADO`); HTML comments are
+    ignored."""
+    content = _sem_comentarios_html(content)
     n = re.escape(name)
-    libtest = re.compile(rf'^(?![ \t]*#).*\btest[ \t]+(?:\S+::)?{n}[ \t]+\.\.\.[ \t]+ok[ \t]*$', re.MULTILINE)
-    harness = re.compile(rf'^(?![ \t]*#)[ \t]*{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed', re.MULTILINE)
+    libtest = re.compile(rf'^{_PREFIXO_RESULTADO}test[ \t]+(?:\S+::)?{n}[ \t]+\.\.\.[ \t]+ok[ \t]*\r?$',
+                         re.MULTILINE)
+    harness = re.compile(rf'^{_PREFIXO_RESULTADO}{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed\b',
+                         re.MULTILINE)
     if libtest.search(content):
         return True
     return any(int(m.group(1)) > 0 for m in harness.finditer(content))
@@ -261,6 +296,10 @@ class Gate:
         source_files = td.get('source_files', '').strip()
         src_list = [s.strip() for s in source_files.split(',') if s.strip()]
         watched = evidence_watched(content)
+        problemas = watched_problems(content)
+        if problemas:
+            self.report(CRITICAL, td_id, f"untrustworthy watched: lines: {problemas}.")
+            return
         unpinned = [p for p in src_list if p not in watched]
         if unpinned:
             self.report(CRITICAL, td_id,
