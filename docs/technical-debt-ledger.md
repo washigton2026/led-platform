@@ -1520,7 +1520,7 @@ title:     "`files_changed_since` nao le o returncode do `git log`: num clone ra
 severity:  High
 status:    closed
 closed_on: 2026-10-06
-closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 30 passed; 0 failed (incl. as correcoes do falsificador: linhas NEG/prosa nao provam required_test; pins duplicados/fora do workspace sao Critical)."
+closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 35 passed; 0 failed (incl. 2 rondas do falsificador: so prefixo vazio ou de log CI real; nada depois do titulo de controlo negativo prova required_test; pins duplicados/absolutos/com ../por symlink sao Critical)."
 evidence_ref: docs/evidence/td-026-028-audit-gate-conteudo-2026-10-06.md
 required_test: test_r41_td026_clone_raso_igual_a_completo
 origin:    "Encontrado em 2026-09-26 ao desenhar o job debt gate (PR #9)."
@@ -1596,7 +1596,7 @@ title:     "`files_changed_since` usa `git log <hash>..HEAD -- <ficheiro>`: um m
 severity:  Medium
 status:    closed
 closed_on: 2026-10-06
-closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 30 passed; 0 failed (incl. as correcoes do falsificador: linhas NEG/prosa nao provam required_test; pins duplicados/fora do workspace sao Critical)."
+closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 35 passed; 0 failed (incl. 2 rondas do falsificador: so prefixo vazio ou de log CI real; nada depois do titulo de controlo negativo prova required_test; pins duplicados/absolutos/com ../por symlink sao Critical)."
 evidence_ref: docs/evidence/td-026-028-audit-gate-conteudo-2026-10-06.md
 required_test: test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde
 origin:    "PR #7, run 36475926021 (job 109109510154, merge ref do PR): «TD-022: evidence is stale — source files changed after evidence was generated (hash 57cf21d): ['crates/led-console-bin/tests/ipc_contra_o_daemon.rs']», com o ficheiro inalterado."

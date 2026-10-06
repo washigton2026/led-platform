@@ -1,7 +1,7 @@
 # TD-026 + TD-028 — o detector de stale do audit_gate passa a julgar CONTEÚDO, sem git
-git-hash: 94b85ab
-watched: scripts/audit_gate.py sha256:42b3a4dcd774a0692473fc98669c6f35c32ed3940d2b6f91145aff6fb3a6893b
-watched: tests/test_audit_gate.py sha256:0fd271b6eefd249dede862857e0bb7f60f00c1b0d04e19fea14b5bc4767a435d
+git-hash: 2555c74
+watched: scripts/audit_gate.py sha256:96293efe6a0d738b25f6eec6454c84f5249be3b06f7afcb068d07b73743bb3e1
+watched: tests/test_audit_gate.py sha256:666ab76e18d391f990a337c7efdc8453b25a9bc36ed39fc03a77d29be6d629a1
 data: 2026-10-06
 
 # PORQUE EXISTE
@@ -12,8 +12,9 @@ data: 2026-10-06
 # R4.1 substitui o detector: cada evidência fixa o sha256 do CONTEÚDO de cada ficheiro vigiado
 # (linhas watched:), e o gate compara-o com o conteúdo do workspace (no pre-commit, a worktree
 # do commit candidato). Sem git; ficheiro vigiado ilegível/inexistente/diretório é Critical.
-# Regenerada depois do falsificador do R4.1 (linhas NEG e prosa deixam de provar required_test;
-# pins duplicados/fora do workspace → Critical) — por isso o git-hash é o commit anterior, 94b85ab.
+# Regenerada após 2 rondas do falsificador: só prefixo vazio ou de log CI real (job/step nunca
+# NEG/#/>); a secção 2 (contra o gate antigo) não conta para o required_test; pins duplicados,
+# absolutos, com .. ou que saem por symlink são Critical. git-hash = commit anterior (informativo).
 
 ## 1. Gate novo — python3 tests/test_audit_gate.py (run real, no repo), exit 0
 test test_extract_passed_count ... ok
@@ -45,12 +46,17 @@ test test_r41_nome_com_metacaracteres_e_literal ... ok
 test test_r41_vigiado_ilegivel_ou_diretorio_e_critical ... ok
 test test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado ... ok
 test test_r41_pins_nao_confiaveis_sao_critical ... ok
+test test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho ... ok
+test test_r41_ronda2_seccao_de_controlo_negativo_nao_prova ... ok
+test test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim ... ok
+test test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho ... ok
+test test_r41_ronda2_symlink_para_fora_do_workspace_e_critical ... ok
 test test_gate_accepts_good_ledger ... ok
-test_audit_gate: 30 passed; 0 failed
+test_audit_gate: 35 passed; 0 failed
 
 ## 2. Controlo negativo — os MESMOS testes contra o audit_gate.py ANTIGO (git show f318c97:scripts/audit_gate.py), exit 1
-# 14 FAILED, entre eles os dois que estes TD nomeiam (TD-028: história sem mudança de conteúdo;
-# TD-026: clone raso). Contra 94b85ab (a 1.ª versão do R4.1) reprovam 3 — os do falsificador.
+# 19 FAILED, entre eles os dois que estes TD nomeiam (TD-028: história sem mudança de conteúdo;
+# TD-026: clone raso). Contra 2555c74 (a 2.ª versão do R4.1) reprovam os 5 testes da ronda 2.
 NEG: test test_r41_required_test_so_em_comentario_e_vermelho ... FAILED
 NEG: test test_r41_required_test_so_failed_e_vermelho ... FAILED
 NEG: test test_r41_vigiado_alterado_sem_evidencia_nova_e_stale ... FAILED
@@ -65,4 +71,9 @@ NEG: test test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario .
 NEG: test test_r41_vigiado_ilegivel_ou_diretorio_e_critical ... FAILED
 NEG: test test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado ... FAILED
 NEG: test test_r41_pins_nao_confiaveis_sao_critical ... FAILED
-NEG: test_audit_gate: 16 passed; 14 failed
+NEG: test test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho ... FAILED
+NEG: test test_r41_ronda2_seccao_de_controlo_negativo_nao_prova ... FAILED
+NEG: test test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim ... FAILED
+NEG: test test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho ... FAILED
+NEG: test test_r41_ronda2_symlink_para_fora_do_workspace_e_critical ... FAILED
+NEG: test_audit_gate: 16 passed; 19 failed

@@ -15,7 +15,9 @@ Enforces the closure schema for Technical Debt entries:
      current content, NOT that the verification was re-run — editing only the sha passes.
      And the gate watches itself: any change to scripts/audit_gate.py or
      tests/test_audit_gate.py must regenerate the TD-026/TD-028 evidence in the same commit.
-     A closed TD without source_files is not watched at all.
+     A closed TD without source_files is not watched at all. Result lines inside ```
+     code blocks count (that is where raw output lives); everything after a heading
+     «controlo negativo / negative control» does not.
   4. status=pending-verification is valid state; becomes Critical if review_by has passed.
   5. "0 passed" / "0 tests" in evidence is explicitly rejected (KB-012: Miri N=0 pattern).
   6. For TDs with required_test: the named test must appear in a STRUCTURED RESULT LINE
@@ -110,7 +112,11 @@ def evidence_git_hash(content: str) -> str | None:
 
 
 _WATCHED_RE = re.compile(r'^watched:[ \t]*(\S+)[ \t]+sha256:([0-9a-f]{64})[ \t]*$', re.MULTILINE)
-_HTML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
+# Um `<!--` sem fecho esconde tudo até ao fim no markdown renderizado — e aqui também.
+_HTML_COMMENT = re.compile(r'<!--.*?(?:-->|\Z)', re.DOTALL)
+# A secção de controlo negativo de uma evidência mostra o teste contra o código ANTIGO: nada
+# depois deste título pode provar que o teste passou contra o novo.
+_TITULO_NEGATIVO = re.compile(r'^#+[^\n]*(?:controlo negativo|negative control)', re.IGNORECASE | re.MULTILINE)
 
 
 def _sem_comentarios_html(content: str) -> str:
@@ -136,6 +142,15 @@ def watched_problems(content: str) -> list[str]:
     return probs
 
 
+def escapa_por_symlink(workspace: Path, path: str) -> bool:
+    """Um caminho textualmente limpo pode sair do workspace por um symlink commitado."""
+    try:
+        (workspace / path).resolve().relative_to(workspace.resolve())
+        return False
+    except ValueError:
+        return True
+
+
 def sha256_of(workspace: Path, path: str) -> str:
     """sha256 of a workspace file. Raises OSError if it cannot be read — the caller turns
     that into Critical («not verifiable»): an unreadable file is never «unchanged»."""
@@ -159,7 +174,9 @@ def stale_by_content(workspace: Path, watched: dict[str, str]) -> tuple[list[str
 # `gh run view --log` adds (`job<TAB>step<TAB>timestamp `). Anything else — `NEG:`, `#`, `>`,
 # prose — means the line is ABOUT a result, not a result: a negative control's `... ok` against
 # the old code must never prove that the test passed against the new one.
-_PREFIXO_RESULTADO = r'(?:[ \t]*|[^\t\n]+\t[^\t\n]+\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t]+)'
+_CAMPO_LOG = r'(?!NEG\b)[A-Za-z0-9][^\t\n]*'      # job/step: nunca `#`, `>`, `<`, nem o marcador NEG
+_PREFIXO_RESULTADO = (r'(?:[ \t]*|' + _CAMPO_LOG + r'\t' + _CAMPO_LOG
+                      + r'\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t]+)')
 
 
 def required_test_passed(content: str, name: str) -> bool:
@@ -168,11 +185,14 @@ def required_test_passed(content: str, name: str) -> bool:
     The line may only carry the CI log prefix (see `_PREFIXO_RESULTADO`); HTML comments are
     ignored."""
     content = _sem_comentarios_html(content)
+    titulo = _TITULO_NEGATIVO.search(content)
+    if titulo:
+        content = content[:titulo.start()]
     n = re.escape(name)
     libtest = re.compile(rf'^{_PREFIXO_RESULTADO}test[ \t]+(?:\S+::)?{n}[ \t]+\.\.\.[ \t]+ok[ \t]*\r?$',
                          re.MULTILINE)
-    harness = re.compile(rf'^{_PREFIXO_RESULTADO}{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed\b',
-                         re.MULTILINE)
+    harness = re.compile(rf'^{_PREFIXO_RESULTADO}{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed\b'
+                         r'(?![^\n]*(?:panicked|FAILED|error))', re.MULTILINE)
     if libtest.search(content):
         return True
     return any(int(m.group(1)) > 0 for m in harness.finditer(content))
@@ -299,6 +319,10 @@ class Gate:
         problemas = watched_problems(content)
         if problemas:
             self.report(CRITICAL, td_id, f"untrustworthy watched: lines: {problemas}.")
+            return
+        fora = [p for p in watched if escapa_por_symlink(self.workspace, p)]
+        if fora:
+            self.report(CRITICAL, td_id, f"watched paths resolve outside the workspace (symlink): {fora}.")
             return
         unpinned = [p for p in src_list if p not in watched]
         if unpinned:

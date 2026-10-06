@@ -551,6 +551,60 @@ def test_r41_pins_nao_confiaveis_sao_critical():
     print("✅ test_r41_pins_nao_confiaveis_sao_critical: PASS")
 
 
+
+def test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho():
+    """Falsificador R2 (F1–F4): o prefixo de CI não pode disfarçar uma linha NEG ou um comentário."""
+    real = "{PIN}\ntest t::alvo_passa ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n"
+    for neg in ["NEG\tx\t2026-01-01T00:00:00Z test t::alvo_passa ... ok",
+                "NEG: miri (old)\tRun tests\t2026-10-05T05:41:30.565Z test t::alvo_passa ... ok",
+                "# antigo\tx\t2026-10-05T05:41:30Z test t::alvo_passa ... ok",
+                "NEG\tx\t2026-01-01T00:00:00Z alvo_passa: 5 passed; 0 failed",
+                "> job\tstep\t2026-10-05T05:41:30Z test t::alvo_passa ... ok"]:
+        assert _req(real + neg + "\nNEG: test result: ok. 5 passed; 0 failed\n") == 1, f"aceitou: {neg!r}"
+    print("✅ test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho: PASS")
+
+
+def test_r41_ronda2_seccao_de_controlo_negativo_nao_prova():
+    ev = ("{PIN}\ntest t::alvo_passa ... FAILED\ntest result: ok. 3 passed; 0 failed\n"
+          "## 2. Controlo negativo — contra o código antigo\ntest t::alvo_passa ... ok\n")
+    assert _req(ev) == 1, "um ok depois do título de controlo negativo não prova o teste"
+    ev = ("{PIN}\ntest t::alvo_passa ... ok\ntest result: ok. 3 passed; 0 failed\n"
+          "## 2. Controlo negativo\ntest t::alvo_passa ... FAILED\n")
+    assert _req(ev) == 0, "o ok ANTES do título continua a provar"
+    print("✅ test_r41_ronda2_seccao_de_controlo_negativo_nao_prova: PASS")
+
+
+def test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim():
+    ev = "{PIN}\ntest result: ok. 3 passed; 0 failed\n<!-- rascunho\ntest t::alvo_passa ... ok\n"
+    assert _req(ev) == 1, "um <!-- sem fecho esconde o resto (F5)"
+    ev = EV_OK.replace("{PIN}", "<!-- {PIN} -->")
+    rc, crit = _gate(_workspace(ev))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), "watched: dentro de HTML não fixa (M23)"
+    print("✅ test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim: PASS")
+
+
+def test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho():
+    resumo = "test result: ok. 9 passed; 0 failed\n"
+    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 0 failed; 2 panicked\n") == 1, "F6"
+    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 0 failedX\n") == 1, "M22: \\b do harness"
+    assert _req("{PIN}\n" + resumo + "job\tstep\tsem-timestamp test t::alvo_passa ... ok\n") == 1, \
+        "M21: prefixo de CI sem timestamp não é log de CI"
+    print("✅ test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho: PASS")
+
+
+def test_r41_ronda2_symlink_para_fora_do_workspace_e_critical():
+    import os
+    fora = Path(tempfile.mkdtemp(prefix='gate-r41-fora-'))
+    (fora / 'alvo.rs').write_text('fn alvo() {}\n')
+    ws = _workspace(EV_OK)
+    (ws / 'link').symlink_to(fora, target_is_directory=True)
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text() + f"watched: link/alvo.rs sha256:{_sha(fora / 'alvo.rs')}\n")
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('symlink' in c[2] for c in crit), crit
+    print("✅ test_r41_ronda2_symlink_para_fora_do_workspace_e_critical: PASS")
+
+
 TESTS = [
     test_extract_passed_count,
     test_evidence_git_hash,
@@ -581,6 +635,11 @@ TESTS = [
     test_r41_vigiado_ilegivel_ou_diretorio_e_critical,
     test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado,
     test_r41_pins_nao_confiaveis_sao_critical,
+    test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho,
+    test_r41_ronda2_seccao_de_controlo_negativo_nao_prova,
+    test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim,
+    test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho,
+    test_r41_ronda2_symlink_para_fora_do_workspace_e_critical,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 
