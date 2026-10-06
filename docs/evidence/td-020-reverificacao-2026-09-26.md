@@ -1,5 +1,6 @@
 # TD-020 — Re-verificação contra `320ff94` (a evidência de `13d2f41` ficou stale)
 git-hash: 320ff94
+watched: crates/led-hal/src/shared_clock.rs sha256:595280376cd6df30e4c7d252920fe184d72366686f3ae6dc2baeab87dc3c9cf6
 source_files: crates/led-hal/src/shared_clock.rs
 required_test: concurrent_readers_never_see_rewind_during_correction
 data: 2026-09-26

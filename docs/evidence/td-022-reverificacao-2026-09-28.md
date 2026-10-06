@@ -1,5 +1,6 @@
 # TD-022 — Re-verificação sobre `e46151b` (o #7 depois de `gh pr update-branch`)
 git-hash: e46151b
+watched: crates/led-console-bin/tests/ipc_contra_o_daemon.rs sha256:162ee0828a0f16c2ef5ec3fc6ed386b54855d78e906f9ed5e03a2dafbb327626
 source_files: crates/led-console-bin/tests/ipc_contra_o_daemon.rs
 required_test: o_daemon_recusa_a_linha_longa_por_si_proprio
 data: 2026-09-28

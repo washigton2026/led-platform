@@ -270,6 +270,189 @@ def test_open_and_wontfix_are_visible_not_ok():
         tmp.unlink()
 
 
+
+# ── R4.1: required_test estruturado + stale por CONTEÚDO (TD-028) sem git (TD-026) ────
+
+import hashlib
+import shutil
+import subprocess
+
+def _sha(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _workspace(evidence: str, source: str = 'src/alvo.rs', conteudo: str = 'fn alvo() {}\n',
+               required_test: str = 'alvo_passa', pin: bool = True, extra_src: str = '') -> Path:
+    """Workspace temporário com um TD fechado, a sua evidência e o ficheiro vigiado.
+    `{PIN}` na evidência é substituído pela linha `watched:` do conteúdo ATUAL."""
+    ws = Path(tempfile.mkdtemp(prefix='gate-r41-'))
+    f = ws / source
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(conteudo)
+    pin_line = f"watched: {source} sha256:{_sha(f)}" if pin else ''
+    (ws / 'docs').mkdir()
+    (ws / 'docs' / 'ev.md').write_text(evidence.replace('{PIN}', pin_line))
+    srcs = source + (f", {extra_src}" if extra_src else '')
+    (ws / 'docs' / 'technical-debt-ledger.md').write_text(textwrap.dedent(f"""
+    ```yaml
+    td_id:     TD-R41
+    status:    closed
+    evidence_ref: docs/ev.md
+    required_test: {required_test}
+    source_files: {srcs}
+    negative_control: |
+      mutacao -> vermelho
+    ```
+    """))
+    return ws
+
+
+def _gate(ws: Path) -> tuple[int, list]:
+    g = audit_gate.Gate(ws)
+    rc = g.run(audit_gate.parse_ledger(ws / 'docs' / 'technical-debt-ledger.md'))
+    return rc, [f for f in g.findings if f[0] == audit_gate.CRITICAL]
+
+
+EV_OK = "git-hash: abc1234\n{PIN}\ntest tests::alvo_passa ... ok\ntest result: ok. 1 passed; 0 failed\n"
+
+
+def test_r41_evidencia_valida_passa():
+    rc, crit = _gate(_workspace(EV_OK))
+    assert rc == 0 and not crit, f"evidência válida reprovou: {crit}"
+    print("✅ test_r41_evidencia_valida_passa: PASS")
+
+
+def test_r41_required_test_so_em_comentario_e_vermelho():
+    ev = "{PIN}\n# test tests::alvo_passa ... ok\ntest result: ok. 3 passed; 0 failed\n"
+    rc, crit = _gate(_workspace(ev))
+    assert rc == 1 and any('required_test' in c[2] for c in crit), crit
+    print("✅ test_r41_required_test_so_em_comentario_e_vermelho: PASS")
+
+
+def test_r41_required_test_so_failed_e_vermelho():
+    ev = "{PIN}\nrequired_test: alvo_passa\ntest tests::alvo_passa ... FAILED\ntest result: ok. 3 passed; 0 failed\n"
+    rc, crit = _gate(_workspace(ev))
+    assert rc == 1 and any('required_test' in c[2] for c in crit), crit
+    print("✅ test_r41_required_test_so_failed_e_vermelho: PASS")
+
+
+def test_r41_n_zero_e_vermelho():
+    ev = "{PIN}\ntest tests::alvo_passa ... ok\ntest result: ok. 0 passed; 0 failed\n"
+    rc, crit = _gate(_workspace(ev))
+    assert rc == 1 and any('0 tests passed' in c[2] or 'N=0' in c[2] for c in crit), crit
+    rc, crit = _gate(_workspace("{PIN}\nalvo_passa: 0 passed; 0 failed\n"))
+    assert rc == 1, "harness com N=0 não pode provar o required_test"
+    print("✅ test_r41_n_zero_e_vermelho: PASS")
+
+
+def test_r41_formatos_estruturados_aceites():
+    ci = ("{PIN}\nmiri (led-triple)\tSTEP\t2026-10-05T05:41:30Z test ring::tests::alvo_passa ... ok\n"
+          "test result: ok. 5 passed; 0 failed\n")
+    assert _gate(_workspace(ci))[0] == 0, "linha libtest com prefixo de log CI tem de contar"
+    assert _gate(_workspace("{PIN}\nalvo_passa: 4 passed; 0 failed\n"))[0] == 0, "resumo de harness"
+    print("✅ test_r41_formatos_estruturados_aceites: PASS")
+
+
+def test_r41_vigiado_alterado_sem_evidencia_nova_e_stale():
+    ws = _workspace(EV_OK)
+    (ws / 'src/alvo.rs').write_text('fn alvo() { mudou() }\n')
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('stale' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_alterado_sem_evidencia_nova_e_stale: PASS")
+
+
+def test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde():
+    ws = _workspace(EV_OK)
+    f = ws / 'src/alvo.rs'
+    f.write_text('fn alvo() { mudou() }\n')
+    ev = ws / 'docs/ev.md'
+    ev.write_text(EV_OK.replace('{PIN}', f"watched: src/alvo.rs sha256:{_sha(f)}"))
+    rc, crit = _gate(ws)
+    assert rc == 0, f"evidência regenerada para o conteúdo novo tem de passar: {crit}"
+    print("✅ test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde: PASS")
+
+
+def test_r41_vigiado_inexistente_e_critical_nao_verificavel():
+    ws = _workspace(EV_OK)
+    (ws / 'src/alvo.rs').unlink()
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('not verifiable' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_inexistente_e_critical_nao_verificavel: PASS")
+
+
+def test_r41_source_file_sem_watched_e_critical():
+    rc, crit = _gate(_workspace(EV_OK, pin=False))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), crit
+    print("✅ test_r41_source_file_sem_watched_e_critical: PASS")
+
+
+def test_r41_ci_yml_e_declaravel():
+    ws = _workspace(EV_OK, source='.github/workflows/ci.yml', conteudo='name: CI\n')
+    assert _gate(ws)[0] == 0
+    (ws / '.github/workflows/ci.yml').write_text('name: CI\n# passo Miri apagado\n')
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('stale' in c[2] for c in crit), "apagar um passo do ci.yml vigiado tem de dar stale"
+    print("✅ test_r41_ci_yml_e_declaravel: PASS")
+
+
+def _git(ws: Path, *args: str) -> str:
+    r = subprocess.run(['git', '-C', str(ws), '-c', 'user.email=t@t', '-c', 'user.name=t', *args],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"git {args}: {r.stderr}"
+    return r.stdout.strip()
+
+
+def test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde():
+    """TD-028: commits que tocam o ficheiro e voltam ao mesmo conteúdo NÃO tornam a evidência
+    stale. O gate antigo (`git log <hash>..HEAD`) dava-o como stale (falso-vermelho)."""
+    ws = _workspace(EV_OK)
+    _git(ws, 'init', '-q')
+    _git(ws, 'add', '-A'); _git(ws, 'commit', '-qm', 'A')
+    # A evidência aponta para um commit REAL: só assim o gate antigo (`git log A..HEAD`) vê os
+    # commits B e C e dá o falso-vermelho — com um hash inexistente ele falhava calado.
+    hash_a = _git(ws, 'rev-parse', 'HEAD')
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text().replace('git-hash: abc1234', f'git-hash: {hash_a}'))
+    _git(ws, 'commit', '-qam', 'evidencia aponta para A')
+    original = (ws / 'src/alvo.rs').read_text()
+    (ws / 'src/alvo.rs').write_text('fn alvo() { temporario() }\n')
+    _git(ws, 'commit', '-qam', 'B: muda')
+    (ws / 'src/alvo.rs').write_text(original)
+    _git(ws, 'commit', '-qam', 'C: reverte')
+    rc, crit = _gate(ws)
+    assert rc == 0, f"historia sem mudanca de conteudo deu stale (TD-028): {crit}"
+    print("✅ test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde: PASS")
+
+
+def test_r41_td026_clone_raso_igual_a_completo():
+    """TD-026: num clone raso o hash da evidência não existe. O gate antigo engolia a falha
+    do `git log` e dava verde com o ficheiro MUDADO. Agora o veredito é igual ao do clone
+    completo: verde com o conteúdo igual, stale com o conteúdo mudado."""
+    origem = _workspace(EV_OK)
+    _git(origem, 'init', '-q')
+    _git(origem, 'add', '-A'); _git(origem, 'commit', '-qm', 'A')
+    hash_a = _git(origem, 'rev-parse', 'HEAD')
+    ev = origem / 'docs/ev.md'
+    ev.write_text(ev.read_text().replace('git-hash: abc1234', f'git-hash: {hash_a}'))
+    _git(origem, 'commit', '-qam', 'evidencia aponta para A')
+    (origem / 'src/alvo.rs').write_text('fn alvo() { mudou() }\n')
+    _git(origem, 'commit', '-qam', 'muda o vigiado')
+    for _ in range(2):
+        (origem / 'docs/x.txt').write_text(str(_)); _git(origem, 'add', '-A'); _git(origem, 'commit', '-qm', 'x')
+    raso = Path(tempfile.mkdtemp(prefix='gate-r41-raso-')) / 'r'
+    r = subprocess.run(['git', 'clone', '-q', '--depth', '1', f'file://{origem}', str(raso)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert subprocess.run(['git', '-C', str(raso), 'cat-file', '-e', hash_a],
+                          capture_output=True).returncode != 0, "premissa: o hash NAO existe no clone raso"
+    rc_completo, _ = _gate(origem)
+    rc_raso, crit = _gate(raso)
+    assert rc_completo == 1 and rc_raso == 1, \
+        f"vigiado mudado tem de ser stale nos DOIS clones (completo={rc_completo}, raso={rc_raso}): {crit}"
+    print("✅ test_r41_td026_clone_raso_igual_a_completo: PASS")
+
+
+
 TESTS = [
     test_extract_passed_count,
     test_evidence_git_hash,
@@ -281,8 +464,21 @@ TESTS = [
     test_pending_verification_past_deadline_is_critical,
     test_pending_verification_malformed_review_by_is_critical,
     test_open_and_wontfix_are_visible_not_ok,
+    test_r41_evidencia_valida_passa,
+    test_r41_required_test_so_em_comentario_e_vermelho,
+    test_r41_required_test_so_failed_e_vermelho,
+    test_r41_n_zero_e_vermelho,
+    test_r41_formatos_estruturados_aceites,
+    test_r41_vigiado_alterado_sem_evidencia_nova_e_stale,
+    test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde,
+    test_r41_vigiado_inexistente_e_critical_nao_verificavel,
+    test_r41_source_file_sem_watched_e_critical,
+    test_r41_ci_yml_e_declaravel,
+    test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde,
+    test_r41_td026_clone_raso_igual_a_completo,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
+
 
 
 def main() -> int:
@@ -294,15 +490,20 @@ def main() -> int:
         try:
             test()
             passed += 1
+            print(f"test {test.__name__} ... ok")
         except AssertionError as e:
             print(f"❌ {test.__name__}: FAIL\n   {e}")
+            print(f"test {test.__name__} ... FAILED")
             failed += 1
         except Exception as e:
             print(f"💥 {test.__name__}: ERROR — {type(e).__name__}: {e}")
+            print(f"test {test.__name__} ... FAILED")
             failed += 1
     print(f"\n{'='*60}")
     print(f"{'='*60}")
     print(f"Tests: {passed} passed, {failed} failed")
+    # Resumo no formato que o próprio gate aceita como evidência (`N passed; M failed`).
+    print(f"test_audit_gate: {passed} passed; {failed} failed")
     return 0 if failed == 0 else 1
 
 

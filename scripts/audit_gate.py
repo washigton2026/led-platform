@@ -5,11 +5,16 @@ LUMYX Audit Gate — KB-012 enforcement.
 Enforces the closure schema for Technical Debt entries:
   1. status=closed requires evidence_ref + negative_control (both non-empty).
   2. evidence_ref must point to a committed file with N>0 tests passing.
-  3. Evidence files record the git hash at generation; gate detects stale evidence
-     when source files changed after that hash.
+  3. Evidence files pin the CONTENT they were generated against: one line per watched file,
+     `watched: <path> sha256:<hex>`. Every source_file of the TD must be pinned, and the
+     evidence is stale iff the file's current content hashes differently (TD-028). No git
+     is involved, so a shallow clone cannot turn the check green (TD-026); an unreadable or
+     missing watched file is Critical («not verifiable»), never «unchanged».
   4. status=pending-verification is valid state; becomes Critical if review_by has passed.
   5. "0 passed" / "0 tests" in evidence is explicitly rejected (KB-012: Miri N=0 pattern).
-  6. For TDs with required_test: the named test must appear by name in the evidence file.
+  6. For TDs with required_test: the named test must appear in a STRUCTURED RESULT LINE
+     that passed — `test [path::]<name> ... ok` or `<name>: N passed; 0 failed` (N>0) —
+     outside comments. A header line, a `... FAILED` line or a comment does not count.
 
 Exit codes:
   0 — gate passes (no Critical findings)
@@ -23,7 +28,7 @@ Usage:
 from __future__ import annotations
 import re
 import sys
-import subprocess
+import hashlib
 import argparse
 from datetime import date, datetime
 from pathlib import Path
@@ -98,20 +103,44 @@ def evidence_git_hash(content: str) -> str | None:
     return m.group(1) if m else None
 
 
-def files_changed_since(workspace: Path, git_hash: str, paths: list[str]) -> list[str]:
-    """Return which paths have commits newer than git_hash."""
+_WATCHED_RE = re.compile(r'^[ \t]*#?[ \t]*watched:[ \t]*(\S+)[ \t]+sha256:([0-9a-f]{64})[ \t]*$',
+                         re.MULTILINE)
+
+
+def evidence_watched(content: str) -> dict[str, str]:
+    """`watched: <path> sha256:<hex>` lines of an evidence file → {path: sha256}."""
+    return {m.group(1): m.group(2) for m in _WATCHED_RE.finditer(content)}
+
+
+def sha256_of(workspace: Path, path: str) -> str:
+    """sha256 of a workspace file. Raises OSError if it cannot be read — the caller turns
+    that into Critical («not verifiable»): an unreadable file is never «unchanged»."""
+    return hashlib.sha256((workspace / path).read_bytes()).hexdigest()
+
+
+def stale_by_content(workspace: Path, watched: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Return (changed, unverifiable) among the watched paths, by CONTENT (TD-028/TD-026)."""
     changed: list[str] = []
-    for p in paths:
+    unverifiable: list[str] = []
+    for path, recorded in sorted(watched.items()):
         try:
-            result = subprocess.run(
-                ['git', 'log', '--oneline', f'{git_hash}..HEAD', '--', p],
-                capture_output=True, text=True, cwd=workspace
-            )
-            if result.stdout.strip():
-                changed.append(p)
-        except Exception:
-            pass  # git unavailable — skip stale check
-    return changed
+            if sha256_of(workspace, path) != recorded:
+                changed.append(path)
+        except OSError as e:
+            unverifiable.append(f"{path} ({e.__class__.__name__}: {e.strerror or e})")
+    return changed, unverifiable
+
+
+def required_test_passed(content: str, name: str) -> bool:
+    """True iff a NON-comment line reports `name` as passed, in a structured result line:
+    libtest `test [path::]name ... ok` (any log prefix allowed) or a harness summary
+    `name: N passed; 0 failed` with N > 0."""
+    n = re.escape(name)
+    libtest = re.compile(rf'^(?![ \t]*#).*\btest[ \t]+(?:\S+::)?{n}[ \t]+\.\.\.[ \t]+ok[ \t]*$', re.MULTILINE)
+    harness = re.compile(rf'^(?![ \t]*#)[ \t]*{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed', re.MULTILINE)
+    if libtest.search(content):
+        return True
+    return any(int(m.group(1)) > 0 for m in harness.finditer(content))
 
 
 # ── Gate logic ─────────────────────────────────────────────────────────────────
@@ -219,26 +248,36 @@ class Gate:
                 f"nothing (KB-012: Miri N=0 pattern). Re-run with N>0.")
             return
 
-        # ── optional: required_test must appear by name ───────────────────────
+        # ── optional: required_test must have PASSED in a structured line ──────
         required_test = td.get('required_test', '').strip()
-        if required_test and required_test not in content:
+        if required_test and not required_test_passed(content, required_test):
             self.report(CRITICAL, td_id,
-                f"required_test '{required_test}' not found in evidence_ref. "
-                f"The named test must appear by name (verifies the right test ran).")
+                f"required_test '{required_test}' has no passing result line in evidence_ref "
+                f"(`test [path::]{required_test} ... ok` or `{required_test}: N passed; 0 failed`, "
+                f"outside comments). A mention, a header or a FAILED line does not prove it ran.")
             return
 
-        # ── stale evidence check (git-hash in artefact header) ────────────────
+        # ── stale evidence check, by CONTENT (TD-028) and without git (TD-026) ─
         source_files = td.get('source_files', '').strip()
-        ev_hash = evidence_git_hash(content)
-        if ev_hash and source_files:
-            src_list = [s.strip() for s in source_files.split(',') if s.strip()]
-            stale = files_changed_since(self.workspace, ev_hash, src_list)
-            if stale:
-                self.report(CRITICAL, td_id,
-                    f"evidence is stale — source files changed after evidence was "
-                    f"generated (hash {ev_hash[:8]}): {stale}. "
-                    f"Re-run verification and commit updated evidence_ref.")
-                return
+        src_list = [s.strip() for s in source_files.split(',') if s.strip()]
+        watched = evidence_watched(content)
+        unpinned = [p for p in src_list if p not in watched]
+        if unpinned:
+            self.report(CRITICAL, td_id,
+                f"evidence does not pin the content of source files {unpinned}: add "
+                f"`watched: <path> sha256:<hex>` lines, computed when the evidence was generated.")
+            return
+        changed, unverifiable = stale_by_content(self.workspace, watched)
+        if unverifiable:
+            self.report(CRITICAL, td_id,
+                f"watched files are not verifiable (never read as «unchanged»): {unverifiable}.")
+            return
+        if changed:
+            self.report(CRITICAL, td_id,
+                f"evidence is stale — content of watched files differs from what the evidence "
+                f"was generated against: {changed}. Re-run verification and regenerate "
+                f"evidence_ref in the same commit.")
+            return
 
         self.ok(td_id,
             f"closed — {n_passed} tests passed, negative_control present"

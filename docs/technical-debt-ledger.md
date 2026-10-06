@@ -1518,9 +1518,13 @@ negative_control: |
 td_id:     TD-026
 title:     "`files_changed_since` nao le o returncode do `git log`: num clone raso o hash da evidencia nao existe, o `git log` falha e o detector de stale devolve «nao mudou»"
 severity:  High
-status:    open
+status:    closed
+closed_on: 2026-10-06
+closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 23 passed; 0 failed."
+evidence_ref: docs/evidence/td-026-028-audit-gate-conteudo-2026-10-06.md
+required_test: test_r41_td026_clone_raso_igual_a_completo
 origin:    "Encontrado em 2026-09-26 ao desenhar o job debt gate (PR #9)."
-source_files: scripts/audit_gate.py
+source_files: scripts/audit_gate.py, tests/test_audit_gate.py
 context: |
   scripts/audit_gate.py:101-113 — `subprocess.run(['git','log','--oneline',
   f'{git_hash}..HEAD','--',p], capture_output=True)` (:107-108): so `stdout` e lido, o
@@ -1543,6 +1547,11 @@ required_fix: |
   verificavel»), nunca «nao mudou».
 falsification_required: |
   Clone raso -> exit != 0 com «nao verificavel»; clone completo -> igual a hoje.
+negative_control: |
+  Os mesmos testes contra o audit_gate.py antigo (f318c97): test_r41_td026_clone_raso_igual_a_completo
+  FAILED — num clone `--depth 1` o hash da evidencia nao existe, o `git log` falha calado e o gate
+  antigo da verde com o ficheiro vigiado MUDADO. Com o gate novo o veredito do clone raso e igual
+  ao do completo (stale). Ficheiro vigiado inexistente -> Critical «not verifiable». Evidencia, sec. 2.
 review_by: 2026-10-12
 ```
 
@@ -1585,9 +1594,13 @@ review_by: 2026-10-12
 td_id:     TD-028
 title:     "`files_changed_since` usa `git log <hash>..HEAD -- <ficheiro>`: um merge que nao muda o conteudo do ficheiro torna a evidencia «stale» (falso-vermelho)"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-10-06
+closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 23 passed; 0 failed."
+evidence_ref: docs/evidence/td-026-028-audit-gate-conteudo-2026-10-06.md
+required_test: test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde
 origin:    "PR #7, run 36475926021 (job 109109510154, merge ref do PR): «TD-022: evidence is stale — source files changed after evidence was generated (hash 57cf21d): ['crates/led-console-bin/tests/ipc_contra_o_daemon.rs']», com o ficheiro inalterado."
-source_files: scripts/audit_gate.py
+source_files: scripts/audit_gate.py, tests/test_audit_gate.py
 context: |
   scripts/audit_gate.py:101-113 (`files_changed_since`) decide por existencia de commits no
   `git log`, nao por diferenca de conteudo.
@@ -1608,6 +1621,11 @@ required_fix: |
   Coordenar com o TD-026 (mesma funcao).
 falsification_required: |
   Merge sem mudanca de conteudo -> OK; mudanca real no ficheiro -> Critical stale.
+negative_control: |
+  Os mesmos testes contra o audit_gate.py antigo (f318c97): test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde
+  FAILED — commits B (muda) e C (reverte) depois do hash da evidencia: o gate antigo ve-os no
+  `git log` e da stale com o conteudo IGUAL. Simetrico: conteudo realmente mudado sem evidencia nova
+  -> stale (test_r41_vigiado_alterado_sem_evidencia_nova_e_stale). Evidencia, sec. 2.
 review_by: 2026-10-12
 ```
 

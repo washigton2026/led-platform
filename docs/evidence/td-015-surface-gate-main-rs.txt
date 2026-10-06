@@ -1,5 +1,6 @@
 # TD-015 — surface_gate: main.rs nas FONTES + corte no mod tests
 git-hash: 05a76c1
+watched: crates/led-console-bin/tests/surface_gate.rs sha256:83b73cdfdc2b3c61b8245cc5b773d38ef2ab9f9a0de81f613bdadc5007809a57
 source_files: crates/led-console-bin/tests/surface_gate.rs
 required_test: nenhum_blackout_na_superficie_nem_no_codigo
 data: 2026-08-14T12:00:00Z

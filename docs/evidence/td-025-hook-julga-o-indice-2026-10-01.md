@@ -1,5 +1,6 @@
 # TD-025 — O hook de pre-commit julga o índice: medição sobre `7ee2f89`
 git-hash: 7ee2f89
+watched: scripts/pre-commit-hook.sh sha256:f89f1fa9f17ddd305ac23726e44848b3b6a3ae8d98605f44dc058555126a3de9
 source_files: scripts/pre-commit-hook.sh
 required_test: test_pre_commit_hook
 data: 2026-10-01
