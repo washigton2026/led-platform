@@ -604,6 +604,23 @@ def test_r41_watched_dentro_de_html_multilinha_nao_fixa():
     print("✅ test_r41_watched_dentro_de_html_multilinha_nao_fixa: PASS")
 
 
+
+def test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao():
+    """Falsificador R4: N8, N4b, N5b e N1b sobreviviam — cada exigência da região tem agora a sua."""
+    ci = "job\tstep\t2026-10-05T05:41:30Z "
+    rc, msg = _veredito(_prova(ci + "test t::alvo_passa ... FAILED\ntest t::alvo_passa ... ok\n" + RESUMO))
+    assert rc == 1 and 'FAILED inside' in msg, ("N8: FAILED com prefixo de CI", msg)
+    corpo = "test t::alvo_passa ... ok\n" + RESUMO
+    for falso in ["NEG: " + PI, "# " + PI]:
+        rc, msg = _veredito("{PIN}\n" + falso + "\n" + corpo + PF + "\n")
+        assert rc == 1 and 'exactly ONE' in msg, ("N4b: marcador por substring", falso, msg)
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\ntest result: ok. 0 passed; 0 failed\n", depois=RESUMO))
+    assert rc == 1 and 'summary' in msg, ("N5b: resumo N=0 dentro, N>0 fora", msg)
+    rc, msg = _veredito(_prova(corpo) + PF + "\n")
+    assert rc == 1 and 'exactly ONE' in msg, ("N1b: dois marcadores de fim", msg)
+    print("✅ test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao: PASS")
+
+
 TESTS = [
     test_extract_passed_count,
     test_evidence_git_hash,
@@ -637,6 +654,7 @@ TESTS = [
     test_r41_harness_estrito,
     test_r41_nome_com_metacaracteres_e_literal,
     test_r41_watched_dentro_de_html_multilinha_nao_fixa,
+    test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 

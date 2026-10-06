@@ -25,6 +25,8 @@ Enforces the closure schema for Technical Debt entries:
      a STRUCTURED RESULT LINE that passed — `test [path::]<name> ... ok` or `<name>: N passed;
      0 failed` (N>0) — no FAILED for it, and an `N passed; 0 failed` summary with N>0. Nothing
      outside the region counts (negative controls, prose, quotes live there by construction).
+     A closed TD WITHOUT required_test keeps the older, weaker rule: any `N passed; 0 failed`
+     line anywhere in the evidence (N>0) — there is no named test to prove.
 
 Exit codes:
   0 — gate passes (no Critical findings)
