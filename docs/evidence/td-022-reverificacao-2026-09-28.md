@@ -21,10 +21,12 @@ data: 2026-09-28
 Run `36475926021`, job `test (ubuntu-latest)` `109109510175`, checkout do merge ref
 `a16600c` (= `e46151b` sobre `82e5ba1`), lido **no log**:
 
+--- prova ---
 ```
 test o_daemon_recusa_a_linha_longa_por_si_proprio ... ok
 ```
 Soma das linhas `test result` do job: 105 binários, 1131 passed; 0 failed; 9 ignored.
+--- fim da prova ---
 
 ## 2. macOS local — C0 e controlo negativo F1 sobre `e46151b`
 

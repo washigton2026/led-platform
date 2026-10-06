@@ -1,7 +1,7 @@
 # TD-026 + TD-028 — o detector de stale do audit_gate passa a julgar CONTEÚDO, sem git
-git-hash: 2555c74
-watched: scripts/audit_gate.py sha256:96293efe6a0d738b25f6eec6454c84f5249be3b06f7afcb068d07b73743bb3e1
-watched: tests/test_audit_gate.py sha256:666ab76e18d391f990a337c7efdc8453b25a9bc36ed39fc03a77d29be6d629a1
+git-hash: 4593b5e
+watched: scripts/audit_gate.py sha256:daf71af84e7b80647bc8921af89aa2ffebbb93df783e36a5bbe56d8795f95aa1
+watched: tests/test_audit_gate.py sha256:a250016b9d6db7da83af95b9b2706bc47b4e60a1aa382907a9f2e1b1949d8f9a
 data: 2026-10-06
 
 # PORQUE EXISTE
@@ -12,11 +12,12 @@ data: 2026-10-06
 # R4.1 substitui o detector: cada evidência fixa o sha256 do CONTEÚDO de cada ficheiro vigiado
 # (linhas watched:), e o gate compara-o com o conteúdo do workspace (no pre-commit, a worktree
 # do commit candidato). Sem git; ficheiro vigiado ilegível/inexistente/diretório é Critical.
-# Regenerada após 2 rondas do falsificador: só prefixo vazio ou de log CI real (job/step nunca
-# NEG/#/>); a secção 2 (contra o gate antigo) não conta para o required_test; pins duplicados,
-# absolutos, com .. ou que saem por symlink são Critical. git-hash = commit anterior (informativo).
+# Após 3 rondas do falsificador, o required_test só conta dentro da REGIÃO DE PROVA declarada
+# (lista positiva) — a secção 2, contra o gate antigo, fica fora por construção.
+# git-hash = commit anterior (informativo).
 
 ## 1. Gate novo — python3 tests/test_audit_gate.py (run real, no repo), exit 0
+--- prova ---
 test test_extract_passed_count ... ok
 test test_evidence_git_hash ... ok
 test test_gate_rejects_bad_ledger_a_no_evidence ... ok
@@ -28,10 +29,6 @@ test test_pending_verification_past_deadline_is_critical ... ok
 test test_pending_verification_malformed_review_by_is_critical ... ok
 test test_open_and_wontfix_are_visible_not_ok ... ok
 test test_r41_evidencia_valida_passa ... ok
-test test_r41_required_test_so_em_comentario_e_vermelho ... ok
-test test_r41_required_test_so_failed_e_vermelho ... ok
-test test_r41_n_zero_e_vermelho ... ok
-test test_r41_formatos_estruturados_aceites ... ok
 test test_r41_vigiado_alterado_sem_evidencia_nova_e_stale ... ok
 test test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde ... ok
 test test_r41_vigiado_inexistente_e_critical_nao_verificavel ... ok
@@ -39,41 +36,43 @@ test test_r41_source_file_sem_watched_e_critical ... ok
 test test_r41_ci_yml_e_declaravel ... ok
 test test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde ... ok
 test test_r41_td026_clone_raso_igual_a_completo ... ok
-test test_r41_neg_ok_com_real_failed_e_vermelho ... ok
-test test_r41_so_prefixo_de_log_ci_e_aceite ... ok
-test test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario ... ok
-test test_r41_nome_com_metacaracteres_e_literal ... ok
 test test_r41_vigiado_ilegivel_ou_diretorio_e_critical ... ok
 test test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado ... ok
 test test_r41_pins_nao_confiaveis_sao_critical ... ok
-test test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho ... ok
-test test_r41_ronda2_seccao_de_controlo_negativo_nao_prova ... ok
-test test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim ... ok
-test test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho ... ok
 test test_r41_ronda2_symlink_para_fora_do_workspace_e_critical ... ok
+test test_r41_sem_regiao_de_prova_e_critical ... ok
+test test_r41_duas_regioes_ou_marcadores_trocados_e_critical ... ok
+test test_r41_ok_fora_da_prova_nao_conta ... ok
+test test_r41_failed_do_teste_dentro_da_prova_e_vermelho ... ok
+test test_r41_resumo_n_maior_que_zero_dentro_da_prova ... ok
+test test_r41_linhas_que_nao_sao_resultado_nao_provam ... ok
+test test_r41_formatos_estruturados_aceites ... ok
+test test_r41_harness_estrito ... ok
+test test_r41_nome_com_metacaracteres_e_literal ... ok
+test test_r41_watched_dentro_de_html_multilinha_nao_fixa ... ok
 test test_gate_accepts_good_ledger ... ok
-test_audit_gate: 35 passed; 0 failed
+test_audit_gate: 33 passed; 0 failed
+--- fim da prova ---
 
-## 2. Controlo negativo — os MESMOS testes contra o audit_gate.py ANTIGO (git show f318c97:scripts/audit_gate.py), exit 1
-# 19 FAILED, entre eles os dois que estes TD nomeiam (TD-028: história sem mudança de conteúdo;
-# TD-026: clone raso). Contra 2555c74 (a 2.ª versão do R4.1) reprovam os 5 testes da ronda 2.
-NEG: test test_r41_required_test_so_em_comentario_e_vermelho ... FAILED
-NEG: test test_r41_required_test_so_failed_e_vermelho ... FAILED
+## 2. Os MESMOS testes contra o audit_gate.py ANTIGO (git show f318c97:scripts/audit_gate.py), exit 1
+# Entre os FAILED estão os dois que estes TD nomeiam (TD-028: história sem mudança de conteúdo;
+# TD-026: clone raso). Contra 4593b5e (a 3.ª versão do R4.1) reprovam os 6 testes da região de prova.
 NEG: test test_r41_vigiado_alterado_sem_evidencia_nova_e_stale ... FAILED
 NEG: test test_r41_vigiado_inexistente_e_critical_nao_verificavel ... FAILED
 NEG: test test_r41_source_file_sem_watched_e_critical ... FAILED
 NEG: test test_r41_ci_yml_e_declaravel ... FAILED
 NEG: test test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde ... FAILED
 NEG: test test_r41_td026_clone_raso_igual_a_completo ... FAILED
-NEG: test test_r41_neg_ok_com_real_failed_e_vermelho ... FAILED
-NEG: test test_r41_so_prefixo_de_log_ci_e_aceite ... FAILED
-NEG: test test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario ... FAILED
 NEG: test test_r41_vigiado_ilegivel_ou_diretorio_e_critical ... FAILED
 NEG: test test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado ... FAILED
 NEG: test test_r41_pins_nao_confiaveis_sao_critical ... FAILED
-NEG: test test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho ... FAILED
-NEG: test test_r41_ronda2_seccao_de_controlo_negativo_nao_prova ... FAILED
-NEG: test test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim ... FAILED
-NEG: test test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho ... FAILED
 NEG: test test_r41_ronda2_symlink_para_fora_do_workspace_e_critical ... FAILED
-NEG: test_audit_gate: 16 passed; 19 failed
+NEG: test test_r41_sem_regiao_de_prova_e_critical ... FAILED
+NEG: test test_r41_duas_regioes_ou_marcadores_trocados_e_critical ... FAILED
+NEG: test test_r41_ok_fora_da_prova_nao_conta ... FAILED
+NEG: test test_r41_failed_do_teste_dentro_da_prova_e_vermelho ... FAILED
+NEG: test test_r41_resumo_n_maior_que_zero_dentro_da_prova ... FAILED
+NEG: test test_r41_linhas_que_nao_sao_resultado_nao_provam ... FAILED
+NEG: test test_r41_harness_estrito ... FAILED
+NEG: test test_r41_watched_dentro_de_html_multilinha_nao_fixa ... FAILED
+NEG: test_audit_gate: 15 passed; 18 failed

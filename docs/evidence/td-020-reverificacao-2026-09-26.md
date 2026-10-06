@@ -85,8 +85,10 @@ da alternância do offset, não do volume de iterações.
 ```
 cargo test -p led-hal --lib
   running 102 tests
+--- prova ---
   test shared_clock::tests::concurrent_readers_never_see_rewind_during_correction ... ok
   test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+--- fim da prova ---
   EXIT_HAL_LIB=0
 
 cargo clippy -p led-hal --all-targets --locked -- -D warnings

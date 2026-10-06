@@ -313,44 +313,27 @@ def _gate(ws: Path) -> tuple[int, list]:
     return rc, [f for f in g.findings if f[0] == audit_gate.CRITICAL]
 
 
-EV_OK = "git-hash: abc1234\n{PIN}\ntest tests::alvo_passa ... ok\ntest result: ok. 1 passed; 0 failed\n"
+# Literais por omissão: o controlo negativo importa o gate ANTIGO, que não os define.
+PI = getattr(audit_gate, "PROVA_INICIO", "--- prova ---")
+PF = getattr(audit_gate, "PROVA_FIM", "--- fim da prova ---")
+EV_OK = ("git-hash: abc1234\n{PIN}\n" + PI + "\ntest tests::alvo_passa ... ok\n"
+         "test result: ok. 1 passed; 0 failed\n" + PF + "\n")
+
+
+def _prova(corpo: str, antes: str = '', depois: str = '') -> str:
+    """Evidência com o pin, texto fora da prova e a região de prova com `corpo`."""
+    return "{PIN}\n" + antes + PI + "\n" + corpo + PF + "\n" + depois
+
+
+def _veredito(ev: str, required_test: str = 'alvo_passa') -> tuple[int, str]:
+    rc, crit = _gate(_workspace(ev, required_test=required_test))
+    return rc, ' | '.join(c[2] for c in crit)
 
 
 def test_r41_evidencia_valida_passa():
     rc, crit = _gate(_workspace(EV_OK))
     assert rc == 0 and not crit, f"evidência válida reprovou: {crit}"
     print("✅ test_r41_evidencia_valida_passa: PASS")
-
-
-def test_r41_required_test_so_em_comentario_e_vermelho():
-    ev = "{PIN}\n# test tests::alvo_passa ... ok\ntest result: ok. 3 passed; 0 failed\n"
-    rc, crit = _gate(_workspace(ev))
-    assert rc == 1 and any('required_test' in c[2] for c in crit), crit
-    print("✅ test_r41_required_test_so_em_comentario_e_vermelho: PASS")
-
-
-def test_r41_required_test_so_failed_e_vermelho():
-    ev = "{PIN}\nrequired_test: alvo_passa\ntest tests::alvo_passa ... FAILED\ntest result: ok. 3 passed; 0 failed\n"
-    rc, crit = _gate(_workspace(ev))
-    assert rc == 1 and any('required_test' in c[2] for c in crit), crit
-    print("✅ test_r41_required_test_so_failed_e_vermelho: PASS")
-
-
-def test_r41_n_zero_e_vermelho():
-    ev = "{PIN}\ntest tests::alvo_passa ... ok\ntest result: ok. 0 passed; 0 failed\n"
-    rc, crit = _gate(_workspace(ev))
-    assert rc == 1 and any('0 tests passed' in c[2] or 'N=0' in c[2] for c in crit), crit
-    rc, crit = _gate(_workspace("{PIN}\nalvo_passa: 0 passed; 0 failed\n"))
-    assert rc == 1, "harness com N=0 não pode provar o required_test"
-    print("✅ test_r41_n_zero_e_vermelho: PASS")
-
-
-def test_r41_formatos_estruturados_aceites():
-    ci = ("{PIN}\nmiri (led-triple)\tSTEP\t2026-10-05T05:41:30Z test ring::tests::alvo_passa ... ok\n"
-          "test result: ok. 5 passed; 0 failed\n")
-    assert _gate(_workspace(ci))[0] == 0, "linha libtest com prefixo de log CI tem de contar"
-    assert _gate(_workspace("{PIN}\nalvo_passa: 4 passed; 0 failed\n"))[0] == 0, "resumo de harness"
-    print("✅ test_r41_formatos_estruturados_aceites: PASS")
 
 
 def test_r41_vigiado_alterado_sem_evidencia_nova_e_stale():
@@ -460,47 +443,6 @@ def _req(ev: str) -> int:
     return _gate(_workspace(ev))[0]
 
 
-def test_r41_neg_ok_com_real_failed_e_vermelho():
-    """HIGH-1: o `... ok` do controlo NEGATIVO (contra o código antigo) nunca prova o teste."""
-    ev = ("{PIN}\ntest t::alvo_passa ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n"
-          "NEG: test t::alvo_passa ... ok\nNEG: test result: ok. 5 passed; 0 failed\n")
-    assert _req(ev) == 1, "linha NEG não pode contar como teste que passou"
-    print("✅ test_r41_neg_ok_com_real_failed_e_vermelho: PASS")
-
-
-def test_r41_so_prefixo_de_log_ci_e_aceite():
-    base = "{PIN}\ntest result: ok. 3 passed; 0 failed\n"
-    for linha in ["nota # test t::alvo_passa ... ok", "> test t::alvo_passa ... ok",
-                  "o output dizia test t::alvo_passa ... ok", "<!-- test t::alvo_passa ... ok -->",
-                  "<!--\ntest t::alvo_passa ... ok\n-->", "    # test t::alvo_passa ... ok",
-                  "test t::alvo_passa ... ok extra"]:
-        assert _req(base + linha + "\n") == 1, f"aceitou como resultado: {linha!r}"
-    for linha in ["test t::alvo_passa ... ok", "   test alvo_passa ... ok",
-                  "job x\tSTEP y\t2026-10-05T05:41:30.565Z test t::alvo_passa ... ok"]:
-        assert _req(base + linha + "\n") == 0, f"recusou um resultado legítimo: {linha!r}"
-    print("✅ test_r41_so_prefixo_de_log_ci_e_aceite: PASS")
-
-
-def test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario():
-    """Mata M1 (harness lê comentários), M2 (N>=0) e M15 (aceita M failed > 0)."""
-    resumo = "test result: ok. 9 passed; 0 failed\n"  # N>0 global: o harness tem de ser julgado sozinho
-    assert _req("{PIN}\n" + resumo + "alvo_passa: 0 passed; 0 failed\n") == 1, "M2: N=0 no harness"
-    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 1 failed\n") == 1, "M15: harness com falhas"
-    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 10 failed\n") == 1, "M15: 10 failed"
-    assert _req("{PIN}\n" + resumo + "# alvo_passa: 4 passed; 0 failed\n") == 1, "M1: comentado"
-    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 0 failed\n") == 0
-    print("✅ test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario: PASS")
-
-
-def test_r41_nome_com_metacaracteres_e_literal():
-    """Mata M5 (sem re.escape): `a.b` não pode casar com `aXb`."""
-    ev = "{PIN}\ntest t::aXb ... ok\ntest result: ok. 1 passed; 0 failed\n"
-    assert _gate(_workspace(ev, required_test='a.b'))[0] == 1
-    ev = "{PIN}\ntest t::a.b ... ok\ntest result: ok. 1 passed; 0 failed\n"
-    assert _gate(_workspace(ev, required_test='a.b'))[0] == 0
-    print("✅ test_r41_nome_com_metacaracteres_e_literal: PASS")
-
-
 def test_r41_vigiado_ilegivel_ou_diretorio_e_critical():
     """Mata M3/M4: PermissionError e IsADirectoryError nunca são «inalterado»."""
     import os
@@ -552,46 +494,6 @@ def test_r41_pins_nao_confiaveis_sao_critical():
 
 
 
-def test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho():
-    """Falsificador R2 (F1–F4): o prefixo de CI não pode disfarçar uma linha NEG ou um comentário."""
-    real = "{PIN}\ntest t::alvo_passa ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n"
-    for neg in ["NEG\tx\t2026-01-01T00:00:00Z test t::alvo_passa ... ok",
-                "NEG: miri (old)\tRun tests\t2026-10-05T05:41:30.565Z test t::alvo_passa ... ok",
-                "# antigo\tx\t2026-10-05T05:41:30Z test t::alvo_passa ... ok",
-                "NEG\tx\t2026-01-01T00:00:00Z alvo_passa: 5 passed; 0 failed",
-                "> job\tstep\t2026-10-05T05:41:30Z test t::alvo_passa ... ok"]:
-        assert _req(real + neg + "\nNEG: test result: ok. 5 passed; 0 failed\n") == 1, f"aceitou: {neg!r}"
-    print("✅ test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho: PASS")
-
-
-def test_r41_ronda2_seccao_de_controlo_negativo_nao_prova():
-    ev = ("{PIN}\ntest t::alvo_passa ... FAILED\ntest result: ok. 3 passed; 0 failed\n"
-          "## 2. Controlo negativo — contra o código antigo\ntest t::alvo_passa ... ok\n")
-    assert _req(ev) == 1, "um ok depois do título de controlo negativo não prova o teste"
-    ev = ("{PIN}\ntest t::alvo_passa ... ok\ntest result: ok. 3 passed; 0 failed\n"
-          "## 2. Controlo negativo\ntest t::alvo_passa ... FAILED\n")
-    assert _req(ev) == 0, "o ok ANTES do título continua a provar"
-    print("✅ test_r41_ronda2_seccao_de_controlo_negativo_nao_prova: PASS")
-
-
-def test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim():
-    ev = "{PIN}\ntest result: ok. 3 passed; 0 failed\n<!-- rascunho\ntest t::alvo_passa ... ok\n"
-    assert _req(ev) == 1, "um <!-- sem fecho esconde o resto (F5)"
-    ev = EV_OK.replace("{PIN}", "<!-- {PIN} -->")
-    rc, crit = _gate(_workspace(ev))
-    assert rc == 1 and any('does not pin' in c[2] for c in crit), "watched: dentro de HTML não fixa (M23)"
-    print("✅ test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim: PASS")
-
-
-def test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho():
-    resumo = "test result: ok. 9 passed; 0 failed\n"
-    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 0 failed; 2 panicked\n") == 1, "F6"
-    assert _req("{PIN}\n" + resumo + "alvo_passa: 4 passed; 0 failedX\n") == 1, "M22: \\b do harness"
-    assert _req("{PIN}\n" + resumo + "job\tstep\tsem-timestamp test t::alvo_passa ... ok\n") == 1, \
-        "M21: prefixo de CI sem timestamp não é log de CI"
-    print("✅ test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho: PASS")
-
-
 def test_r41_ronda2_symlink_para_fora_do_workspace_e_critical():
     import os
     fora = Path(tempfile.mkdtemp(prefix='gate-r41-fora-'))
@@ -603,6 +505,103 @@ def test_r41_ronda2_symlink_para_fora_do_workspace_e_critical():
     rc, crit = _gate(ws)
     assert rc == 1 and any('symlink' in c[2] for c in crit), crit
     print("✅ test_r41_ronda2_symlink_para_fora_do_workspace_e_critical: PASS")
+
+
+
+# ── R4.1: required_test só dentro da REGIÃO DE PROVA (lista positiva) ────────────
+RESUMO = "test result: ok. 3 passed; 0 failed\n"
+
+
+def test_r41_sem_regiao_de_prova_e_critical():
+    rc, msg = _veredito("{PIN}\ntest t::alvo_passa ... ok\n" + RESUMO)
+    assert rc == 1 and 'proof region' in msg, msg
+    print("✅ test_r41_sem_regiao_de_prova_e_critical: PASS")
+
+
+def test_r41_duas_regioes_ou_marcadores_trocados_e_critical():
+    corpo = "test t::alvo_passa ... ok\n" + RESUMO
+    rc, msg = _veredito(_prova(corpo) + PI + "\n" + corpo + PF + "\n")
+    assert rc == 1 and 'exactly ONE' in msg, msg
+    rc, msg = _veredito("{PIN}\n" + PF + "\n" + corpo + PI + "\n")
+    assert rc == 1 and 'ends before' in msg, msg
+    rc, msg = _veredito("{PIN}\n<!--\n" + PI + "\n-->\n" + corpo + PF + "\n")
+    assert rc == 1 and 'exactly ONE' in msg, "marcador dentro de comentário HTML não abre a prova"
+    print("✅ test_r41_duas_regioes_ou_marcadores_trocados_e_critical: PASS")
+
+
+def test_r41_ok_fora_da_prova_nao_conta():
+    """HIGH-1/2 das rondas 1–3: um `... ok` fora da região — NEG, linha crua, prosa, título que
+    a lista negra não conhecia — nunca prova o teste."""
+    real = "test t::alvo_passa ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n"
+    for fora in ["test t::alvo_passa ... ok\n", "NEG: test t::alvo_passa ... ok\n",
+                 "## Controlo B (NEGATIVO)\ntest t::alvo_passa ... ok\n",
+                 "NEGATIVO\tx\t2026-01-01T00:00:00Z test t::alvo_passa ... ok\n",
+                 "alvo_passa: 5 passed; 0 failed\n"]:
+        rc, msg = _veredito(_prova(real + RESUMO, depois=fora))
+        assert rc == 1 and 'FAILED inside' in msg, (fora, msg)
+        rc, msg = _veredito(_prova(RESUMO, antes=fora))
+        assert rc == 1 and 'no passing result line' in msg, (fora, msg)
+    print("✅ test_r41_ok_fora_da_prova_nao_conta: PASS")
+
+
+def test_r41_failed_do_teste_dentro_da_prova_e_vermelho():
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\ntest t::alvo_passa ... FAILED\n" + RESUMO))
+    assert rc == 1 and 'FAILED inside' in msg, msg
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\nalvo_passa: 4 passed; 1 failed\n" + RESUMO))
+    assert rc == 1 and 'FAILED inside' in msg, msg
+    print("✅ test_r41_failed_do_teste_dentro_da_prova_e_vermelho: PASS")
+
+
+def test_r41_resumo_n_maior_que_zero_dentro_da_prova():
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\n", depois=RESUMO))
+    assert rc == 1 and 'summary' in msg, "o resumo tem de estar DENTRO da prova"
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\ntest result: ok. 0 passed; 0 failed\n"))
+    assert rc == 1 and ('summary' in msg or 'N=0' in msg), msg
+    print("✅ test_r41_resumo_n_maior_que_zero_dentro_da_prova: PASS")
+
+
+def test_r41_linhas_que_nao_sao_resultado_nao_provam():
+    for linha in ["# test t::alvo_passa ... ok", "nota # test t::alvo_passa ... ok", "> test t::alvo_passa ... ok",
+                  "o output dizia test t::alvo_passa ... ok", "<!-- test t::alvo_passa ... ok -->",
+                  "<!--\ntest t::alvo_passa ... ok", "test t::alvo_passa ... ok extra",
+                  "job\tstep\tsem-timestamp test t::alvo_passa ... ok", "required_test: alvo_passa"]:
+        rc, msg = _veredito(_prova(linha + "\n" + RESUMO))
+        assert rc == 1, f"aceitou como resultado: {linha!r}"
+    print("✅ test_r41_linhas_que_nao_sao_resultado_nao_provam: PASS")
+
+
+def test_r41_formatos_estruturados_aceites():
+    for linha in ["test t::alvo_passa ... ok", "   test alvo_passa ... ok",
+                  "miri (led-triple)\tRun tests\t2026-10-05T05:41:30.565Z test ring::tests::alvo_passa ... ok",
+                  "alvo_passa: 4 passed; 0 failed"]:
+        rc, msg = _veredito(_prova(linha + "\n" + RESUMO))
+        assert rc == 0, f"recusou um resultado legítimo: {linha!r} — {msg}"
+    print("✅ test_r41_formatos_estruturados_aceites: PASS")
+
+
+def test_r41_harness_estrito():
+    for linha in ["alvo_passa: 0 passed; 0 failed", "alvo_passa: 4 passed; 1 failed", "alvo_passa: 4 passed; 10 failed",
+                  "alvo_passa: 4 passed; 0 failed; 2 panicked", "alvo_passa: 4 passed; 0 failed; 1 crashed",
+                  "alvo_passa: 4 passed; 0 failed; 1 Error", "alvo_passa: 4 passed; 0 failed; 1 timed out",
+                  "alvo_passa: 4 passed; 0 failed; 1 failed", "alvo_passa: 4 passed; 0 failedX",
+                  "# alvo_passa: 4 passed; 0 failed"]:
+        rc, msg = _veredito(_prova(linha + "\n" + RESUMO))
+        assert rc == 1, f"harness aceitou: {linha!r}"
+    print("✅ test_r41_harness_estrito: PASS")
+
+
+def test_r41_nome_com_metacaracteres_e_literal():
+    assert _veredito(_prova("test t::aXb ... ok\n" + RESUMO), 'a.b')[0] == 1
+    assert _veredito(_prova("test t::a.b ... ok\n" + RESUMO), 'a.b')[0] == 0
+    print("✅ test_r41_nome_com_metacaracteres_e_literal: PASS")
+
+
+def test_r41_watched_dentro_de_html_multilinha_nao_fixa():
+    """M23: o teste anterior (uma linha) era vácuo — `^watched:` já o recusava sem tirar o HTML."""
+    ev = EV_OK.replace("{PIN}", "<!--\n{PIN}\n-->")
+    rc, crit = _gate(_workspace(ev))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), crit
+    print("✅ test_r41_watched_dentro_de_html_multilinha_nao_fixa: PASS")
 
 
 TESTS = [
@@ -617,10 +616,6 @@ TESTS = [
     test_pending_verification_malformed_review_by_is_critical,
     test_open_and_wontfix_are_visible_not_ok,
     test_r41_evidencia_valida_passa,
-    test_r41_required_test_so_em_comentario_e_vermelho,
-    test_r41_required_test_so_failed_e_vermelho,
-    test_r41_n_zero_e_vermelho,
-    test_r41_formatos_estruturados_aceites,
     test_r41_vigiado_alterado_sem_evidencia_nova_e_stale,
     test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde,
     test_r41_vigiado_inexistente_e_critical_nao_verificavel,
@@ -628,18 +623,20 @@ TESTS = [
     test_r41_ci_yml_e_declaravel,
     test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde,
     test_r41_td026_clone_raso_igual_a_completo,
-    test_r41_neg_ok_com_real_failed_e_vermelho,
-    test_r41_so_prefixo_de_log_ci_e_aceite,
-    test_r41_harness_exige_n_maior_que_zero_e_zero_falhas_sem_comentario,
-    test_r41_nome_com_metacaracteres_e_literal,
     test_r41_vigiado_ilegivel_ou_diretorio_e_critical,
     test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado,
     test_r41_pins_nao_confiaveis_sao_critical,
-    test_r41_ronda2_neg_disfarcado_de_log_ci_e_vermelho,
-    test_r41_ronda2_seccao_de_controlo_negativo_nao_prova,
-    test_r41_ronda2_comentario_html_nao_fechado_esconde_ate_ao_fim,
-    test_r41_ronda2_harness_com_panicked_ou_sufixo_colado_e_vermelho,
     test_r41_ronda2_symlink_para_fora_do_workspace_e_critical,
+    test_r41_sem_regiao_de_prova_e_critical,
+    test_r41_duas_regioes_ou_marcadores_trocados_e_critical,
+    test_r41_ok_fora_da_prova_nao_conta,
+    test_r41_failed_do_teste_dentro_da_prova_e_vermelho,
+    test_r41_resumo_n_maior_que_zero_dentro_da_prova,
+    test_r41_linhas_que_nao_sao_resultado_nao_provam,
+    test_r41_formatos_estruturados_aceites,
+    test_r41_harness_estrito,
+    test_r41_nome_com_metacaracteres_e_literal,
+    test_r41_watched_dentro_de_html_multilinha_nao_fixa,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 

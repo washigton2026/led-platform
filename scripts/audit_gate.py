@@ -16,13 +16,15 @@ Enforces the closure schema for Technical Debt entries:
      And the gate watches itself: any change to scripts/audit_gate.py or
      tests/test_audit_gate.py must regenerate the TD-026/TD-028 evidence in the same commit.
      A closed TD without source_files is not watched at all. Result lines inside ```
-     code blocks count (that is where raw output lives); everything after a heading
-     «controlo negativo / negative control» does not.
+     code blocks count (that is where raw output lives). The author can still put a lie
+     INSIDE the proof region — the region is a declaration, reviewed like the sha.
   4. status=pending-verification is valid state; becomes Critical if review_by has passed.
   5. "0 passed" / "0 tests" in evidence is explicitly rejected (KB-012: Miri N=0 pattern).
-  6. For TDs with required_test: the named test must appear in a STRUCTURED RESULT LINE
-     that passed — `test [path::]<name> ... ok` or `<name>: N passed; 0 failed` (N>0) —
-     outside comments. A header line, a `... FAILED` line or a comment does not count.
+  6. For TDs with required_test: the evidence declares ONE proof region (`--- prova ---` …
+     `--- fim da prova ---`), the run that proves the fix. Inside it the named test must have
+     a STRUCTURED RESULT LINE that passed — `test [path::]<name> ... ok` or `<name>: N passed;
+     0 failed` (N>0) — no FAILED for it, and an `N passed; 0 failed` summary with N>0. Nothing
+     outside the region counts (negative controls, prose, quotes live there by construction).
 
 Exit codes:
   0 — gate passes (no Critical findings)
@@ -114,9 +116,11 @@ def evidence_git_hash(content: str) -> str | None:
 _WATCHED_RE = re.compile(r'^watched:[ \t]*(\S+)[ \t]+sha256:([0-9a-f]{64})[ \t]*$', re.MULTILINE)
 # Um `<!--` sem fecho esconde tudo até ao fim no markdown renderizado — e aqui também.
 _HTML_COMMENT = re.compile(r'<!--.*?(?:-->|\Z)', re.DOTALL)
-# A secção de controlo negativo de uma evidência mostra o teste contra o código ANTIGO: nada
-# depois deste título pode provar que o teste passou contra o novo.
-_TITULO_NEGATIVO = re.compile(r'^#+[^\n]*(?:controlo negativo|negative control)', re.IGNORECASE | re.MULTILINE)
+# A REGIÃO DE PROVA (lista positiva, R4.1 após 3 rondas do falsificador): a evidência declara
+# explicitamente o bloco que é o run real. Só ele conta para o required_test — controlos
+# negativos, prosa, títulos e citações ficam fora por construção, sem lista de formas a excluir.
+PROVA_INICIO = '--- prova ---'
+PROVA_FIM = '--- fim da prova ---'
 
 
 def _sem_comentarios_html(content: str) -> str:
@@ -174,9 +178,31 @@ def stale_by_content(workspace: Path, watched: dict[str, str]) -> tuple[list[str
 # `gh run view --log` adds (`job<TAB>step<TAB>timestamp `). Anything else — `NEG:`, `#`, `>`,
 # prose — means the line is ABOUT a result, not a result: a negative control's `... ok` against
 # the old code must never prove that the test passed against the new one.
-_CAMPO_LOG = r'(?!NEG\b)[A-Za-z0-9][^\t\n]*'      # job/step: nunca `#`, `>`, `<`, nem o marcador NEG
+_CAMPO_LOG = r'[A-Za-z0-9][^\t\n]*'      # job/step do log do GitHub Actions
 _PREFIXO_RESULTADO = (r'(?:[ \t]*|' + _CAMPO_LOG + r'\t' + _CAMPO_LOG
                       + r'\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t]+)')
+
+
+def regiao_de_prova(content: str) -> tuple[str | None, str]:
+    """Devolve (região, '') ou (None, porquê). Exige EXATAMENTE um par de marcadores, em linhas
+    próprias, fora de comentários HTML, e o fim depois do início."""
+    linhas = _sem_comentarios_html(content).splitlines()
+    ini = [i for i, l in enumerate(linhas) if l.strip() == PROVA_INICIO]
+    fim = [i for i, l in enumerate(linhas) if l.strip() == PROVA_FIM]
+    if len(ini) != 1 or len(fim) != 1:
+        return None, (f"evidence must declare exactly ONE proof region ('{PROVA_INICIO}' … "
+                      f"'{PROVA_FIM}'); found {len(ini)} start / {len(fim)} end markers")
+    if fim[0] <= ini[0]:
+        return None, "proof region ends before it starts"
+    return '\n'.join(linhas[ini[0] + 1:fim[0]]) + '\n', ''
+
+
+def required_test_failed(content: str, name: str) -> bool:
+    """True iff the text reports `name` as FAILED (libtest) or with failures (harness)."""
+    n = re.escape(name)
+    if re.search(rf'^.*\btest[ \t]+(?:\S+::)?{n}[ \t]+\.\.\.[ \t]+FAILED', content, re.MULTILINE):
+        return True
+    return bool(re.search(rf'^.*\b{n}:[ \t]*[0-9]+[ \t]+passed;[ \t]*[1-9][0-9]*[ \t]+failed', content, re.MULTILINE))
 
 
 def required_test_passed(content: str, name: str) -> bool:
@@ -185,14 +211,12 @@ def required_test_passed(content: str, name: str) -> bool:
     The line may only carry the CI log prefix (see `_PREFIXO_RESULTADO`); HTML comments are
     ignored."""
     content = _sem_comentarios_html(content)
-    titulo = _TITULO_NEGATIVO.search(content)
-    if titulo:
-        content = content[:titulo.start()]
     n = re.escape(name)
     libtest = re.compile(rf'^{_PREFIXO_RESULTADO}test[ \t]+(?:\S+::)?{n}[ \t]+\.\.\.[ \t]+ok[ \t]*\r?$',
                          re.MULTILINE)
-    harness = re.compile(rf'^{_PREFIXO_RESULTADO}{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed\b'
-                         r'(?![^\n]*(?:panicked|FAILED|error))', re.MULTILINE)
+    # Estrito: a linha ACABA em `0 failed` — `; 1 crashed`, `; 2 panicked`, `0 failedX` não contam.
+    harness = re.compile(rf'^{_PREFIXO_RESULTADO}{n}:[ \t]*([0-9]+)[ \t]+passed;[ \t]*0[ \t]+failed[ \t]*\r?$',
+                         re.MULTILINE)
     if libtest.search(content):
         return True
     return any(int(m.group(1)) > 0 for m in harness.finditer(content))
@@ -303,14 +327,27 @@ class Gate:
                 f"nothing (KB-012: Miri N=0 pattern). Re-run with N>0.")
             return
 
-        # ── optional: required_test must have PASSED in a structured line ──────
+        # ── optional: required_test must have PASSED inside the PROOF REGION ───
         required_test = td.get('required_test', '').strip()
-        if required_test and not required_test_passed(content, required_test):
-            self.report(CRITICAL, td_id,
-                f"required_test '{required_test}' has no passing result line in evidence_ref "
-                f"(`test [path::]{required_test} ... ok` or `{required_test}: N passed; 0 failed`, "
-                f"outside comments). A mention, a header or a FAILED line does not prove it ran.")
-            return
+        if required_test:
+            prova, porque = regiao_de_prova(content)
+            if prova is None:
+                self.report(CRITICAL, td_id, porque + " — only the proof region can prove required_test.")
+                return
+            if extract_passed_count(prova) <= 0:
+                self.report(CRITICAL, td_id,
+                    "the proof region has no 'N passed; 0 failed' summary with N>0.")
+                return
+            if required_test_failed(prova, required_test):
+                self.report(CRITICAL, td_id,
+                    f"required_test '{required_test}' is reported FAILED inside the proof region.")
+                return
+            if not required_test_passed(prova, required_test):
+                self.report(CRITICAL, td_id,
+                    f"required_test '{required_test}' has no passing result line in the proof region "
+                    f"(`test [path::]{required_test} ... ok` or `{required_test}: N passed; 0 failed`, "
+                    f"no prefix except the CI log one).")
+                return
 
         # ── stale evidence check, by CONTENT (TD-028) and without git (TD-026) ─
         source_files = td.get('source_files', '').strip()
