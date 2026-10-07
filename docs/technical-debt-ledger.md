@@ -1717,5 +1717,11 @@ required_fix: |
   Medir primeiro (R5.1 passo B: o teste em ciclo, N=500, macos-26 arm64 · ubuntu-24.04 x86 · ubuntu-24.04-arm). Se a
   taxa > 0 em arm64 e 0 em x86 → incoerencia real → accept da correcao (contrato canonico + hot-path = area protegida)
   antes de tocar no codigo. Se 0 em todas → registar a taxa e decidir (flake raro vs defeito raro).
+measured: |
+  R5.1 passo B (PR #34 [MEDICAO], fechado sem merge; run 37679978773): o teste ISOLADO, binario compilado uma vez,
+  N=500 por runner, premissa 1 teste/iteracao: macos-26 arm64 0/500 · ubuntu-24.04-arm aarch64 0/500 ·
+  ubuntu-24.04 x86_64 0/500 (0 vacuas). Taxa isolada < ~0,6 % em todas — nao reproduz. A ocorrencia unica foi no
+  workspace inteiro sob carga. Nao ha base para Critical nem para fechar; proposta: medicao com carga, ou D-REP
+  (a 2.a ocorrencia em qualquer lado → STOP).
 review_by: 2026-10-21
 ```
