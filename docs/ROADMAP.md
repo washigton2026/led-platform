@@ -199,6 +199,9 @@ Derivada de corrente nominal por die; **não medida no rig**.
   com evidência auditável (incl. TD-020), 1 `pending-verification` (**TD-022**), 2 `wontfix`
   com gatilho de revisita (TD-011, TD-012), **6 abertas** (TD-013, TD-014, TD-017, TD-018,
   TD-019, TD-021). Nenhuma em `diagnosed`.
+  **[2026-10-07, main 24d5b91]** 27 TD · **16 OK** (15 closed + TD-014 pending) · 9 open · 2
+  wontfix; `test_audit_gate` **34/0**; TD-026/028 **closed** pelo #26 (R4.1). O bloco acima é o
+  instantâneo de 2026-09-25 e fica como registo.
 - CI (run `36226221020`, PR #6, HEAD `320ff94`, **lido no log** job a job):
   `test (ubuntu-latest)` **105 suítes · 1131/0/9**, `test (macos-latest)` **105 · 1135/0/9**
   (delta 4 = `network_guard` macOS-only), clippy `--all-targets --locked -D warnings`
@@ -818,7 +821,8 @@ compilação. Se for preciso paralelizar, é o primeiro candidato.
 3. **TD-023..028** registados no ledger neste PR, com as severidades decididas a 2026-09-29
    (no_alloc do `led-hal` com contador global; `speed_factor` com relógio de parede; hook sobre
    o worktree; `audit_gate` ignora o returncode do `git log`; Miri do `audio-core` não exercido;
-   stale julgado por commit e não por conteúdo). O **TD-025** (High) entra como
+   stale julgado por commit e não por conteúdo). **[2026-10-07]** TD-026 e TD-028 já **fechados**
+   pelo #26 (R4.1, stale por conteúdo, sem git). O **TD-025** (High) entra como
    `pending-verification`: a evidência existe, mas não num formato que o gate aceite.
    *(2026-10-04: **TD-025 closed** — PR #16 mergeado, `159c1c6`; CI da `main` run `37235593443` lida no log.)*
 4. **M1** (PROTOCOL_V=2) — muda o protocolo IPC: exige autorização antes de começar.

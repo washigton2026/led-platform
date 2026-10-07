@@ -1,31 +1,73 @@
 //! Proves the analysis hot path is allocation-free (lumyx-system-architect invariant 3 /
 //! CLAUDE.md "no allocation on the hot path"). A counting global allocator records every
-//! allocation; after warm-up, 1000 more hops — `Analyzer::process_hop` AND the
+//! allocation of the test's own thread (TD-023); after warm-up, 1000 more hops — `Analyzer::process_hop` AND the
 //! `tokio::sync::watch` send — must allocate zero times.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use audio_core::{Analyzer, AudioFeatures, HOP_SIZE};
 use tokio::sync::watch;
 
+// ── Contador POR THREAD (TD-023) ────────────────────────────────────────────────────────
+//
+// O contador antigo era global do processo: tudo o que QUALQUER thread alocasse dentro da
+// janela entrava na asserção — as threads do libtest incluídas — e o gate reprovava sem o
+// caminho quente ter alocado (TD-023: «7 time(s)», «232 vs 237», «180 vs 182»).
+//
+// Réplica mínima do padrão de `crates/led-protocols/tests/no_alloc.rs` (F7.2, 950a497):
+// para a asserção só conta o que a thread marcada como a do teste aloca; o que as outras
+// alocam dentro da janela fica em `FORA_DA_THREAD` — contexto, nunca falha. Replicado, e não
+// partilhado, porque um `#[global_allocator]` não se partilha entre binários de teste e o
+// workspace não tem crate de utilitários de teste.
+//
+// **O instrumento não pode alocar**: só atómicos e um `thread_local` com init `const`.
+
 struct Counting;
+/// Alocações da thread do teste — é este o número da asserção.
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+/// A janela de medição está aberta?
+static MEDINDO: AtomicBool = AtomicBool::new(false);
+/// Alocações da janela vindas de OUTRAS threads. O contador global antigo somava-as.
+static FORA_DA_THREAD: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Marca a thread que corre o corpo do teste. `const` para não alocar ao inicializar.
+    static E_A_THREAD_DO_TESTE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Chamada de dentro do alocador: **sem alocar**. `true` se a alocação é da thread do teste.
+fn registar() -> bool {
+    // `try_with`: durante a destruição de TLS um `with` entraria em pânico, e um pânico
+    // dentro do alocador aborta o processo sem diagnóstico.
+    let minha = E_A_THREAD_DO_TESTE.try_with(|c| c.get()).unwrap_or(false);
+    if !minha && MEDINDO.load(Ordering::Relaxed) {
+        FORA_DA_THREAD.fetch_add(1, Ordering::Relaxed);
+    }
+    minha
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::SeqCst);
+        if registar() {
+            ALLOCS.fetch_add(1, Ordering::SeqCst);
+        }
         System.alloc(l)
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         System.dealloc(p, l)
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::SeqCst);
+        if registar() {
+            ALLOCS.fetch_add(1, Ordering::SeqCst);
+        }
         System.alloc_zeroed(l)
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::SeqCst);
+        if registar() {
+            ALLOCS.fetch_add(1, Ordering::SeqCst);
+        }
         System.realloc(p, l, n)
     }
 }
@@ -33,8 +75,109 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static A: Counting = Counting;
 
+/// Serializa os testes deste binário: partilham a janela e os estáticos acima.
+static ALLOC_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Marca a thread atual como a do teste e abre a janela.
+fn abrir_janela() {
+    E_A_THREAD_DO_TESTE.with(|c| c.set(true));
+    FORA_DA_THREAD.store(0, Ordering::SeqCst);
+    MEDINDO.store(true, Ordering::SeqCst);
+}
+
+fn fechar_janela() {
+    MEDINDO.store(false, Ordering::SeqCst);
+}
+
+/// Quantas alocações a thread de fundo tem de fazer DENTRO da janela antes de ela fechar.
+const RUIDO_MINIMO: usize = 1_000;
+
+/// Arnês do controlo negativo: corre `corpo` numa janela onde uma thread de fundo aloca em
+/// ciclo, e só fecha a janela quando essa thread já alocou ≥ [`RUIDO_MINIMO`] vezes lá
+/// dentro — espera ativa, sem `sleep`, portanto determinístico. `corpo` devolve quantas
+/// iterações do caminho quente correu (tem de ser > 0). Devolve
+/// `(Δ por thread, Δ que o contador global antigo teria visto)`.
+fn medir_com_ruido_de_fundo(corpo: impl FnOnce() -> usize) -> (usize, usize) {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let parar = Arc::new(AtomicBool::new(false));
+    let pronta = Arc::new(AtomicBool::new(false));
+    let ruido = {
+        let (parar, pronta) = (Arc::clone(&parar), Arc::clone(&pronta));
+        std::thread::spawn(move || {
+            pronta.store(true, Ordering::SeqCst);
+            while !parar.load(Ordering::SeqCst) {
+                std::hint::black_box(vec![0u8; 64]);
+            }
+        })
+    };
+    while !pronta.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+
+    let prazo = Instant::now() + Duration::from_secs(60);
+    abrir_janela();
+    let antes = ALLOCS.load(Ordering::SeqCst);
+    let iteracoes = corpo();
+    while FORA_DA_THREAD.load(Ordering::SeqCst) < RUIDO_MINIMO && Instant::now() < prazo {
+        std::thread::yield_now();
+    }
+    let depois = ALLOCS.load(Ordering::SeqCst);
+    let fora = FORA_DA_THREAD.load(Ordering::SeqCst);
+    fechar_janela();
+
+    parar.store(true, Ordering::SeqCst);
+    ruido.join().unwrap();
+    // Um `corpo` que não corresse o caminho quente passaria vacuamente.
+    assert!(iteracoes > 0, "o arnês não correu o caminho quente — controlo vacuoso");
+    (depois - antes, depois - antes + fora)
+}
+
+/// As duas asserções do controlo negativo, iguais em todos os gates.
+fn exigir_ruido_ignorado(por_thread: usize, global: usize, o_que: &str) {
+    assert!(
+        global >= RUIDO_MINIMO,
+        "o arnês não pôs ruído na janela ({global} < {RUIDO_MINIMO}) — controlo vacuoso"
+    );
+    assert_eq!(
+        por_thread, 0,
+        "{o_que} alocou {por_thread} vez(es) na thread do teste com ruído de fundo \
+         (o contador global antigo teria visto {global})"
+    );
+}
+
+/// Controlo positivo: uma alocação plantada na thread do teste TEM de ser contada — por cada
+/// uma das três entradas do alocador (`alloc`, `alloc_zeroed`, `realloc`). Sem isto, «atribuir
+/// por thread» e «desligar o contador» seriam indistinguíveis.
+fn exigir_que_ve_alocacao_plantada() {
+    fn delta(o_que: &str, plantar: impl FnOnce() -> Vec<u8>) {
+        abrir_janela();
+        let antes = ALLOCS.load(Ordering::SeqCst);
+        let plantada = plantar();
+        let depois = ALLOCS.load(Ordering::SeqCst);
+        fechar_janela();
+        // Depois de fechar a janela, para o optimizador não apagar a alocação.
+        std::hint::black_box(&plantada);
+        assert!(
+            depois > antes,
+            "o contador NÃO viu um `{o_que}` feito na própria thread do teste — o gate tornou-se vacuoso"
+        );
+    }
+    delta("alloc", || vec![7u8; 900]);
+    delta("alloc_zeroed", || vec![0u8; 900]);
+    let mut v: Vec<u8> = Vec::with_capacity(8);
+    v.push(1);
+    std::hint::black_box(&v);
+    delta("realloc", move || {
+        v.reserve_exact(4096);
+        v
+    });
+}
+
 #[test]
 fn zero_allocations_on_hot_path() {
+    let _gate = ALLOC_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let mut analyzer = Analyzer::new(48_000);
     let (tx, _rx) = watch::channel(AudioFeatures::default());
     let hop = [0.1f32; HOP_SIZE];
@@ -45,12 +188,47 @@ fn zero_allocations_on_hot_path() {
         tx.send(features).unwrap();
     }
 
+    abrir_janela();
     let before = ALLOCS.load(Ordering::SeqCst);
     for t in 200..1200u64 {
         let features = analyzer.process_hop(&hop, t);
         tx.send(features).unwrap();
     }
     let after = ALLOCS.load(Ordering::SeqCst);
+    fechar_janela();
 
-    assert_eq!(before, after, "hot path allocated {} time(s) over 1000 hops", after - before);
+    assert_eq!(
+        before,
+        after,
+        "hot path allocated {} time(s) over 1000 hops (other threads, ignored: {})",
+        after - before,
+        FORA_DA_THREAD.load(Ordering::SeqCst)
+    );
+}
+
+/// Controlo negativo do TD-023: ruído de alocação noutra thread durante a janela.
+#[test]
+fn ruido_de_fundo_noutra_thread_nao_reprova_o_hot_path() {
+    let _gate = ALLOC_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut analyzer = Analyzer::new(48_000);
+    let (tx, _rx) = watch::channel(AudioFeatures::default());
+    let hop = [0.1f32; HOP_SIZE];
+    for t in 0..200u64 {
+        tx.send(analyzer.process_hop(&hop, t)).unwrap();
+    }
+    let (por_thread, global) = medir_com_ruido_de_fundo(|| {
+        let mut n = 0;
+        for t in 200..400u64 {
+            tx.send(analyzer.process_hop(&hop, t)).unwrap();
+            n += 1;
+        }
+        n
+    });
+    exigir_ruido_ignorado(por_thread, global, "analysis hot path");
+}
+
+#[test]
+fn o_contador_ainda_ve_o_que_e_alocado_na_thread_do_teste() {
+    let _gate = ALLOC_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    exigir_que_ve_alocacao_plantada();
 }

@@ -1,5 +1,6 @@
 # TD-015 — surface_gate: main.rs nas FONTES + corte no mod tests
 git-hash: 05a76c1
+watched: crates/led-console-bin/tests/surface_gate.rs sha256:83b73cdfdc2b3c61b8245cc5b773d38ef2ab9f9a0de81f613bdadc5007809a57
 source_files: crates/led-console-bin/tests/surface_gate.rs
 required_test: nenhum_blackout_na_superficie_nem_no_codigo
 data: 2026-08-14T12:00:00Z
@@ -18,6 +19,7 @@ data: 2026-08-14T12:00:00Z
 # evidencia: tudo abaixo foi RE-EXECUTADO, incluindo os tres controlos.
 
 ## Verde (main.rs JA nas FONTES)
+--- prova ---
 test o_exporter_nao_e_alcancavel_diretamente_pelo_browser ... ok
 test o_proxy_de_metricas_nao_calcula_nada ... ok
 test shutdown_nao_e_alcancavel_pela_superficie_http ... ok
@@ -26,6 +28,7 @@ test nenhum_timeout_duplicado_a_mao ... ok
 test nenhum_blackout_na_superficie_nem_no_codigo ... ok
 test nenhuma_segunda_fonte_de_verdade_no_console ... ok
 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+--- fim da prova ---
 
 ## Controlo A — `blackout` em PRODUCAO do main.rs -> REPROVA
   plantado: `let _blackout = false;` em fn main() (linha 145, ANTES do `mod tests` da 210)

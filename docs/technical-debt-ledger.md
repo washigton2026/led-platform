@@ -3,7 +3,7 @@
 Canonical source of truth for all tracked debt items. One entry per TD-ID.
 Updates: edit this file + commit. Session ledger (in-chat) must not diverge.
 
-Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
+Last updated: 2026-10-07 (schema alinhado com o audit_gate R4.1 — `watched:` e região de prova)
 
 ---
 
@@ -11,13 +11,19 @@ Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
 - `open`                 — unfixed, work required
 - `diagnosed`            — root cause known, not yet fixed
 - `closed`               — permanently fixed; requires evidence_ref + negative_control (KB-012)
-- `pending-verification` — fix implemented; evidence gate not yet passed (blocks merge)
+- `pending-verification` — fix implemented; evidence gate not yet passed (OK dentro do `review_by`; Critical depois)
 - `wontfix`              — acknowledged, intentionally deferred
 
 ## Closure schema (enforced by scripts/audit_gate.py — KB-012)
 Every `closed` TD MUST have:
   evidence_ref:     path to committed artefact proving the fix (test output, grep, etc.)
   negative_control: description of the run that would FAIL if the fix were absent
+If it has `source_files:`, the evidence pins EACH of them by content, one line each, at the
+start of the line: `watched: <path> sha256:<hex>` (computed when the evidence is generated).
+If it has `required_test:`, the evidence declares ONE proof region (`--- prova ---` …
+`--- fim da prova ---`) with a structured result line for that test (`test [path::]<name> ... ok`
+or `<name>: N passed; 0 failed`, N>0), no FAILED for it, and an `N passed; 0 failed` summary.
+The authoritative rules are the docstring of scripts/audit_gate.py.
 
 ---
 
@@ -868,8 +874,10 @@ context: |
 
   PORQUE CONTINUA `open` E NAO `closed`: o `audit_gate.py` exige, para `closed`, um
   `evidence_ref` que aponte para um ficheiro EXISTENTE com `N passed; 0 failed` e `N > 0`
-  (`scripts/audit_gate.py:163-185`), mais um `git-hash:` de frescura (`:83`). Nao existe
-  `docs/evidence/td-019-*.txt` — a serie salta do `td-016` para nada. A correccao aterrou
+  (regras 2 e 6 do docstring de `scripts/audit_gate.py`), mais linhas `watched:` que fixam o
+  conteudo dos source_files (R4.1; o `git-hash:` deixou de servir de frescura).
+  [2026-10-07] Esta frase sobre a falta de artefacto e anterior a 2026-09-13: hoje existem
+  `docs/evidence/td-019-*.md` e o `evidence_ref` acima aponta para um deles. A correccao aterrou
   em codigo; a PROVA nunca foi capturada. Isto e o gate a funcionar, nao uma omissao:
   neste repositorio `closed` significa "provado fechado com artefacto", nao "acreditamos
   que esta corrigido".
@@ -1392,32 +1400,56 @@ review_by: 2026-10-07
 
 ---
 
-## TD-023 — O gate de alocacao do `led-hal` conta as alocacoes de todas as threads
+## TD-023 — Os gates de alocacao contam as alocacoes de todas as threads (led-hal, led-sequencer, audio-core, led-pixel-engine)
 
 ```yaml
 td_id:     TD-023
-title:     "`led-hal/tests/no_alloc.rs` usa um contador GLOBAL: alocacoes do libtest noutras threads entram na janela e o gate reprova sem o hot-path ter alocado"
+title:     "Os gates `tests/no_alloc.rs` do led-hal, led-sequencer, audio-core e led-pixel-engine usam um contador GLOBAL: alocacoes do libtest noutras threads entram na janela e o gate reprova sem o caminho quente ter alocado"
 severity:  Medium
 status:    open
-origin:    "PR #8, run 36245590122 tentativa 2 (job macOS 108673138958, SHA 57cf21d, so docs): «calibrated hot path allocated 7 time(s) over 10000 frames»."
-required_test: zero_allocations_on_hot_path_with_calibration
-source_files: crates/led-hal/tests/no_alloc.rs
+origin:    "PR #8, run 36245590122 tentativa 2 (job macOS 108673138958, SHA 57cf21d, so docs): «calibrated hot path allocated 7 time(s) over 10000 frames». Mesma classe no led-sequencer: PR #20, run 37236057484, job 111535264226 (diff = so o ledger): «timeline render allocated 2 time(s) over 10000 frames» (180 vs 182). led-hal de novo no PR #17 (232 vs 237)."
+required_test: ruido_de_fundo_noutra_thread_nao_reprova
+source_files: crates/led-hal/tests/no_alloc.rs, crates/led-sequencer/tests/no_alloc.rs, crates/audio-core/tests/no_alloc.rs, crates/led-pixel-engine/tests/no_alloc.rs
 context: |
-  crates/led-hal/tests/no_alloc.rs:10 — `static ALLOCS: AtomicUsize`, incrementado pelo
-  alocador em QUALQUER thread. :37 — `ALLOC_GATE` so serializa os corpos dos dois testes do
-  ficheiro; nao exclui as threads do libtest. :35 ja regista «7 phantom allocations that
-  vanished when run alone». Assercao em :90-94.
+  Os quatro ficheiros tinham `static ALLOCS: AtomicUsize` incrementado pelo alocador em
+  QUALQUER thread (led-hal :10, led-sequencer :12, audio-core :13, led-pixel-engine :17 em
+  79e52e2). `ALLOC_GATE` (led-hal :37, led-pixel-engine :44) so serializa os corpos dos testes
+  do ficheiro; nao exclui as threads do libtest. O led-sequencer reprovou com UM so #[test] no
+  binario: a contaminacao nao vem de testes vizinhos, logo nenhum Mutex a resolve.
+  Consolida o TD-DRAFT-no-alloc-contador-global (2026-10-04), que nao entrou no ledger.
+  O led-protocols ja atribui por thread desde a F7.2 (950a497) e e a referencia.
+  Tambem com contador global (janela `MEDINDO`), sem flake observado, FORA deste TD por
+  ordem do operador: led-daemon-bin/tests/custo_do_fanout.rs:69 e no_alloc_canal.rs:66.
+  led-daemon-bin/tests/ipc_line_limit.rs mede memoria viva de OUTRA thread: nao e desta classe.
 impact: |
-  Falso-vermelho intermitente no job bloqueante `test (macos-latest)`. Nao gera falso-verde:
-  um contador que soma todas as threads nunca conta menos do que a thread do teste alocou.
+  Falso-vermelho intermitente no job bloqueante `test (macos-latest)`. O contador antigo nao gera
+  falso-verde: um contador que soma todas as threads nunca conta menos do que a thread do teste
+  alocou. O contador por thread tem um limite proprio: ver LIMITE em required_fix.
 mitigation_now: |
-  Nenhuma automatica; re-run.
+  Nenhuma automatica; re-run (1 por falha, regra de repeticao de jobs do Gauntlet).
 required_fix: |
-  Candidata, nao implementada: atribuir por thread, como a F7.2 fez em
-  crates/led-protocols/tests/no_alloc.rs:64-95 (`E_A_THREAD_DO_TESTE`, `FORA_DA_THREAD`).
+  Atribuir por thread, como a F7.2 fez em crates/led-protocols/tests/no_alloc.rs
+  (`E_A_THREAD_DO_TESTE`, `FORA_DA_THREAD`, janela `MEDINDO`), replicado nos quatro ficheiros
+  (um #[global_allocator] nao se partilha entre binarios; nao ha crate de utilitarios de teste).
+  Correcao proposta no ramo fix/td-023-contador-por-thread (R3.4, 2026-10-05).
+  LIMITE (aceite, como na F7.2): o gate passa a provar «zero alocacoes NA THREAD QUE EXECUTA o
+  caminho quente». Uma alocacao por frame delegada num worker persistente deixa de ser vista
+  (falsificador R3.4, ataque b2: verde; com o contador global: «9921 time(s)»). Um spawn por
+  frame continua a ser visto (o proprio spawn aloca na thread chamadora). Hoje nenhum caminho
+  medido delega noutra thread: FORA_DA_THREAD = 0 em todas as janelas dos gates principais
+  (medido em macOS; Linux = CI do PR).
   PROIBIDO: alargar a tolerancia, #[ignore], correr o teste isolado na CI.
 falsification_required: |
-  Alocacao injetada no hot-path -> vermelho no gate real; revertida -> verde sob carga.
+  Por ficheiro: (1) `ruido_de_fundo_noutra_thread_nao_reprova_*` — thread de fundo a alocar
+  em ciclo; a janela so fecha depois de >= 1000 alocacoes dela la dentro; exige contador
+  global >= 1000 E por thread == 0. Mutar `registar` para devolver sempre true (= contador
+  global) -> vermelho. (2) `o_contador_ainda_ve_o_que_e_alocado_na_thread_do_teste` (alloc,
+  alloc_zeroed e realloc, uma assercao cada) — mutar para devolver sempre false -> vermelho.
+  (3) Alocacao injetada no caminho quente -> vermelho.
+  Ao fechar: o rename/remocao destes testes nao fica vermelho em nenhum gate (o e2e Inv3/C3 aceita
+  0 testes; required_test exige linha estruturada que passou desde o R4.1 (#26), mas o audit_gate
+  so o verifica com o TD `closed`) — fixar N
+  por binario e os nomes completos na evidencia.
 review_by: 2026-10-12
 ```
 
@@ -1462,7 +1494,7 @@ severity:  High
 status:    closed
 closed_on: 2026-10-01
 closed_by: "eb791fe (correcao, PR #11) + 7ee2f89 (o teste passa a emitir «test_pre_commit_hook: N passed; M failed» dos contadores reais). Re-medido sobre 7ee2f89: 4 passed; 0 failed, exit 0."
-evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-01.md
+evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-07.md
 required_test: test_pre_commit_hook
 origin:    "Descrito na mensagem de eb791fe: D1 — o gate lia o ledger do worktree (indice 19 TD / worktree 20 -> «20 OK»); D2 — o stale usava git log <hash>..HEAD, cego as alteracoes em stage (o commit C4, 320ff94, passou o hook)."
 source_files: scripts/pre-commit-hook.sh
@@ -1495,9 +1527,13 @@ negative_control: |
 td_id:     TD-026
 title:     "`files_changed_since` nao le o returncode do `git log`: num clone raso o hash da evidencia nao existe, o `git log` falha e o detector de stale devolve «nao mudou»"
 severity:  High
-status:    open
+status:    closed
+closed_on: 2026-10-06
+closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 34 passed; 0 failed. Apos 4 rondas do falsificador o required_test so conta dentro da REGIAO DE PROVA declarada na evidencia (--- prova --- / --- fim da prova ---): lista positiva, sem lista negra de formas NEG; pins duplicados/absolutos/com ../por symlink sao Critical."
+evidence_ref: docs/evidence/td-026-028-audit-gate-conteudo-2026-10-06.md
+required_test: test_r41_td026_clone_raso_igual_a_completo
 origin:    "Encontrado em 2026-09-26 ao desenhar o job debt gate (PR #9)."
-source_files: scripts/audit_gate.py
+source_files: scripts/audit_gate.py, tests/test_audit_gate.py
 context: |
   scripts/audit_gate.py:101-113 — `subprocess.run(['git','log','--oneline',
   f'{git_hash}..HEAD','--',p], capture_output=True)` (:107-108): so `stdout` e lido, o
@@ -1520,6 +1556,11 @@ required_fix: |
   verificavel»), nunca «nao mudou».
 falsification_required: |
   Clone raso -> exit != 0 com «nao verificavel»; clone completo -> igual a hoje.
+negative_control: |
+  Os mesmos testes contra o audit_gate.py antigo (f318c97): test_r41_td026_clone_raso_igual_a_completo
+  FAILED — num clone `--depth 1` o hash da evidencia nao existe, o `git log` falha calado e o gate
+  antigo da verde com o ficheiro vigiado MUDADO. Com o gate novo o veredito do clone raso e igual
+  ao do completo (stale). Ficheiro vigiado inexistente -> Critical «not verifiable». Evidencia, sec. 2.
 review_by: 2026-10-12
 ```
 
@@ -1562,9 +1603,13 @@ review_by: 2026-10-12
 td_id:     TD-028
 title:     "`files_changed_since` usa `git log <hash>..HEAD -- <ficheiro>`: um merge que nao muda o conteudo do ficheiro torna a evidencia «stale» (falso-vermelho)"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-10-06
+closed_by: "R4.1 (ramo ci/audit-gate-integridade): o stale passa a comparar o sha256 do CONTEUDO fixado na evidencia (linhas watched:) com o conteudo do workspace; o git deixa de ser usado. tests/test_audit_gate.py 34 passed; 0 failed. Apos 4 rondas do falsificador o required_test so conta dentro da REGIAO DE PROVA declarada na evidencia (--- prova --- / --- fim da prova ---): lista positiva, sem lista negra de formas NEG; pins duplicados/absolutos/com ../por symlink sao Critical."
+evidence_ref: docs/evidence/td-026-028-audit-gate-conteudo-2026-10-06.md
+required_test: test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde
 origin:    "PR #7, run 36475926021 (job 109109510154, merge ref do PR): «TD-022: evidence is stale — source files changed after evidence was generated (hash 57cf21d): ['crates/led-console-bin/tests/ipc_contra_o_daemon.rs']», com o ficheiro inalterado."
-source_files: scripts/audit_gate.py
+source_files: scripts/audit_gate.py, tests/test_audit_gate.py
 context: |
   scripts/audit_gate.py:101-113 (`files_changed_since`) decide por existencia de commits no
   `git log`, nao por diferenca de conteudo.
@@ -1585,5 +1630,60 @@ required_fix: |
   Coordenar com o TD-026 (mesma funcao).
 falsification_required: |
   Merge sem mudanca de conteudo -> OK; mudanca real no ficheiro -> Critical stale.
+negative_control: |
+  Os mesmos testes contra o audit_gate.py antigo (f318c97): test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde
+  FAILED — commits B (muda) e C (reverte) depois do hash da evidencia: o gate antigo ve-os no
+  `git log` e da stale com o conteudo IGUAL. Simetrico: conteudo realmente mudado sem evidencia nova
+  -> stale (test_r41_vigiado_alterado_sem_evidencia_nova_e_stale). Evidencia, sec. 2.
 review_by: 2026-10-12
+```
+
+---
+
+## TD-029 — O bloqueio de WiFi no Linux falha aberto em tres pontos, e nenhum teste distingue o resultado
+
+```yaml
+td_id:     TD-029
+title:     "A guarda do ADR-0005 em Linux (`probe_linux`, led-hal/src/network_guard.rs:229) e o pre-voo do daemon deixam o show arrancar sem verificar o WiFi: operstate ilegivel ou nao-`up`, e qualquer `ProbeUnavailable`, contam como rede OK"
+severity:  High
+status:    open
+origin:    "ROADMAP 0.8 (candidato) e plano consolidado 0.H; recon e falsificacao (agente separado) a 2026-10-04, por leitura do codigo — nao executado em Linux real. Severidade High decidida pelo operador: guarda de seguranca fail-open."
+source_files: crates/led-hal/src/network_guard.rs, crates/led-daemon-bin/src/preflight.rs
+context: |
+  Tres pontos, todos medidos no codigo:
+  (1) `probe_linux` (:260) — `if let Ok(state) = fs::read_to_string(&operstate_path)`: uma interface sem fio cujo
+      operstate nao se le e IGNORADA; o resultado final e `Ok(())`, "sem WiFi".
+  (2) `probe_linux` (:261) — so bloqueia `state == "up"`. [INFERIDO, doc do kernel citada de memoria, por confirmar]
+      `dormant` (L1 activo a espera de 802.1X/WPA) e `unknown` (que o kernel manda tratar como capaz de dados)
+      tambem passam como "sem WiFi".
+  (3) `preflight.rs:151-156` — `Err(ProbeUnavailable)` → `network_ok: true` ("prosseguindo com aviso"). Por isso o
+      ramo que ja existe para `/sys/class/net` ausente ou `read_dir` falhado (network_guard.rs:234-244) tambem deixa
+      o show arrancar; e uma correccao que so devolva `ProbeUnavailable` em (1) NAO bloquearia nada.
+  E o journal escreve `network_checked: sem WiFi ativo` (preflight.rs:141) no caso (1) — afirma que verificou.
+  Cobertura: `rg probe_linux crates/` devolve so a definicao (:229) e a chamada (:128). O ramo Linux e EXECUTADO no
+  job ubuntu por `led-hal/src/hal.rs:234` (`hal_with_guard_wifi_block_does_not_panic`), que aceita qualquer resultado
+  — executado sem oraculo. A decisao de rede do pre-voo e testada so com guarda FALSA (`GuardaFalsa`, alvo
+  192.168.2.156); o `WifiBlockGuard` real nunca e chamado pelo pre-voo em teste (os E2E usam loopback e saem em
+  `todos_loopback()`, preflight.rs:120). E o teste `sonda_indisponivel_prossegue_mas_nunca_afirma_ter_verificado`
+  (preflight.rs:462-471) FIXA o defeito (3): afirma `ProbeUnavailable` → `network_ok true`.
+  Drift doc/codigo: network_guard.rs:107 diz `/sys/class/net/wl*/operstate`; o codigo deteta por `wireless/` ou
+  `phy80211/` (:251-252).
+impact: |
+  Um show em Linux pode arrancar sobre WiFi activo — o que o ADR-0005 proibe (jitter de 31 ms medido na bancada de
+  2026-07-20) — com o journal a dizer que a rede foi verificada. Nao observado em Linux real.
+mitigation_now: |
+  Nenhuma automatica. Em macOS o pre-voo usa `probe_macos`; o ponto (3) aplica-se a qualquer plataforma.
+required_fix: |
+  Decisao do operador (toca a politica do ADR-0005 e area protegida): fail-closed no PRE-VOO, nao so na sonda —
+  `ProbeUnavailable` com alvo de rede → `network_ok: false` com mensagem explicita; override so por flag explicita,
+  registada no journal. Na sonda: operstate ilegivel → `ProbeUnavailable`; estados nao-`down` de uma interface sem
+  fio (pelo menos `up`, `dormant`, `unknown`) → tratados como activos, a confirmar na doc do kernel. A decisao da sonda
+  extraida para uma funcao pura sobre uma raiz injectavel (`probe_linux_em(raiz: &Path)`). O teste
+  preflight.rs:462 tem de ser INVERTIDO (nao apagado) na mesma fatia, com o porque no commit. Accept aprovado antes.
+falsification_required: |
+  Sonda, com sysfs falso em tempdir: wlan0 `up`, `dormant`, `unknown` → activo; `down` → inactivo; sem `wireless/` →
+  ignorada; operstate ilegivel → ProbeUnavailable (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
+  guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
+  override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
+review_by: 2026-10-31
 ```
