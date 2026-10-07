@@ -270,6 +270,357 @@ def test_open_and_wontfix_are_visible_not_ok():
         tmp.unlink()
 
 
+
+# ── R4.1: required_test estruturado + stale por CONTEÚDO (TD-028) sem git (TD-026) ────
+
+import hashlib
+import shutil
+import subprocess
+
+def _sha(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _workspace(evidence: str, source: str = 'src/alvo.rs', conteudo: str = 'fn alvo() {}\n',
+               required_test: str = 'alvo_passa', pin: bool = True, extra_src: str = '') -> Path:
+    """Workspace temporário com um TD fechado, a sua evidência e o ficheiro vigiado.
+    `{PIN}` na evidência é substituído pela linha `watched:` do conteúdo ATUAL."""
+    ws = Path(tempfile.mkdtemp(prefix='gate-r41-'))
+    f = ws / source
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(conteudo)
+    pin_line = f"watched: {source} sha256:{_sha(f)}" if pin else ''
+    (ws / 'docs').mkdir()
+    (ws / 'docs' / 'ev.md').write_text(evidence.replace('{PIN}', pin_line))
+    srcs = source + (f", {extra_src}" if extra_src else '')
+    (ws / 'docs' / 'technical-debt-ledger.md').write_text(textwrap.dedent(f"""
+    ```yaml
+    td_id:     TD-R41
+    status:    closed
+    evidence_ref: docs/ev.md
+    required_test: {required_test}
+    source_files: {srcs}
+    negative_control: |
+      mutacao -> vermelho
+    ```
+    """))
+    return ws
+
+
+def _gate(ws: Path) -> tuple[int, list]:
+    g = audit_gate.Gate(ws)
+    rc = g.run(audit_gate.parse_ledger(ws / 'docs' / 'technical-debt-ledger.md'))
+    return rc, [f for f in g.findings if f[0] == audit_gate.CRITICAL]
+
+
+# Literais por omissão: o controlo negativo importa o gate ANTIGO, que não os define.
+PI = getattr(audit_gate, "PROVA_INICIO", "--- prova ---")
+PF = getattr(audit_gate, "PROVA_FIM", "--- fim da prova ---")
+EV_OK = ("git-hash: abc1234\n{PIN}\n" + PI + "\ntest tests::alvo_passa ... ok\n"
+         "test result: ok. 1 passed; 0 failed\n" + PF + "\n")
+
+
+def _prova(corpo: str, antes: str = '', depois: str = '') -> str:
+    """Evidência com o pin, texto fora da prova e a região de prova com `corpo`."""
+    return "{PIN}\n" + antes + PI + "\n" + corpo + PF + "\n" + depois
+
+
+def _veredito(ev: str, required_test: str = 'alvo_passa') -> tuple[int, str]:
+    rc, crit = _gate(_workspace(ev, required_test=required_test))
+    return rc, ' | '.join(c[2] for c in crit)
+
+
+def test_r41_evidencia_valida_passa():
+    rc, crit = _gate(_workspace(EV_OK))
+    assert rc == 0 and not crit, f"evidência válida reprovou: {crit}"
+    print("✅ test_r41_evidencia_valida_passa: PASS")
+
+
+def test_r41_vigiado_alterado_sem_evidencia_nova_e_stale():
+    ws = _workspace(EV_OK)
+    (ws / 'src/alvo.rs').write_text('fn alvo() { mudou() }\n')
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('stale' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_alterado_sem_evidencia_nova_e_stale: PASS")
+
+
+def test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde():
+    ws = _workspace(EV_OK)
+    f = ws / 'src/alvo.rs'
+    f.write_text('fn alvo() { mudou() }\n')
+    ev = ws / 'docs/ev.md'
+    ev.write_text(EV_OK.replace('{PIN}', f"watched: src/alvo.rs sha256:{_sha(f)}"))
+    rc, crit = _gate(ws)
+    assert rc == 0, f"evidência regenerada para o conteúdo novo tem de passar: {crit}"
+    print("✅ test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde: PASS")
+
+
+def test_r41_vigiado_inexistente_e_critical_nao_verificavel():
+    ws = _workspace(EV_OK)
+    (ws / 'src/alvo.rs').unlink()
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('not verifiable' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_inexistente_e_critical_nao_verificavel: PASS")
+
+
+def test_r41_source_file_sem_watched_e_critical():
+    rc, crit = _gate(_workspace(EV_OK, pin=False))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), crit
+    print("✅ test_r41_source_file_sem_watched_e_critical: PASS")
+
+
+def test_r41_ci_yml_e_declaravel():
+    ws = _workspace(EV_OK, source='.github/workflows/ci.yml', conteudo='name: CI\n')
+    assert _gate(ws)[0] == 0
+    (ws / '.github/workflows/ci.yml').write_text('name: CI\n# passo Miri apagado\n')
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('stale' in c[2] for c in crit), "apagar um passo do ci.yml vigiado tem de dar stale"
+    print("✅ test_r41_ci_yml_e_declaravel: PASS")
+
+
+def _git(ws: Path, *args: str) -> str:
+    r = subprocess.run(['git', '-C', str(ws), '-c', 'user.email=t@t', '-c', 'user.name=t', *args],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"git {args}: {r.stderr}"
+    return r.stdout.strip()
+
+
+def test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde():
+    """TD-028: commits que tocam o ficheiro e voltam ao mesmo conteúdo NÃO tornam a evidência
+    stale. O gate antigo (`git log <hash>..HEAD`) dava-o como stale (falso-vermelho)."""
+    ws = _workspace(EV_OK)
+    _git(ws, 'init', '-q')
+    _git(ws, 'add', '-A'); _git(ws, 'commit', '-qm', 'A')
+    # A evidência aponta para um commit REAL: só assim o gate antigo (`git log A..HEAD`) vê os
+    # commits B e C e dá o falso-vermelho — com um hash inexistente ele falhava calado.
+    hash_a = _git(ws, 'rev-parse', 'HEAD')
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text().replace('git-hash: abc1234', f'git-hash: {hash_a}'))
+    _git(ws, 'commit', '-qam', 'evidencia aponta para A')
+    original = (ws / 'src/alvo.rs').read_text()
+    (ws / 'src/alvo.rs').write_text('fn alvo() { temporario() }\n')
+    _git(ws, 'commit', '-qam', 'B: muda')
+    (ws / 'src/alvo.rs').write_text(original)
+    _git(ws, 'commit', '-qam', 'C: reverte')
+    rc, crit = _gate(ws)
+    assert rc == 0, f"historia sem mudanca de conteudo deu stale (TD-028): {crit}"
+    print("✅ test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde: PASS")
+
+
+def test_r41_td026_clone_raso_igual_a_completo():
+    """TD-026: num clone raso o hash da evidência não existe. O gate antigo engolia a falha
+    do `git log` e dava verde com o ficheiro MUDADO. Agora o veredito é igual ao do clone
+    completo: verde com o conteúdo igual, stale com o conteúdo mudado."""
+    origem = _workspace(EV_OK)
+    _git(origem, 'init', '-q')
+    _git(origem, 'add', '-A'); _git(origem, 'commit', '-qm', 'A')
+    hash_a = _git(origem, 'rev-parse', 'HEAD')
+    ev = origem / 'docs/ev.md'
+    ev.write_text(ev.read_text().replace('git-hash: abc1234', f'git-hash: {hash_a}'))
+    _git(origem, 'commit', '-qam', 'evidencia aponta para A')
+    (origem / 'src/alvo.rs').write_text('fn alvo() { mudou() }\n')
+    _git(origem, 'commit', '-qam', 'muda o vigiado')
+    for _ in range(2):
+        (origem / 'docs/x.txt').write_text(str(_)); _git(origem, 'add', '-A'); _git(origem, 'commit', '-qm', 'x')
+    raso = Path(tempfile.mkdtemp(prefix='gate-r41-raso-')) / 'r'
+    r = subprocess.run(['git', 'clone', '-q', '--depth', '1', f'file://{origem}', str(raso)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert subprocess.run(['git', '-C', str(raso), 'cat-file', '-e', hash_a],
+                          capture_output=True).returncode != 0, "premissa: o hash NAO existe no clone raso"
+    rc_completo, _ = _gate(origem)
+    rc_raso, crit = _gate(raso)
+    assert rc_completo == 1 and rc_raso == 1, \
+        f"vigiado mudado tem de ser stale nos DOIS clones (completo={rc_completo}, raso={rc_raso}): {crit}"
+    print("✅ test_r41_td026_clone_raso_igual_a_completo: PASS")
+
+
+
+
+# ── R4.1 (falsificador): mutantes que sobreviviam com o pin regenerado ────────────
+
+def _req(ev: str) -> int:
+    return _gate(_workspace(ev))[0]
+
+
+def test_r41_vigiado_ilegivel_ou_diretorio_e_critical():
+    """Mata M3/M4: PermissionError e IsADirectoryError nunca são «inalterado»."""
+    import os
+    ws = _workspace(EV_OK)
+    f = ws / 'src/alvo.rs'
+    if os.geteuid() != 0:          # root lê ficheiros 000 — aí não há erro a provar
+        os.chmod(f, 0)
+        try:
+            rc, crit = _gate(ws)
+        finally:
+            os.chmod(f, 0o644)
+        assert rc == 1 and any('not verifiable' in c[2] for c in crit), crit
+    f.unlink(); f.mkdir()
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('not verifiable' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_ilegivel_ou_diretorio_e_critical: PASS")
+
+
+def test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado():
+    """Mata M8 (stale só sobre source_files): um `watched:` extra (ex.: ci.yml) também conta."""
+    ws = _workspace(EV_OK)
+    extra = ws / 'ci.yml'
+    extra.write_text('a\n')
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text() + f"watched: ci.yml sha256:{_sha(extra)}\n")
+    assert _gate(ws)[0] == 0
+    extra.write_text('b\n')
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('ci.yml' in c[2] for c in crit), crit
+    print("✅ test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado: PASS")
+
+
+def test_r41_pins_nao_confiaveis_sao_critical():
+    """`watched:` comentado não fixa; duplicado, absoluto ou com `..` → Critical."""
+    rc, crit = _gate(_workspace("# {PIN}\n" + EV_OK.replace("{PIN}\n", "")))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), "pin comentado não pode valer"
+    ws = _workspace(EV_OK)
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text() + "watched: src/alvo.rs sha256:" + "0" * 64 + "\n")
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('pinned 2x' in c[2] for c in crit), crit
+    for mau in ["/etc/hosts", "../fora.txt"]:
+        ws = _workspace(EV_OK)
+        ev = ws / 'docs/ev.md'
+        ev.write_text(ev.read_text() + f"watched: {mau} sha256:" + "0" * 64 + "\n")
+        rc, crit = _gate(ws)
+        assert rc == 1 and any('escapes the workspace' in c[2] for c in crit), (mau, crit)
+    print("✅ test_r41_pins_nao_confiaveis_sao_critical: PASS")
+
+
+
+def test_r41_ronda2_symlink_para_fora_do_workspace_e_critical():
+    import os
+    fora = Path(tempfile.mkdtemp(prefix='gate-r41-fora-'))
+    (fora / 'alvo.rs').write_text('fn alvo() {}\n')
+    ws = _workspace(EV_OK)
+    (ws / 'link').symlink_to(fora, target_is_directory=True)
+    ev = ws / 'docs/ev.md'
+    ev.write_text(ev.read_text() + f"watched: link/alvo.rs sha256:{_sha(fora / 'alvo.rs')}\n")
+    rc, crit = _gate(ws)
+    assert rc == 1 and any('symlink' in c[2] for c in crit), crit
+    print("✅ test_r41_ronda2_symlink_para_fora_do_workspace_e_critical: PASS")
+
+
+
+# ── R4.1: required_test só dentro da REGIÃO DE PROVA (lista positiva) ────────────
+RESUMO = "test result: ok. 3 passed; 0 failed\n"
+
+
+def test_r41_sem_regiao_de_prova_e_critical():
+    rc, msg = _veredito("{PIN}\ntest t::alvo_passa ... ok\n" + RESUMO)
+    assert rc == 1 and 'proof region' in msg, msg
+    print("✅ test_r41_sem_regiao_de_prova_e_critical: PASS")
+
+
+def test_r41_duas_regioes_ou_marcadores_trocados_e_critical():
+    corpo = "test t::alvo_passa ... ok\n" + RESUMO
+    rc, msg = _veredito(_prova(corpo) + PI + "\n" + corpo + PF + "\n")
+    assert rc == 1 and 'exactly ONE' in msg, msg
+    rc, msg = _veredito("{PIN}\n" + PF + "\n" + corpo + PI + "\n")
+    assert rc == 1 and 'ends before' in msg, msg
+    rc, msg = _veredito("{PIN}\n<!--\n" + PI + "\n-->\n" + corpo + PF + "\n")
+    assert rc == 1 and 'exactly ONE' in msg, "marcador dentro de comentário HTML não abre a prova"
+    print("✅ test_r41_duas_regioes_ou_marcadores_trocados_e_critical: PASS")
+
+
+def test_r41_ok_fora_da_prova_nao_conta():
+    """HIGH-1/2 das rondas 1–3: um `... ok` fora da região — NEG, linha crua, prosa, título que
+    a lista negra não conhecia — nunca prova o teste."""
+    real = "test t::alvo_passa ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n"
+    for fora in ["test t::alvo_passa ... ok\n", "NEG: test t::alvo_passa ... ok\n",
+                 "## Controlo B (NEGATIVO)\ntest t::alvo_passa ... ok\n",
+                 "NEGATIVO\tx\t2026-01-01T00:00:00Z test t::alvo_passa ... ok\n",
+                 "alvo_passa: 5 passed; 0 failed\n"]:
+        rc, msg = _veredito(_prova(real + RESUMO, depois=fora))
+        assert rc == 1 and 'FAILED inside' in msg, (fora, msg)
+        rc, msg = _veredito(_prova(RESUMO, antes=fora))
+        assert rc == 1 and 'no passing result line' in msg, (fora, msg)
+    print("✅ test_r41_ok_fora_da_prova_nao_conta: PASS")
+
+
+def test_r41_failed_do_teste_dentro_da_prova_e_vermelho():
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\ntest t::alvo_passa ... FAILED\n" + RESUMO))
+    assert rc == 1 and 'FAILED inside' in msg, msg
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\nalvo_passa: 4 passed; 1 failed\n" + RESUMO))
+    assert rc == 1 and 'FAILED inside' in msg, msg
+    print("✅ test_r41_failed_do_teste_dentro_da_prova_e_vermelho: PASS")
+
+
+def test_r41_resumo_n_maior_que_zero_dentro_da_prova():
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\n", depois=RESUMO))
+    assert rc == 1 and 'summary' in msg, "o resumo tem de estar DENTRO da prova"
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\ntest result: ok. 0 passed; 0 failed\n"))
+    assert rc == 1 and ('summary' in msg or 'N=0' in msg), msg
+    print("✅ test_r41_resumo_n_maior_que_zero_dentro_da_prova: PASS")
+
+
+def test_r41_linhas_que_nao_sao_resultado_nao_provam():
+    for linha in ["# test t::alvo_passa ... ok", "nota # test t::alvo_passa ... ok", "> test t::alvo_passa ... ok",
+                  "o output dizia test t::alvo_passa ... ok", "<!-- test t::alvo_passa ... ok -->",
+                  "<!--\ntest t::alvo_passa ... ok", "test t::alvo_passa ... ok extra",
+                  "job\tstep\tsem-timestamp test t::alvo_passa ... ok", "required_test: alvo_passa"]:
+        rc, msg = _veredito(_prova(linha + "\n" + RESUMO))
+        assert rc == 1, f"aceitou como resultado: {linha!r}"
+    print("✅ test_r41_linhas_que_nao_sao_resultado_nao_provam: PASS")
+
+
+def test_r41_formatos_estruturados_aceites():
+    for linha in ["test t::alvo_passa ... ok", "   test alvo_passa ... ok",
+                  "miri (led-triple)\tRun tests\t2026-10-05T05:41:30.565Z test ring::tests::alvo_passa ... ok",
+                  "alvo_passa: 4 passed; 0 failed"]:
+        rc, msg = _veredito(_prova(linha + "\n" + RESUMO))
+        assert rc == 0, f"recusou um resultado legítimo: {linha!r} — {msg}"
+    print("✅ test_r41_formatos_estruturados_aceites: PASS")
+
+
+def test_r41_harness_estrito():
+    for linha in ["alvo_passa: 0 passed; 0 failed", "alvo_passa: 4 passed; 1 failed", "alvo_passa: 4 passed; 10 failed",
+                  "alvo_passa: 4 passed; 0 failed; 2 panicked", "alvo_passa: 4 passed; 0 failed; 1 crashed",
+                  "alvo_passa: 4 passed; 0 failed; 1 Error", "alvo_passa: 4 passed; 0 failed; 1 timed out",
+                  "alvo_passa: 4 passed; 0 failed; 1 failed", "alvo_passa: 4 passed; 0 failedX",
+                  "# alvo_passa: 4 passed; 0 failed"]:
+        rc, msg = _veredito(_prova(linha + "\n" + RESUMO))
+        assert rc == 1, f"harness aceitou: {linha!r}"
+    print("✅ test_r41_harness_estrito: PASS")
+
+
+def test_r41_nome_com_metacaracteres_e_literal():
+    assert _veredito(_prova("test t::aXb ... ok\n" + RESUMO), 'a.b')[0] == 1
+    assert _veredito(_prova("test t::a.b ... ok\n" + RESUMO), 'a.b')[0] == 0
+    print("✅ test_r41_nome_com_metacaracteres_e_literal: PASS")
+
+
+def test_r41_watched_dentro_de_html_multilinha_nao_fixa():
+    """M23: o teste anterior (uma linha) era vácuo — `^watched:` já o recusava sem tirar o HTML."""
+    ev = EV_OK.replace("{PIN}", "<!--\n{PIN}\n-->")
+    rc, crit = _gate(_workspace(ev))
+    assert rc == 1 and any('does not pin' in c[2] for c in crit), crit
+    print("✅ test_r41_watched_dentro_de_html_multilinha_nao_fixa: PASS")
+
+
+
+def test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao():
+    """Falsificador R4: N8, N4b, N5b e N1b sobreviviam — cada exigência da região tem agora a sua."""
+    ci = "job\tstep\t2026-10-05T05:41:30Z "
+    rc, msg = _veredito(_prova(ci + "test t::alvo_passa ... FAILED\ntest t::alvo_passa ... ok\n" + RESUMO))
+    assert rc == 1 and 'FAILED inside' in msg, ("N8: FAILED com prefixo de CI", msg)
+    corpo = "test t::alvo_passa ... ok\n" + RESUMO
+    for falso in ["NEG: " + PI, "# " + PI]:
+        rc, msg = _veredito("{PIN}\n" + falso + "\n" + corpo + PF + "\n")
+        assert rc == 1 and 'exactly ONE' in msg, ("N4b: marcador por substring", falso, msg)
+    rc, msg = _veredito(_prova("test t::alvo_passa ... ok\ntest result: ok. 0 passed; 0 failed\n", depois=RESUMO))
+    assert rc == 1 and 'summary' in msg, ("N5b: resumo N=0 dentro, N>0 fora", msg)
+    rc, msg = _veredito(_prova(corpo) + PF + "\n")
+    assert rc == 1 and 'exactly ONE' in msg, ("N1b: dois marcadores de fim", msg)
+    print("✅ test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao: PASS")
+
+
 TESTS = [
     test_extract_passed_count,
     test_evidence_git_hash,
@@ -281,8 +632,32 @@ TESTS = [
     test_pending_verification_past_deadline_is_critical,
     test_pending_verification_malformed_review_by_is_critical,
     test_open_and_wontfix_are_visible_not_ok,
+    test_r41_evidencia_valida_passa,
+    test_r41_vigiado_alterado_sem_evidencia_nova_e_stale,
+    test_r41_alterado_com_evidencia_regenerada_no_mesmo_commit_e_verde,
+    test_r41_vigiado_inexistente_e_critical_nao_verificavel,
+    test_r41_source_file_sem_watched_e_critical,
+    test_r41_ci_yml_e_declaravel,
+    test_r41_td028_historia_sem_mudanca_de_conteudo_e_verde,
+    test_r41_td026_clone_raso_igual_a_completo,
+    test_r41_vigiado_ilegivel_ou_diretorio_e_critical,
+    test_r41_vigiado_extra_alem_dos_source_files_tambem_e_julgado,
+    test_r41_pins_nao_confiaveis_sao_critical,
+    test_r41_ronda2_symlink_para_fora_do_workspace_e_critical,
+    test_r41_sem_regiao_de_prova_e_critical,
+    test_r41_duas_regioes_ou_marcadores_trocados_e_critical,
+    test_r41_ok_fora_da_prova_nao_conta,
+    test_r41_failed_do_teste_dentro_da_prova_e_vermelho,
+    test_r41_resumo_n_maior_que_zero_dentro_da_prova,
+    test_r41_linhas_que_nao_sao_resultado_nao_provam,
+    test_r41_formatos_estruturados_aceites,
+    test_r41_harness_estrito,
+    test_r41_nome_com_metacaracteres_e_literal,
+    test_r41_watched_dentro_de_html_multilinha_nao_fixa,
+    test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
+
 
 
 def main() -> int:
@@ -294,15 +669,20 @@ def main() -> int:
         try:
             test()
             passed += 1
+            print(f"test {test.__name__} ... ok")
         except AssertionError as e:
             print(f"❌ {test.__name__}: FAIL\n   {e}")
+            print(f"test {test.__name__} ... FAILED")
             failed += 1
         except Exception as e:
             print(f"💥 {test.__name__}: ERROR — {type(e).__name__}: {e}")
+            print(f"test {test.__name__} ... FAILED")
             failed += 1
     print(f"\n{'='*60}")
     print(f"{'='*60}")
     print(f"Tests: {passed} passed, {failed} failed")
+    # Resumo no formato que o próprio gate aceita como evidência (`N passed; M failed`).
+    print(f"test_audit_gate: {passed} passed; {failed} failed")
     return 0 if failed == 0 else 1
 
 
