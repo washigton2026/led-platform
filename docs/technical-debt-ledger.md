@@ -1677,7 +1677,8 @@ falsification_required: |
   guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
   override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
 progress: |
-  2026-10-07 (fix/td-029-sonda-falhada-bloqueia, accept R5 aprovado — opcao B). FEITO: o ponto (3) e o ramo
+  2026-10-07 (fix/td-029-sonda-falhada-bloqueia, accept R5 aprovado — opcao B). FEITO: o ponto (3) para
+  plataformas SUPORTADAS (numa nao suportada continua nao-fatal, de proposito: D1) e o ramo
   `/sys/class/net` ausente/`read_dir` falhado. Variante nova `ProbeFailed { probe, error }` (Display CRITICAL);
   Linux :234/:242 e macOS :149/:154 devolvem-na; `ProbeUnavailable` fica SO para SO nao suportado (D1, zero
   docs/adr/). Pre-voo: ProbeFailed → network_ok false + `network_probe_failed`; com `--assume-no-wifi` (so CLI,
@@ -1689,5 +1690,13 @@ progress: |
   zero campos novos (e2e `dois_loads_ipc_com_override_deixam_dois_eventos_no_journal`).
   POR FAZER (mantem o TD aberto): pontos (1) operstate ilegivel ignorado e (2) `dormant`/`unknown` como inactivos,
   e a extraccao `probe_linux_em(raiz)` — fora do accept R5. Nao executado em Linux real.
+  RESIDUAIS medidos pelo falsificador (R4.T, ~/lumyx-evidence/2026-10-07/r4.T/falsifier.md):
+  (a) os 4 sitios D3 (macOS :164/:170, Linux :252/:260) devolvem ProbeFailed mas NENHUM teste o exercita — repor
+      `ProbeUnavailable` ou `Ok(())` ali deixa a suite verde (MA2/MA3). Fecha so com sondas injectaveis
+      (`probe_macos_com`/`probe_linux_em`) — alteracao do led-hal fora do accept.
+  (b) O equivalente macOS do ponto (1): se o `ifconfig <if>` falhar, `is_interface_active_macos` devolve `false` e a
+      interface Wi-Fi conta como INACTIVA; o pre-voo regista `network_checked`. Medido sem mutacao (FI_E). Fail-open.
+  (c) Observabilidade: no arranque com IPC (`run_with_control_com`) o Arm/Play do show inicial descarta os eventos
+      (`let _ = rt.apply(..)`): o journal nao mostra `transitioned` para ready/playing nesse caminho.
 review_by: 2026-10-31
 ```

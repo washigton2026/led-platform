@@ -43,6 +43,19 @@ impl NetworkGuard for SondaFalhada {
     }
 }
 
+struct WifiAtivo;
+impl NetworkGuard for WifiAtivo {
+    fn check(&self) -> Result<(), NetworkPolicyError> {
+        Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })
+    }
+    fn name(&self) -> &'static str {
+        "wifi-ativo"
+    }
+}
+
+static FALHADA: SondaFalhada = SondaFalhada;
+static WIFI: WifiAtivo = WifiAtivo;
+
 struct Presente;
 impl DevicePresence for Presente {
     fn probe(&self, _: IpAddr) -> Presence {
@@ -114,6 +127,15 @@ struct Daemon {
 
 impl Daemon {
     fn subir(nome: &str, c: Config, inicial: Option<String>) -> Self {
+        Self::subir_com(nome, c, inicial, &FALHADA)
+    }
+
+    fn subir_com(
+        nome: &str,
+        c: Config,
+        inicial: Option<String>,
+        guarda: &'static (dyn NetworkGuard + Sync),
+    ) -> Self {
         let sock = std::env::temp_dir().join(format!("lumyx-td029-{nome}-{}.sock", std::process::id()));
         let flag = Arc::new(AtomicBool::new(false));
         let cp = ControlPlane::new(Arc::clone(&flag));
@@ -128,7 +150,7 @@ impl Daemon {
             });
             let mut pacer = SystemPacer::new();
             let mut jn = Journal::new(j);
-            run_with_control_com(&mut rt, inicial, &c, &mut pacer, &mut jn, &f, &cp, &SondaFalhada, &Presente);
+            run_with_control_com(&mut rt, inicial, &c, &mut pacer, &mut jn, &f, &cp, guarda, &Presente);
         });
         Daemon { sock, flag, journal, laco: Some(laco) }
     }
@@ -228,4 +250,105 @@ fn arranque_com_override_regista_o_evento() {
     }
     let j = d.parar();
     assert_eq!(contar(&j, "network_assumed_by_operator"), 1, "journal:\n{j}");
+    // Controlo positivo do oráculo `armou_ou_tocou`: com a flag o mesmo arranque arma e toca.
+    assert!(armou_ou_tocou(&j), "com a flag e a sonda falhada o arranque toca:\n{j}");
+}
+
+/// O arranque (pré-voo + Arm + Play) corre inteiro ANTES do laço, que é onde o `parar` é visto;
+/// o encerramento escreve SEMPRE a linha final `"notice":"state"`. Por isso, depois do `parar`,
+/// o estado final diz se o arranque armou — sem esperar por relógio. Dois oráculos que NÃO servem:
+/// o `status` (antes do 1.º tick publicado responde o instantâneo por omissão, `idle`) e os eventos
+/// `transitioned` (neste caminho o Arm/Play do arranque não os escreve no journal).
+fn armou_ou_tocou(j: &str) -> bool {
+    let fim = j.lines().rev().find(|l| l.contains(r#""notice":"state""#)).expect("linha final de estado");
+    !fim.contains(r#""state":"loaded""#)
+}
+
+/// **O arranque SEM a flag e com a sonda falhada não toca.** O par de
+/// `arranque_com_override_regista_o_evento`: sem ele, ligar o override sempre no arranque
+/// deixava a suite verde (falsificador R4.T, MA1) — e o show tocava sem a sonda verificar nada.
+#[test]
+fn arranque_sem_override_com_sonda_falhada_nao_toca() {
+    let show = escrever("td029-arranque-sem.lumyx");
+    let d = Daemon::subir("arranque-sem", cfg(false, true), Some(show));
+    let j = d.parar();
+    assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
+    assert!(!armou_ou_tocou(&j), "sem a flag o arranque não arma nem toca:\n{j}");
+    assert_eq!(contar(&j, "network_probe_failed"), 1, "a razão tem de ficar no journal:\n{j}");
+    assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "sem a flag nunca há override:\n{j}");
+}
+
+/// **WiFi ativo bloqueia SEMPRE, com a flag, nos dois caminhos** (arranque e `load` por IPC).
+/// A recusa estava provada só na função pura; forçar `network_ok` no laço passava (MD1/MD2).
+#[test]
+fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
+    let show = escrever("td029-wifi.lumyx");
+    let d = Daemon::subir_com("wifi-arranque", cfg(true, true), Some(show.clone()), &WIFI);
+    let j = d.parar();
+    assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
+    assert!(!armou_ou_tocou(&j), "WiFi ativo + flag: o arranque não pode armar nem tocar:\n{j}");
+    assert_eq!(contar(&j, "network_refused"), 1, "{j}");
+    assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "a flag não cobre WiFi ativo:\n{j}");
+
+    let d = Daemon::subir_com("wifi-ipc", cfg(true, false), None, &WIFI);
+    let (mut s, mut r) = d.cliente();
+    pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+    let resp = pedir(&mut s, &mut r, &load(&show, 2));
+    let j = d.parar();
+    assert!(resp.contains("preflight_failed"), "WiFi ativo + flag: o load tem de ser recusado: {resp}\n{j}");
+    assert_eq!(contar(&j, "network_refused"), 1, "{j}");
+    assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "{j}");
+}
+
+/// Uma linha de notice tem EXATAMENTE `{"t_ms":N,"notice":"X","detail":"…"}` — o formato do
+/// `notice_to_json`, sem campos novos (D4). Devolve o nome da notice, ou `None` se a forma for outra.
+fn notice_exata(linha: &str) -> Option<&str> {
+    let resto = linha.strip_prefix(r#"{"t_ms":"#)?;
+    let n = resto.find(|c: char| !c.is_ascii_digit())?;
+    let resto = resto[n..].strip_prefix(r#","notice":""#)?;
+    let fim_nome = resto.find('"')?;
+    let (nome, resto) = resto.split_at(fim_nome);
+    let detalhe = resto.strip_prefix(r#"","detail":""#)?.strip_suffix(r#""}"#)?;
+    // Dentro do detalhe, toda a aspa tem de vir escapada: uma aspa crua é outro campo.
+    let cruas = detalhe.match_indices('"').filter(|(i, _)| !detalhe[..*i].ends_with('\\')).count();
+    (n > 0 && cruas == 0).then_some(nome)
+}
+
+/// **D4 — o caminho IPC escreve TODAS as notices do pré-voo, e no formato exato.** Não só as de
+/// rede: `devices_checked` também tem de chegar (MC2). E nenhuma linha de notice do pré-voo pode
+/// ganhar um campo (MC3, p.ex. `"via":"ipc"`).
+#[test]
+fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
+    let show = escrever("td029-ipc-formato.lumyx");
+    let d = Daemon::subir("ipc-formato", cfg(true, false), None);
+    let (mut s, mut r) = d.cliente();
+    pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+    let resp = pedir(&mut s, &mut r, &load(&show, 2));
+    assert!(resp.contains(r#""ok":true"#), "{resp}");
+    let j = d.parar();
+
+    assert_eq!(contar(&j, "devices_checked"), 1, "a notice de presença também vem do load IPC:\n{j}");
+    let do_pre_voo = ["network_assumed_by_operator", "devices_checked"];
+    let mut vistas = 0;
+    for linha in j.lines().filter(|l| do_pre_voo.iter().any(|n| l.contains(&format!(r#""notice":"{n}""#)))) {
+        let nome = notice_exata(linha).unwrap_or_else(|| panic!("formato diferente do notice_to_json: {linha}"));
+        assert!(do_pre_voo.contains(&nome), "{linha}");
+        vistas += 1;
+    }
+    assert_eq!(vistas, 2, "uma linha por notice do pré-voo:\n{j}");
+}
+
+/// **A flag só existe na CLI.** Nenhuma fonte do daemon lê variáveis de ambiente (MB1): o
+/// override tem de ser escrito por quem arranca o processo, em cada execução.
+#[test]
+fn a_flag_nao_vem_do_ambiente() {
+    for (nome, fonte) in [
+        ("main.rs", include_str!("../src/main.rs")),
+        ("run.rs", include_str!("../src/run.rs")),
+        ("preflight.rs", include_str!("../src/preflight.rs")),
+    ] {
+        for proibido in ["env::var", "var_os(", "vars()"] {
+            assert!(!fonte.contains(proibido), "{nome} lê o ambiente ({proibido})");
+        }
+    }
 }
