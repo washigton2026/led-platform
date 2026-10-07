@@ -45,29 +45,41 @@ TOTAL_TESTS=0
 # Antes: `cargo test -p led-hal --lib heartbeat_resends | grep -q "test result: ok"` — o `--lib`
 # não vê tests/contract.rs, o filtro casava 0 testes e `ok. 0 passed` dava PASS (KB-012), com o
 # veredito lido por pipe (KB-013). Agora: N_esperado por LISTAGEM dos nomes exatos, execução com
-# `--exact`, saída para ficheiro, exit lido sem pipe, e N_executado == N_esperado == nº de nomes.
+# `--exact`, saída para ficheiro, exit lido sem pipe, e N_executado == N_esperado == nº de nomes, por binário.
 # BEGIN gate_heartbeat_nunca_zeros
-HB_NOMES=(heartbeat_resends_last_valid_and_never_zeros heartbeat_never_sends_zero_frame_when_record_never_called)
+# Uma linha por binário: «pacote|alvo|nomes exatos». Três binários, porque os dois testes do
+# contract.rs só batem UMA vez e só olham para o canal 0 (falsificador R4.7: zeros a partir da
+# 2.ª batida, só na thread do spawn, só depois de 50 ms ou zeros parciais passavam). O lifecycle
+# cobre a thread; o do stage do daemon compara o keep-alive com o quadro que estava no fio.
+HB_GRUPOS="led-hal|--test contract|heartbeat_resends_last_valid_and_never_zeros heartbeat_never_sends_zero_frame_when_record_never_called
+led-hal|--test lifecycle|heartbeat_thread_keeps_sending_the_last_valid_frame
+led-daemon-bin|--lib|stage::tests::pausado_o_palco_continua_vivo_e_nunca_recebe_zeros"
 gate_heartbeat_nunca_zeros() {
-    local out lista code esperado executado
+    local out lista code esperado executado pacote alvo nomes n total=0 falhou=0
     out=$(mktemp "${TMPDIR:-/tmp}/lumyx-hb.XXXXXX")
     lista=$(mktemp "${TMPDIR:-/tmp}/lumyx-hb-lista.XXXXXX")
-    cargo test -p led-hal --test contract -- --list --exact "${HB_NOMES[@]}" > "$lista" 2>&1
-    code=$?
-    esperado=$(grep -cE ': test$' "$lista")
-    if [ "$code" -ne 0 ] || [ "$esperado" -ne "${#HB_NOMES[@]}" ]; then
-        fail "LED: heartbeat never-zeros — listagem deu ${esperado} de ${#HB_NOMES[@]} testes (exit ${code}): nome mudou ou binário não compila"
-        rm -f "$out" "$lista"; return
-    fi
-    cargo test -p led-hal --test contract -- --exact "${HB_NOMES[@]}" > "$out" 2>&1
-    code=$?
-    executado=$(sed -nE 's/^test result: ok\. ([0-9]+) passed.*/\1/p' "$out" | head -1)
-    if [ "$code" -eq 0 ] && [ "${executado:-0}" -eq "$esperado" ]; then
-        pass "LED: heartbeat never sends zeros (${executado}/${esperado} testes)"
-    else
-        fail "LED: heartbeat never-zeros — exit ${code}, executados ${executado:-0} de ${esperado}"
-        grep -aE 'panicked at|FAILED' "$out" | head -5
-    fi
+    while IFS='|' read -r pacote alvo nomes; do
+        [ -n "$pacote" ] || continue
+        n=$(echo $nomes | wc -w | tr -d ' ')
+        # $RELEASE_FLAG: com --release o gate corre no mesmo perfil que o resto do e2e.
+        cargo test -p "$pacote" $alvo $RELEASE_FLAG -- --list --exact $nomes > "$lista" 2>&1
+        code=$?
+        esperado=$(grep -cE ': test$' "$lista")
+        if [ "$code" -ne 0 ] || [ "$esperado" -ne "$n" ]; then
+            fail "LED: heartbeat never-zeros — ${pacote} ${alvo}: listagem deu ${esperado} de ${n} (exit ${code}): nome mudou ou não compila"
+            falhou=1; continue
+        fi
+        cargo test -p "$pacote" $alvo $RELEASE_FLAG -- --exact $nomes > "$out" 2>&1
+        code=$?
+        executado=$(sed -nE 's/^test result: ok\. ([0-9]+) passed.*/\1/p' "$out" | head -1)
+        if [ "$code" -ne 0 ] || [ "${executado:-0}" -ne "$esperado" ]; then
+            fail "LED: heartbeat never-zeros — ${pacote} ${alvo}: exit ${code}, executados ${executado:-0} de ${esperado}"
+            grep -aE 'panicked at|FAILED' "$out" | head -5
+            falhou=1; continue
+        fi
+        total=$((total + executado))
+    done <<< "$HB_GRUPOS"
+    [ "$falhou" -eq 0 ] && pass "LED: heartbeat never sends zeros (${total}/4 testes: contract ×2, lifecycle, stage do daemon)"
     rm -f "$out" "$lista"
 }
 # END gate_heartbeat_nunca_zeros
