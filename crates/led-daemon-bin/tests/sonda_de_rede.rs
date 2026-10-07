@@ -53,7 +53,18 @@ impl NetworkGuard for WifiAtivo {
     }
 }
 
+struct SondaOk;
+impl NetworkGuard for SondaOk {
+    fn check(&self) -> Result<(), NetworkPolicyError> {
+        Ok(())
+    }
+    fn name(&self) -> &'static str {
+        "sonda-ok"
+    }
+}
+
 static FALHADA: SondaFalhada = SondaFalhada;
+static OK: SondaOk = SondaOk;
 static WIFI: WifiAtivo = WifiAtivo;
 
 struct Presente;
@@ -236,7 +247,8 @@ fn sem_override_o_load_ipc_e_recusado_e_a_razao_fica_no_journal() {
     let j = d.parar();
 
     assert!(resp.contains("preflight_failed"), "sonda falhada sem override bloqueia: {resp}");
-    assert!(play.contains(r#""ok":false"#), "depois do load recusado, o play não pode tocar: {play}");
+    assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"),
+            "depois do load recusado o play é recusado POR NÃO ESTAR ARMADO (não por já tocar): {play}");
     assert_eq!(contar(&j, "network_probe_failed"), 1, "a razão tem de ficar no journal:\n{j}");
     assert_eq!(contar(&j, "network_assumed_by_operator"), 0);
 }
@@ -318,8 +330,10 @@ fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
     let (mut s, mut r) = d.cliente();
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
     let resp = pedir(&mut s, &mut r, &load(&show, 2));
+    let play = pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"play"}"#);
     let j = d.parar();
     assert!(resp.contains("preflight_failed"), "WiFi ativo + flag: o load tem de ser recusado: {resp}\n{j}");
+    assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"), "WiFi + flag: o play não toca: {play}");
     assert_eq!(contar(&j, "network_refused"), 1, "{j}");
     assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "{j}");
 }
@@ -375,6 +389,12 @@ fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
             "linha do JSONL que não é notice nem event (D4, MC6): {linha}"
         );
     }
+    const EVENTOS: &[&str] = &["transitioned", "position_changed", "show_loaded", "show_unloaded",
+                                "reached_end", "faulted", "fault_cleared"];
+    for linha in j.lines().filter(|l| l.contains(r#","event":""#)) {
+        let tipo = linha.split(r#","event":""#).nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
+        assert!(EVENTOS.contains(&tipo), "tipo de evento novo no journal (MC6e): {linha}");
+    }
     for linha in j.lines().filter(|l| l.contains(r#""notice":"#) && !l.contains(r#""notice":"state""#)) {
         let nome = notice_exata(linha).unwrap_or_else(|| panic!("formato diferente do notice_to_json: {linha}"));
         assert!(CONHECIDAS.contains(&nome), "tipo de notice novo no journal: {linha}");
@@ -428,6 +448,14 @@ fn a_flag_nao_vem_do_ambiente() {
 /// `run_with_control` são os dois chamadores do pré-voo (accept R5, item 3); até à ronda 2 do
 /// falsificador só o segundo tinha teste (MA1R: forçar o override aqui deixava a suite verde).
 fn correr_cli(nome: &str, assume_no_wifi: bool, guarda: &dyn NetworkGuard) -> String {
+    correr_cli_com_outcome(nome, assume_no_wifi, guarda).0
+}
+
+fn correr_cli_com_outcome(
+    nome: &str,
+    assume_no_wifi: bool,
+    guarda: &dyn NetworkGuard,
+) -> (String, led_daemon_bin::Outcome) {
     let show = escrever(nome);
     let d = descriptor_from_path(&show, led_daemon::ShowId(1)).expect("show");
     let mut c = cfg(assume_no_wifi, true);
@@ -437,8 +465,16 @@ fn correr_cli(nome: &str, assume_no_wifi: bool, guarda: &dyn NetworkGuard) -> St
     let mut rt = ShowRuntime::new();
     let mut pacer = SystemPacer::new();
     let parar = AtomicBool::new(false);
-    run_com(&mut rt, &show, d, &c, &mut pacer, &mut jn, &parar, guarda, &Presente);
-    buf.texto()
+    let o = run_com(&mut rt, &show, d, &c, &mut pacer, &mut jn, &parar, guarda, &Presente);
+    (buf.texto(), o)
+}
+
+/// O efeito medido no `Outcome`, não no texto (MCLI3: escrever `arm_refused`/`NeverStarted` e
+/// tocar em silêncio passava o oráculo textual).
+fn nao_armou_outcome(o: &led_daemon_bin::Outcome) {
+    assert_eq!(o.final_state, led_daemon::State::Loaded, "{o:?}");
+    assert_eq!(o.ticks, 0, "bloqueado no arranque, o laço não tica: {o:?}");
+    assert_eq!(o.reason, led_daemon_bin::ExitReason::NeverStarted, "{o:?}");
 }
 
 /// O EFEITO no modo CLI, não só a linha `arm_refused` (MCLI1): nenhuma transição para ready ou
@@ -450,7 +486,8 @@ fn nao_armou_cli(j: &str) {
 
 #[test]
 fn modo_cli_sem_override_com_sonda_falhada_nao_arma() {
-    let j = correr_cli("td029-cli-sem.lumyx", false, &FALHADA);
+    let (j, o) = correr_cli_com_outcome("td029-cli-sem.lumyx", false, &FALHADA);
+    nao_armou_outcome(&o);
     assert_eq!(contar(&j, "network_probe_failed"), 1, "{j}");
     assert_eq!(contar(&j, "arm_refused"), 1, "sem a flag o modo CLI não arma:\n{j}");
     nao_armou_cli(&j);
@@ -464,7 +501,8 @@ fn modo_cli_sem_override_com_sonda_falhada_nao_arma() {
 /// **Modo CLI: WiFi ativo bloqueia SEMPRE, com a flag** (MD2R).
 #[test]
 fn modo_cli_wifi_ativo_com_flag_nao_arma() {
-    let j = correr_cli("td029-cli-wifi.lumyx", true, &WIFI);
+    let (j, o) = correr_cli_com_outcome("td029-cli-wifi.lumyx", true, &WIFI);
+    nao_armou_outcome(&o);
     assert_eq!(contar(&j, "network_refused"), 1, "{j}");
     assert_eq!(contar(&j, "arm_refused"), 1, "WiFi ativo + flag: o modo CLI não pode armar:\n{j}");
     nao_armou_cli(&j);
@@ -486,6 +524,9 @@ fn o_binario_avisa_em_stderr_so_com_a_flag() {
     };
     let com = correr(&["--assume-no-wifi"]);
     assert!(com.contains("AVISO: --assume-no-wifi"), "a flag tem de avisar em stderr: {com}");
+    // Também com saída — o caso de produção (MH5: avisar só sem --output passava).
+    let com_saida = correr(&["--assume-no-wifi", "--output", ALVO, "--profile", PRESET]);
+    assert!(com_saida.contains("AVISO: --assume-no-wifi"), "com --output também avisa: {com_saida}");
     // No ARRANQUE (MH3): num processo que fica a correr, o aviso chega antes de o mandarmos parar.
     {
         use std::io::Read;
@@ -544,5 +585,26 @@ fn o_binario_com_saida_consulta_a_guarda_real_nos_dois_modos() {
             .sum::<usize>();
         assert_eq!(rede, 1, "premissa: o pré-voo de rede correu uma vez ({extra:?}):\n{j}");
         assert!(!j.contains("PermissiveGuard"), "com --output a guarda tem de ser a real ({extra:?}):\n{j}");
+        // Sem a flag, o override NUNCA aparece (MR4/MR5: o `run`/`run_with_control` a ligá-lo sozinhos).
+        // Discrimina onde a guarda real não reprova por WiFi (CI sem WiFi → `override_unused`).
+        assert_eq!(contar(&j, "network_override_unused") + contar(&j, "network_assumed_by_operator"), 0,
+                   "sem --assume-no-wifi não pode haver override ({extra:?}):\n{j}");
     }
+}
+
+/// **D2(b) pelo LAÇO, nos dois caminhos** (MC8: filtrar `network_override_unused` no laço
+/// passava — só a função pura o provava): flag + sonda que verifica ⇒ o aviso «sem efeito» fica
+/// no journal no modo CLI e em cada `load` IPC.
+#[test]
+fn flag_com_sonda_ok_deixa_o_aviso_sem_efeito_no_journal_nos_dois_caminhos() {
+    let j = correr_cli("td029-cli-ok.lumyx", true, &OK);
+    assert_eq!(contar(&j, "network_override_unused"), 1, "modo CLI:\n{j}");
+    let show = escrever("td029-ipc-ok.lumyx");
+    let d = Daemon::subir_com("ipc-ok", cfg(true, false), None, &OK);
+    let (mut s, mut r) = d.cliente();
+    pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+    let resp = pedir(&mut s, &mut r, &load(&show, 2));
+    let j = d.parar();
+    assert!(resp.contains(r#""ok":true"#), "{resp}");
+    assert_eq!(contar(&j, "network_override_unused"), 1, "load IPC:\n{j}");
 }

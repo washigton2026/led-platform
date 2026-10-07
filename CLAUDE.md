@@ -158,14 +158,14 @@ cada `load` IPC; com a sonda OK regista `network_override_unused`. WiFi activo b
 **Achado:** o caminho IPC do `load` perdia **todas** as notices do pré-voo; passa a escrevê-las com o mesmo
 `notice_to_json`, sem campos novos. IPC/`PROTOCOL_V`, contratos canónicos e ADRs intocados.
 
-**Invariants verified.** `cargo test --workspace --locked` 1169 · 0 · 9, exit 0 (107 binários). Controlos
-negativos M1/M2/M3/MD4 e as 23 mutações que o falsificador deixou vivas em três rondas (arranque sem a flag,
+**Invariants verified.** `cargo test --workspace --locked` 1170 · 0 · 9, exit 0 (107 binários). Controlos
+negativos M1/M2/M3/MD4 e as 31 mutações que o falsificador deixou vivas em quatro rondas (arranque sem a flag,
 WiFi + flag nos dois caminhos e no modo CLI, notices IPC incompletas/com campo/tipo novo, flag por ambiente
 ou por outra flag, aviso em stderr removido ou adiado, armar depois do arranque, a guarda permissiva no
 lugar da real, `play` depois de um `load` recusado, linhas JSONL de tipo novo) reprovam com `panicked`, nunca
 `error[E`.
-O modo CLI ganhou `run_com` (sondas injetadas), no molde do `run_with_control_com`. O TD-022 foi re-verificado no mesmo commit
-(o seu ficheiro ganhou `assume_no_wifi: false`): C0 0, F1 101 ×3, C0 0.
+O modo CLI ganhou `run_com` (sondas injetadas), no molde do `run_with_control_com`. O TD-022 foi re-verificado no commit do TD-029
+(c712e89; o seu ficheiro ganhou `assume_no_wifi: false`): C0 0, F1 101 ×3, C0 0.
 
 **Pending.** TD-029 continua **aberto**: operstate ilegível e `dormant`/`unknown` ainda contam como inactivos
 (pontos 1 e 2), fora do accept R5; os 4 sítios que passaram a `ProbeFailed` não têm teste (falta sonda

@@ -29,7 +29,9 @@
 //!   WiFi ativo, e quando a sonda verifica fica `network_override_unused`.
 //!
 //! O que este módulo garante é que a diferença fica **escrita no journal**: "verificado",
-//! "não foi possível verificar" e "afirmado pelo operador" nunca aparecem com a mesma frase.
+//! "não foi possível verificar" e "afirmado pelo operador" nunca aparecem com a mesma frase —
+//! DADO o que a guarda devolve. Uma sonda por interface que falha em silêncio (TD-029, residuais
+//! (b)/(d)) chega aqui como `Ok` e é registada como `network_checked`.
 
 use crate::loader::Integrity;
 use crate::output::OutputConfig;

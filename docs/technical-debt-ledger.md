@@ -1663,17 +1663,19 @@ impact: |
   Um show em Linux pode arrancar sobre WiFi activo — o que o ADR-0005 proibe (jitter de 31 ms medido na bancada de
   2026-07-20) — com o journal a dizer que a rede foi verificada. Nao observado em Linux real.
 mitigation_now: |
-  Nenhuma automatica. Em macOS o pre-voo usa `probe_macos`; o ponto (3) aplica-se a qualquer plataforma.
+  Nenhuma automatica. Em macOS o pre-voo usa `probe_macos`. [2026-10-07] Desde o R4.T o ponto (3) so se aplica a
+  plataformas NAO suportadas (D1); os fail-open por interface (Linux operstate/flatten, macOS ifconfig) continuam.
 required_fix: |
   Decisao do operador (toca a politica do ADR-0005 e area protegida): fail-closed no PRE-VOO, nao so na sonda —
   `ProbeUnavailable` com alvo de rede → `network_ok: false` com mensagem explicita; override so por flag explicita,
-  registada no journal. Na sonda: operstate ilegivel → `ProbeUnavailable`; estados nao-`down` de uma interface sem
+  registada no journal. Na sonda: operstate ilegivel → `ProbeFailed` [2026-10-07: D1 — `ProbeUnavailable` passou a
+  significar SO nao suportado e NAO bloqueia; usa-lo aqui reabria o fail-open]; estados nao-`down` de uma interface sem
   fio (pelo menos `up`, `dormant`, `unknown`) → tratados como activos, a confirmar na doc do kernel. A decisao da sonda
   extraida para uma funcao pura sobre uma raiz injectavel (`probe_linux_em(raiz: &Path)`). O teste
   preflight.rs:462 tem de ser INVERTIDO (nao apagado) na mesma fatia, com o porque no commit. Accept aprovado antes.
 falsification_required: |
   Sonda, com sysfs falso em tempdir: wlan0 `up`, `dormant`, `unknown` → activo; `down` → inactivo; sem `wireless/` →
-  ignorada; operstate ilegivel → ProbeUnavailable (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
+  ignorada; operstate ilegivel → ProbeFailed [D1, 2026-10-07] (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
   guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
   override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
 progress: |
@@ -1700,10 +1702,17 @@ progress: |
       (`let _ = rt.apply(..)`): o journal nao mostra `transitioned` para ready/playing nesse caminho.
   (d) [por leitura, nao executado] Linux: `entries.flatten()` ignora em silencio entradas de `/sys/class/net` com erro
       de I/O. macOS: `networksetup` com exit 0 mas sem bloco Wi-Fi reconhecivel conta como «sem WiFi». Mesma classe do
-      ponto (1): fail-open dentro da sonda.
+      ponto (1): fail-open dentro da sonda. O mesmo efeito por outra via (falsificador ronda 4, MR7): um embrulho no
+      led-daemon-bin que converta `ProbeFailed` em `ProbeUnavailable` antes do pre-voo — nenhum teste o ve, porque a
+      sonda real nunca falha nos testes. Escopo: apesar do titulo «Linux», (b) e (d) sao macOS.
   (e) Limites dos testes (falsificador ronda 2): remover um #[test] so e apanhado pela contagem N (o cargo da exit 0);
       o teste de ambiente procura padroes textuais so no src/ do led-daemon-bin (um meio que nao use `std::env`/`var(`,
       ou uma leitura do ambiente noutro crate que alimente `Config`, escapa-lhe — MB1d, ronda 3); os oraculos temporais
-      observam uma janela finita (40 ticks) depois do arranque.
+      observam uma janela finita (40 ticks) depois do arranque. O teste da guarda REAL no binario reconhece a
+      permissiva pelo NOME e, num runner sem WiFi, envia frames por software para 192.0.2.10 (TEST-NET); a sua
+      asserção «sem a flag nao ha override» (MR4/MR5) so discrimina onde a guarda real nao reprova por WiFi (CI sem
+      WiFi, ou com falha injectada) — numa maquina com WiFi activo e cega a esse mutante.
+  (f) Leitura do D2(a) por decidir pelo operador (verifier O1): o aviso em stderr sai UMA vez, no arranque; em cada
+      pre-voo sai a notice JSONL. Se o D2(a) pede um aviso em stderr POR pre-voo, isso nao esta implementado.
 review_by: 2026-10-31
 ```

@@ -120,7 +120,10 @@ impl NetworkGuard for PermissiveGuard {
 /// | Linux | `/sys/class/net/wl*/operstate` |
 /// | Other | `ProbeUnavailable` warning (allows show to proceed) |
 ///
-/// On macOS and Linux a probe that **fails to run** returns `ProbeFailed` (TD-029).
+/// On macOS and Linux a probe that **fails to run** (`networksetup`, `/sys/class/net`) returns
+/// `ProbeFailed` (TD-029). NOT yet the per-interface reads: an `ifconfig` that fails, an unreadable
+/// `operstate` or an I/O error inside the `read_dir` still count the interface as INACTIVE —
+/// fail-open, open in TD-029 (residuals (b) and (d)).
 pub struct WifiBlockGuard;
 
 impl NetworkGuard for WifiBlockGuard {
