@@ -1680,7 +1680,7 @@ progress: |
   2026-10-07 (fix/td-029-sonda-falhada-bloqueia, accept R5 aprovado — opcao B). FEITO: o ponto (3) para
   plataformas SUPORTADAS (numa nao suportada continua nao-fatal, de proposito: D1) e o ramo
   `/sys/class/net` ausente/`read_dir` falhado. Variante nova `ProbeFailed { probe, error }` (Display CRITICAL);
-  Linux :234/:242 e macOS :149/:154 devolvem-na; `ProbeUnavailable` fica SO para SO nao suportado (D1, zero
+  Linux :252/:260 e macOS :164/:170 (linhas em 2926a3a) devolvem-na; `ProbeUnavailable` fica SO para SO nao suportado (D1, zero
   docs/adr/). Pre-voo: ProbeFailed → network_ok false + `network_probe_failed`; com `--assume-no-wifi` (so CLI,
   por execucao) → true + `network_assumed_by_operator` em CADA pre-voo; flag com sonda OK → `network_override_unused`;
   WifiActive bloqueia sempre. O teste preflight.rs:462 foi PRESERVADO para ProbeUnavailable e INVERTIDO para
@@ -1698,5 +1698,11 @@ progress: |
       interface Wi-Fi conta como INACTIVA; o pre-voo regista `network_checked`. Medido sem mutacao (FI_E). Fail-open.
   (c) Observabilidade: no arranque com IPC (`run_with_control_com`) o Arm/Play do show inicial descarta os eventos
       (`let _ = rt.apply(..)`): o journal nao mostra `transitioned` para ready/playing nesse caminho.
+  (d) [por leitura, nao executado] Linux: `entries.flatten()` ignora em silencio entradas de `/sys/class/net` com erro
+      de I/O. macOS: `networksetup` com exit 0 mas sem bloco Wi-Fi reconhecivel conta como «sem WiFi». Mesma classe do
+      ponto (1): fail-open dentro da sonda.
+  (e) Limites dos testes (falsificador ronda 2): remover um #[test] so e apanhado pela contagem N (o cargo da exit 0);
+      o teste de ambiente procura padroes textuais em src/ (um meio de leitura do ambiente que nao use `std::env`/
+      `var(` escapa-lhe).
 review_by: 2026-10-31
 ```

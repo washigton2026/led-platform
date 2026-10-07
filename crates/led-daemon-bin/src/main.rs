@@ -287,6 +287,15 @@ mod tests {
         let a = args(&["s.lumyx", "--assume-no-wifi"]).unwrap();
         assert!(a.cfg.assume_no_wifi);
         assert!(!led_daemon_bin::run::Config::default().assume_no_wifi, "nunca por omissão");
+        // Nenhuma outra flag o liga (falsificador ronda 2, MH1: `--assume-integrity` ligava-o).
+        let todas = [
+            "--assume-integrity", "--no-autoplay", "--keep-running", "--tick-ms", "20", "--max-ticks", "1",
+            "--log", "/tmp/x.jsonl", "--output", "192.0.2.10", "--profile", "esp32-poe-wled-ddp",
+        ];
+        let mut v = vec!["s.lumyx"];
+        v.extend_from_slice(&todas);
+        let a = args(&v).unwrap();
+        assert!(!a.cfg.assume_no_wifi, "só --assume-no-wifi liga o override");
     }
 
     #[test]

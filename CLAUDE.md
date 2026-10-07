@@ -158,10 +158,11 @@ cada `load` IPC; com a sonda OK regista `network_override_unused`. WiFi activo b
 **Achado:** o caminho IPC do `load` perdia **todas** as notices do pré-voo; passa a escrevê-las com o mesmo
 `notice_to_json`, sem campos novos. IPC/`PROTOCOL_V`, contratos canónicos e ADRs intocados.
 
-**Invariants verified.** `cargo test --workspace --locked` 1165 · 0 · 9, exit 0 (107 binários). Controlos
-negativos M1/M2/M3/MD4 e as 6 mutações que o falsificador deixou vivas na 1.ª versão (arranque sem a flag,
-WiFi + flag nos dois caminhos, notices IPC incompletas ou com campo novo, flag por ambiente) reprovam com
-`panicked`, nunca `error[E`. O TD-022 foi re-verificado no mesmo commit
+**Invariants verified.** `cargo test --workspace --locked` 1168 · 0 · 9, exit 0 (107 binários). Controlos
+negativos M1/M2/M3/MD4 e as 14 mutações que o falsificador deixou vivas em duas rondas (arranque sem a flag,
+WiFi + flag nos dois caminhos e no modo CLI, notices IPC incompletas/com campo/tipo novo, flag por ambiente
+ou por outra flag, aviso em stderr removido, armar no 1.º tick) reprovam com `panicked`, nunca `error[E`.
+O modo CLI ganhou `run_com` (sondas injetadas), no molde do `run_with_control_com`. O TD-022 foi re-verificado no mesmo commit
 (o seu ficheiro ganhou `assume_no_wifi: false`): C0 0, F1 101 ×3, C0 0.
 
 **Pending.** TD-029 continua **aberto**: operstate ilegível e `dormant`/`unknown` ainda contam como inactivos

@@ -16,7 +16,7 @@
 use led_core::PixelColor;
 use led_daemon::ShowRuntime;
 use led_daemon_bin::preflight::{DevicePresence, Presence};
-use led_daemon_bin::run::run_with_control_com;
+use led_daemon_bin::run::{run_com, run_with_control_com};
 use led_daemon_bin::{descriptor_from_path, Config, ControlPlane, Integrity, Journal, Server, SystemPacer};
 use led_hal::{NetworkGuard, NetworkPolicyError};
 use led_show_recorder::{ShowRecord, ShowWriter};
@@ -259,6 +259,25 @@ fn arranque_com_override_regista_o_evento() {
 /// o estado final diz se o arranque armou — sem esperar por relógio. Dois oráculos que NÃO servem:
 /// o `status` (antes do 1.º tick publicado responde o instantâneo por omissão, `idle`) e os eventos
 /// `transitioned` (neste caminho o Arm/Play do arranque não os escreve no journal).
+/// Espera (causal, com prazo) que o laço publique pelo menos `n` ticks — o `status` só conta
+/// ticks que o laço correu. Assim o oráculo vê também o que o laço faz DEPOIS do arranque
+/// (falsificador ronda 2, MG1: armar e tocar no 1.º tick escapava a quem parava logo).
+fn esperar_ticks(d: &Daemon, n: u64) {
+    let (mut s, mut r) = d.cliente();
+    pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+    let fim = Instant::now() + Duration::from_secs(5);
+    loop {
+        let st = pedir(&mut s, &mut r, r#"{"v":1,"id":2,"cmd":"status"}"#);
+        let ticks = st.split(r#""ticks":"#).nth(1).and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|t| t.parse::<u64>().ok()).unwrap_or(0);
+        if ticks >= n {
+            return;
+        }
+        assert!(Instant::now() < fim, "o laço não chegou a {n} ticks: {st}");
+        std::thread::yield_now();
+    }
+}
+
 fn armou_ou_tocou(j: &str) -> bool {
     let fim = j.lines().rev().find(|l| l.contains(r#""notice":"state""#)).expect("linha final de estado");
     !fim.contains(r#""state":"loaded""#)
@@ -271,6 +290,7 @@ fn armou_ou_tocou(j: &str) -> bool {
 fn arranque_sem_override_com_sonda_falhada_nao_toca() {
     let show = escrever("td029-arranque-sem.lumyx");
     let d = Daemon::subir("arranque-sem", cfg(false, true), Some(show));
+    esperar_ticks(&d, 3);
     let j = d.parar();
     assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
     assert!(!armou_ou_tocou(&j), "sem a flag o arranque não arma nem toca:\n{j}");
@@ -284,6 +304,7 @@ fn arranque_sem_override_com_sonda_falhada_nao_toca() {
 fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
     let show = escrever("td029-wifi.lumyx");
     let d = Daemon::subir_com("wifi-arranque", cfg(true, true), Some(show.clone()), &WIFI);
+    esperar_ticks(&d, 3);
     let j = d.parar();
     assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
     assert!(!armou_ou_tocou(&j), "WiFi ativo + flag: o arranque não pode armar nem tocar:\n{j}");
@@ -336,19 +357,117 @@ fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
         vistas += 1;
     }
     assert_eq!(vistas, 2, "uma linha por notice do pré-voo:\n{j}");
+    // D4 «zero tipos novos»: TODA a linha de notice do journal tem um nome que já existia
+    // (falsificador ronda 2, MC5). A linha final `state` tem outro formato (state_to_json).
+    const CONHECIDAS: &[&str] = &[
+        "mode", "profile", "output_open", "output_error", "output_failed", "load_refused",
+        "arm_refused", "play_refused", "integrity_assumed", "started", "shutdown", "log_write_failed",
+        "network_checked", "network_local", "network_refused", "network_unverified",
+        "network_probe_failed", "network_assumed_by_operator", "network_override_unused",
+        "devices_checked", "devices_missing", "devices_unverified", "preflight_vacuous",
+    ];
+    for linha in j.lines().filter(|l| l.contains(r#""notice":"#) && !l.contains(r#""notice":"state""#)) {
+        let nome = notice_exata(linha).unwrap_or_else(|| panic!("formato diferente do notice_to_json: {linha}"));
+        assert!(CONHECIDAS.contains(&nome), "tipo de notice novo no journal: {linha}");
+    }
 }
 
 /// **A flag só existe na CLI.** Nenhuma fonte do daemon lê variáveis de ambiente (MB1): o
 /// override tem de ser escrito por quem arranca o processo, em cada execução.
 #[test]
 fn a_flag_nao_vem_do_ambiente() {
-    for (nome, fonte) in [
-        ("main.rs", include_str!("../src/main.rs")),
-        ("run.rs", include_str!("../src/run.rs")),
-        ("preflight.rs", include_str!("../src/preflight.rs")),
-    ] {
-        for proibido in ["env::var", "var_os(", "vars()"] {
+    // Todos os ficheiros do src do crate (falsificador ronda 2: a leitura mudada para o
+    // loader.rs, ou um alias `use std::env as e`, fugiam a uma lista de 3 ficheiros).
+    // Os únicos usos de `std::env` permitidos são `args()` e `temp_dir()`.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut vistos = 0;
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().and_then(|x| x.to_str()) != Some("rs") {
+            continue;
+        }
+        vistos += 1;
+        let fonte = std::fs::read_to_string(&p).unwrap();
+        let nome = p.file_name().unwrap().to_string_lossy().to_string();
+        for proibido in ["use std::env", "std::env as"] {
             assert!(!fonte.contains(proibido), "{nome} lê o ambiente ({proibido})");
         }
+        // `var(` só como identificador inteiro (`reprovar(` não conta).
+        for f in ["var(", "var_os(", "vars(", "vars_os("] {
+            for (i, _) in fonte.match_indices(f) {
+                let antes = fonte[..i].chars().next_back();
+                assert!(
+                    antes.is_some_and(|c| c.is_alphanumeric() || c == '_'),
+                    "{nome} lê o ambiente ({f}): {}",
+                    &fonte[i.saturating_sub(20)..(i + 20).min(fonte.len())]
+                );
+            }
+        }
+        for (i, _) in fonte.match_indices("std::env") {
+            let resto = &fonte[i + "std::env".len()..];
+            assert!(
+                resto.starts_with("::args()") || resto.starts_with("::temp_dir()"),
+                "{nome}: uso de std::env que não é args()/temp_dir(): {}",
+                &fonte[i..(i + 40).min(fonte.len())]
+            );
+        }
     }
+    assert!(vistos >= 5, "premissa: o teste tem de ler os ficheiros do src ({vistos})");
+}
+
+/// **Modo CLI (`run`, sem `--socket`), sem a flag e com a sonda falhada: não arma.** O `run` e o
+/// `run_with_control` são os dois chamadores do pré-voo (accept R5, item 3); até à ronda 2 do
+/// falsificador só o segundo tinha teste (MA1R: forçar o override aqui deixava a suite verde).
+fn correr_cli(nome: &str, assume_no_wifi: bool, guarda: &dyn NetworkGuard) -> String {
+    let show = escrever(nome);
+    let d = descriptor_from_path(&show, led_daemon::ShowId(1)).expect("show");
+    let mut c = cfg(assume_no_wifi, true);
+    c.max_ticks = Some(3);
+    let buf = Buf::default();
+    let mut jn = Journal::new(buf.clone());
+    let mut rt = ShowRuntime::new();
+    let mut pacer = SystemPacer::new();
+    let parar = AtomicBool::new(false);
+    run_com(&mut rt, &show, d, &c, &mut pacer, &mut jn, &parar, guarda, &Presente);
+    buf.texto()
+}
+
+#[test]
+fn modo_cli_sem_override_com_sonda_falhada_nao_arma() {
+    let j = correr_cli("td029-cli-sem.lumyx", false, &FALHADA);
+    assert_eq!(contar(&j, "network_probe_failed"), 1, "{j}");
+    assert_eq!(contar(&j, "arm_refused"), 1, "sem a flag o modo CLI não arma:\n{j}");
+    assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "{j}");
+    // Controlo positivo do mesmo oráculo: com a flag, arma e corre os 3 ticks.
+    let j = correr_cli("td029-cli-com.lumyx", true, &FALHADA);
+    assert_eq!(contar(&j, "arm_refused"), 0, "com a flag e a sonda falhada o modo CLI arma:\n{j}");
+    assert_eq!(contar(&j, "network_assumed_by_operator"), 1, "{j}");
+}
+
+/// **Modo CLI: WiFi ativo bloqueia SEMPRE, com a flag** (MD2R).
+#[test]
+fn modo_cli_wifi_ativo_com_flag_nao_arma() {
+    let j = correr_cli("td029-cli-wifi.lumyx", true, &WIFI);
+    assert_eq!(contar(&j, "network_refused"), 1, "{j}");
+    assert_eq!(contar(&j, "arm_refused"), 1, "WiFi ativo + flag: o modo CLI não pode armar:\n{j}");
+}
+
+/// **O aviso em stderr (accept item 4), no binário real** — e só com a flag (MH2).
+#[test]
+fn o_binario_avisa_em_stderr_so_com_a_flag() {
+    let show = escrever("td029-bin.lumyx");
+    let correr = |extra: &[&str]| {
+        let mut args = vec![show.as_str(), "--max-ticks", "1", "--tick-ms", "25"];
+        args.extend_from_slice(extra);
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_led-daemon"))
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("led-daemon");
+        String::from_utf8_lossy(&o.stderr).to_string()
+    };
+    let com = correr(&["--assume-no-wifi"]);
+    assert!(com.contains("AVISO: --assume-no-wifi"), "a flag tem de avisar em stderr: {com}");
+    let sem = correr(&[]);
+    assert!(!sem.contains("--assume-no-wifi"), "sem a flag não há aviso: {sem}");
 }

@@ -224,6 +224,26 @@ pub fn run<P: Pacer, W: Write>(
     journal: &mut Journal<W>,
     shutdown: &AtomicBool,
 ) -> Outcome {
+    let guard = guarda_para(cfg);
+    run_com(rt, path, desc, cfg, pacer, journal, shutdown, &*guard, &ArtPollPresence)
+}
+
+/// O mesmo laço do [`run`], com as **sondas injetadas** — a disciplina do [`preflight`] e do
+/// `run_with_control_com`: é o que torna o pré-voo do modo CLI falsificável sem WiFi, sem rede
+/// e sem hardware (TD-029, falsificador R4.T ronda 2). Não é um segundo caminho: [`run`] é
+/// exatamente isto com a guarda e a sonda reais.
+#[allow(clippy::too_many_arguments)]
+pub fn run_com<P: Pacer, W: Write>(
+    rt: &mut ShowRuntime,
+    path: &str,
+    desc: ShowDescriptor,
+    cfg: &Config,
+    pacer: &mut P,
+    journal: &mut Journal<W>,
+    shutdown: &AtomicBool,
+    guard: &dyn NetworkGuard,
+    presence: &dyn DevicePresence,
+) -> Outcome {
     macro_rules! emit {
         ($evs:expr) => {{
             let t = pacer.now_ms();
@@ -258,9 +278,7 @@ pub fn run<P: Pacer, W: Write>(
                 "AFIRMADA pelo operador, NAO verificada — nenhum hash foi recomputado",
             ));
         }
-        let guard = guarda_para(cfg);
-        let report =
-            preflight_e_registar(cfg, stage.as_ref(), pacer, journal, &*guard, &ArtPollPresence);
+        let report = preflight_e_registar(cfg, stage.as_ref(), pacer, journal, guard, presence);
         match rt.apply(Command::Arm(report), pacer.now_ms()) {
             Ok(evs) => emit!(evs),
             Err(e) => {
