@@ -128,9 +128,11 @@ jobs:
   # próprio commit que a torna stale. A CI era o único sítio que a podia apanhar — e não
   # corria o gate.
   #
-  # `fetch-depth: 0` é OBRIGATÓRIO, não optimização. O detector de evidência stale corre
-  # `git log <hash>..HEAD -- <ficheiro>` e ignora o returncode: num checkout raso o `<hash>`
-  # não existe, o `git log` falha, o stdout vem vazio e o stale passa a VERDE em silêncio.
+  # `fetch-depth: 0` foi OBRIGATÓRIO até ao R4.1 (TD-026): o detector de stale corria
+  # `git log <hash>..HEAD` e, num checkout raso, passava a VERDE em silêncio. Desde o R4.1
+  # (#26) o stale compara o sha256 do CONTEÚDO (`watched:`) e não usa git — um clone raso dá
+  # o mesmo veredito (`test_r41_td026_clone_raso_igual_a_completo`). Mantém-se por decisão
+  # do operador: tirá-lo é uma medição a fazer (um run do debt gate com profundidade 1).
   debt-gate:
     name: debt gate (audit_gate.py)
     runs-on: ubuntu-24.04
