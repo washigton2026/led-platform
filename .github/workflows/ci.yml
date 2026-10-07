@@ -150,6 +150,51 @@ jobs:
           if [ "${n:-0}" -eq 0 ]; then echo "debt-gate: 0 TD lidos — o gate não viu nada"; exit 1; fi
           exit $code
 
+  # ── Bloqueante: os testes do PRÓPRIO gate e do hook (R4.9, fecha o TD-DRAFT-D) ──
+  #
+  # Porque existe: os required_test de TD-025/026/028 são os self-tests do audit_gate e do hook.
+  # Até aqui só corriam à mão ou no pre-commit local; a CI só corria o gate, nunca os testes que
+  # provam que o gate reprova o que deve. Um PR que partisse uma regra do gate e regenerasse a
+  # evidência passava a CI verde.
+  #
+  # N fixado AQUI, fora dos ficheiros de teste: apagar um teste reprova (N_executado != N_esperado),
+  # e um runner que não executa nada também (KB-012). Exit lido sem pipe (KB-013).
+  # Ao acrescentar um teste ao gate, sobe-se o N no mesmo commit.
+  gate-suite:
+    name: gate suite (audit_gate + hook)
+    runs-on: ubuntu-24.04
+    env:
+      N_GATE: 34
+      N_HOOK: 4
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: tests/test_audit_gate.py
+        shell: bash {0}
+        run: |
+          python3 tests/test_audit_gate.py > gate-suite.txt 2>&1
+          code=$?
+          cat gate-suite.txt
+          linha=$(grep -aE '^test_audit_gate: [0-9]+ passed; [0-9]+ failed$' gate-suite.txt)
+          p=$(echo "$linha" | sed -E 's/^test_audit_gate: ([0-9]+) passed; ([0-9]+) failed$/\1/')
+          f=$(echo "$linha" | sed -E 's/^test_audit_gate: ([0-9]+) passed; ([0-9]+) failed$/\2/')
+          echo "gate-suite: exit ${code} · ${p:-?} passed · ${f:-?} failed · esperados ${N_GATE}"
+          [ "$code" -eq 0 ] && [ "${p:-x}" = "$N_GATE" ] && [ "${f:-x}" = "0" ] || exit 1
+      - name: tests/test_pre_commit_hook.sh
+        shell: bash {0}
+        run: |
+          git config --global user.email ci@lumyx.local
+          git config --global user.name lumyx-ci
+          bash tests/test_pre_commit_hook.sh > hook-suite.txt 2>&1
+          code=$?
+          cat hook-suite.txt
+          linha=$(grep -aE '^test_pre_commit_hook: [0-9]+ passed; [0-9]+ failed$' hook-suite.txt)
+          p=$(echo "$linha" | sed -E 's/^test_pre_commit_hook: ([0-9]+) passed; ([0-9]+) failed$/\1/')
+          f=$(echo "$linha" | sed -E 's/^test_pre_commit_hook: ([0-9]+) passed; ([0-9]+) failed$/\2/')
+          echo "hook-suite: exit ${code} · ${p:-?} passed · ${f:-?} failed · esperados ${N_HOOK}"
+          [ "$code" -eq 0 ] && [ "${p:-x}" = "$N_HOOK" ] && [ "${f:-x}" = "0" ] || exit 1
+
   # ── Bloqueante: as construções `unsafe` do triple buffer, sob Miri ───────────
   #
   # Job próprio, e não um step da matriz `test`, pela MESMA razão que o `contract`:
