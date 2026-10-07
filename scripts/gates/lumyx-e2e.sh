@@ -41,6 +41,37 @@ FAILURES=0
 NOT_MEASURED=0
 TOTAL_TESTS=0
 
+# ── Gate: heartbeat never zeros (R4.7) ────────────────────────
+# Antes: `cargo test -p led-hal --lib heartbeat_resends | grep -q "test result: ok"` — o `--lib`
+# não vê tests/contract.rs, o filtro casava 0 testes e `ok. 0 passed` dava PASS (KB-012), com o
+# veredito lido por pipe (KB-013). Agora: N_esperado por LISTAGEM dos nomes exatos, execução com
+# `--exact`, saída para ficheiro, exit lido sem pipe, e N_executado == N_esperado == nº de nomes.
+# BEGIN gate_heartbeat_nunca_zeros
+HB_NOMES=(heartbeat_resends_last_valid_and_never_zeros heartbeat_never_sends_zero_frame_when_record_never_called)
+gate_heartbeat_nunca_zeros() {
+    local out lista code esperado executado
+    out=$(mktemp "${TMPDIR:-/tmp}/lumyx-hb.XXXXXX")
+    lista=$(mktemp "${TMPDIR:-/tmp}/lumyx-hb-lista.XXXXXX")
+    cargo test -p led-hal --test contract -- --list --exact "${HB_NOMES[@]}" > "$lista" 2>&1
+    code=$?
+    esperado=$(grep -cE ': test$' "$lista")
+    if [ "$code" -ne 0 ] || [ "$esperado" -ne "${#HB_NOMES[@]}" ]; then
+        fail "LED: heartbeat never-zeros — listagem deu ${esperado} de ${#HB_NOMES[@]} testes (exit ${code}): nome mudou ou binário não compila"
+        rm -f "$out" "$lista"; return
+    fi
+    cargo test -p led-hal --test contract -- --exact "${HB_NOMES[@]}" > "$out" 2>&1
+    code=$?
+    executado=$(sed -nE 's/^test result: ok\. ([0-9]+) passed.*/\1/p' "$out" | head -1)
+    if [ "$code" -eq 0 ] && [ "${executado:-0}" -eq "$esperado" ]; then
+        pass "LED: heartbeat never sends zeros (${executado}/${esperado} testes)"
+    else
+        fail "LED: heartbeat never-zeros — exit ${code}, executados ${executado:-0} de ${esperado}"
+        grep -aE 'panicked at|FAILED' "$out" | head -5
+    fi
+    rm -f "$out" "$lista"
+}
+# END gate_heartbeat_nunca_zeros
+
 # ── Helper: run tests and count ───────────────────────────────
 run_tests() {
     local dir="$1"
@@ -190,11 +221,7 @@ fi
 
 # Invariant 2: heartbeat never zeros
 cd "$LED_PLATFORM"
-if cargo test -p led-hal --lib heartbeat_resends 2>&1 | grep -q "test result: ok"; then
-    pass "LED: heartbeat never sends zeros"
-else
-    fail "LED: heartbeat never-zeros test failed"
-fi
+gate_heartbeat_nunca_zeros
 
 # Invariant 3: audio-core zero-alloc hot path
 if cargo test -p audio-core --test no_alloc 2>&1 | grep -q "test result: ok"; then
