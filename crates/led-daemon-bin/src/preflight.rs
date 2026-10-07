@@ -567,6 +567,12 @@ mod tests {
             assert!(!tem(&pf, "network_probe_failed") && !tem(&pf, "network_checked"));
             assert!(!tem(&pf, "network_assumed_by_operator"), "a flag nao se aplica (flag={flag})");
         }
+        // D1 «exatamente como hoje»: com a flag, as notices sao IGUAIS as de sem flag — nem um
+        // `network_override_unused` (que diria que a sonda VERIFICOU), nem outro (MP8a).
+        let sem = corre_com(Err(NetworkPolicyError::ProbeUnavailable { reason: "SO nao suportado".into() }), false);
+        let com = corre_com(Err(NetworkPolicyError::ProbeUnavailable { reason: "SO nao suportado".into() }), true);
+        assert_eq!(sem.notices, com.notices, "nao suportado: a flag nao muda nada no journal");
+        assert_eq!(sem.report.network_ok, com.report.network_ok);
     }
 
     /// **D2 — o override é explícito e deixa rasto.** Sem a flag bloqueia; com ela passa,

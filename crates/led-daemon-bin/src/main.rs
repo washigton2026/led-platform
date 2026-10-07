@@ -298,6 +298,12 @@ mod tests {
         v.extend_from_slice(&todas);
         let a = args(&v).unwrap();
         assert!(!a.cfg.assume_no_wifi, "só --assume-no-wifi liga o override");
+        // Nem a AUSÊNCIA de show (o modo do ledctl: só --socket) o liga (MF8).
+        for v in [vec!["--socket", "/tmp/x.sock"], vec!["--socket", "/tmp/x.sock", "--output", "192.0.2.10", "--profile", "esp32-poe-wled-ddp"]] {
+            let a = args(&v).unwrap();
+            assert!(a.show.is_none(), "premissa: sem show");
+            assert!(!a.cfg.assume_no_wifi, "sem show e sem a flag não há override: {v:?}");
+        }
         // E o operador consegue descobri-la (MH4): o --help documenta-a.
         assert!(USAGE.contains("--assume-no-wifi"), "a flag tem de estar no --help");
     }

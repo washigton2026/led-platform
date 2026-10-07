@@ -35,7 +35,8 @@ impl NetworkGuard for SondaFalhada {
     fn check(&self) -> Result<(), NetworkPolicyError> {
         Err(NetworkPolicyError::ProbeFailed {
             probe: "sysfs /sys/class/net",
-            error: "read_dir: permission denied".into(),
+            // Aspas e barra de propósito: o erro do SO chega ao journal ESCAPADO (MC8a).
+            error: r#"read_dir "/sys/class/net": permission denied \ eacces"#.into(),
         })
     }
     fn name(&self) -> &'static str {
@@ -212,8 +213,23 @@ fn dois_loads_ipc_com_override_deixam_dois_eventos_no_journal() {
     let d = Daemon::subir("ipc", cfg(true, false), None);
     let (mut s, mut r) = d.cliente();
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+    // Um subscritor ligado ANTES do load: o fio de eventos não ganha nada (D4 «sem mudar o fio», MW8a).
+    let (mut sub, mut rsub) = d.cliente();
+    pedir(&mut sub, &mut rsub, r#"{"v":1,"id":1,"cmd":"hello","client":"sub"}"#);
+    pedir(&mut sub, &mut rsub, r#"{"v":1,"id":2,"cmd":"subscribe"}"#);
     let r1 = pedir(&mut s, &mut r, &load(&show, 2));
     assert!(r1.contains(r#""ok":true"#), "com --assume-no-wifi o load arma: {r1}");
+    // A resposta ao load tem a forma EXATA de sempre — nenhum campo novo no fio (MW8b).
+    assert!(casa(&r1, r#"{"v":1,"id":2,"ok":true,"state":"@","position_ms":#,"events":#}"#), "resposta do load: {r1}");
+    // O subscritor recebe os eventos do load (até ao show_loaded) e NADA de pré-voo.
+    sub.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    loop {
+        let mut l = String::new();
+        rsub.read_line(&mut l).expect("evento do load no subscritor");
+        assert!(!l.contains("notice") && !l.contains("network") && !l.contains("devices"),
+                "o fio de eventos ganhou uma linha de pré-voo (MW8a): {l}");
+        if l.contains("show_loaded") { break; }
+    }
     let u = pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"unload"}"#);
     assert!(u.contains(r#""ok":true"#), "unload: {u}");
     let r2 = pedir(&mut s, &mut r, &load(&show, 4));
@@ -232,6 +248,7 @@ fn dois_loads_ipc_com_override_deixam_dois_eventos_no_journal() {
             linha.contains("sysfs /sys/class/net") && linha.contains("permission denied"),
             "cada evento tem de registar a causa da falha da sonda: {linha}"
         );
+        assert!(linha.contains("NAO verificado"), "o override diz que NÃO verificou (MP8c): {linha}");
     }
 }
 
@@ -253,6 +270,10 @@ fn sem_override_o_load_ipc_e_recusado_e_a_razao_fica_no_journal() {
     formato_jsonl_exato(&j);
 
     assert!(resp.contains("preflight_failed"), "sonda falhada sem override bloqueia: {resp}");
+    let det = resp.strip_prefix(r#"{"v":1,"id":2,"ok":false,"error":{"code":"preflight_failed","detail":""#)
+        .and_then(|r| r.strip_suffix(r#""}}"#))
+        .unwrap_or_else(|| panic!("resposta de recusa fora da forma do err_line: {resp}"));
+    assert!(det.match_indices('"').all(|(i, _)| det[..i].ends_with('\\')), "campo a mais na recusa: {resp}");
     assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"),
             "depois do load recusado o play é recusado POR NÃO ESTAR ARMADO (não por já tocar): {play}");
     assert_eq!(contar(&j, "network_probe_failed"), 1, "a razão tem de ficar no journal:\n{j}");
@@ -612,6 +633,29 @@ fn o_binario_avisa_em_stderr_so_com_a_flag() {
     aviso_no_arranque(&[show.as_str(), "--assume-no-wifi", "--assume-integrity", "--keep-running", "--tick-ms", "25"]);
     aviso_no_arranque(&[show.as_str(), "--assume-no-wifi", "--assume-integrity", "--keep-running", "--tick-ms", "25",
                         "--socket", sock2.to_str().unwrap(), "--output", ALVO, "--profile", PRESET]);
+    // O modo do ledctl: só --socket, SEM show inicial (MH9).
+    let sock3 = std::env::temp_dir().join(format!("lumyx-td029-aviso3-{}.sock", std::process::id()));
+    aviso_no_arranque(&["--assume-no-wifi", "--socket", sock3.to_str().unwrap(), "--output", ALVO, "--profile", PRESET]);
+    // E SEM a flag, no modo --socket, nunca há aviso (MH10): o aviso sai antes do bind do socket,
+    // por isso, quando o socket existe, qualquer aviso já teria sido escrito.
+    let sock4 = std::env::temp_dir().join(format!("lumyx-td029-aviso4-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&sock4);
+    let mut filho = std::process::Command::new(env!("CARGO_BIN_EXE_led-daemon"))
+        .args(["--socket", sock4.to_str().unwrap(), "--output", ALVO, "--profile", PRESET])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("led-daemon");
+    let fim = Instant::now() + Duration::from_secs(10);
+    while !sock4.exists() {
+        assert!(Instant::now() < fim, "premissa: o daemon --socket nunca abriu o socket");
+        std::thread::yield_now();
+    }
+    writeln!(filho.stdin.as_mut().unwrap(), "shutdown").ok();
+    let o = filho.wait_with_output().expect("wait");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!err.contains("--assume-no-wifi"), "sem a flag, o modo --socket não avisa: {err}");
     let sem = correr(&[]);
     assert!(!sem.contains("--assume-no-wifi"), "sem a flag não há aviso: {sem}");
 }

@@ -1713,7 +1713,9 @@ progress: |
       asserção «sem a flag nao ha override» (MR4/MR5) so discrimina onde a guarda real nao reprova por WiFi (CI sem
       WiFi, ou com falha injectada) — numa maquina com WiFi activo e cega a esse mutante. No caminho IPC o fio e
       medido (status `frames == 0` depois de um load recusado); no modo CLI nao (MCLI4, NOT_MEASURED: UDP para o IP
-      do proprio en0 e descartado nesta maquina, sem recetor que sirva de oraculo).
+      do proprio en0 e descartado nesta maquina, sem recetor que sirva de oraculo). A ORDEM das notices face aos
+      eventos no journal nao e afirmada (MC8b, ronda 8: o D4 fala de formato, nao de ordem). O `esc()` do journal nao
+      escapa `\n`: um erro de sonda com quebra de linha parte o JSONL nos dois caminhos (anterior ao TD-029).
   (f) Leitura do D2(a) por decidir pelo operador (verifier O1): o aviso em stderr sai UMA vez, no arranque; em cada
       pre-voo sai a notice JSONL. Se o D2(a) pede um aviso em stderr POR pre-voo, isso nao esta implementado.
 review_by: 2026-10-31
