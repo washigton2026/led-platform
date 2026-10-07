@@ -219,6 +219,8 @@ fn dois_loads_ipc_com_override_deixam_dois_eventos_no_journal() {
     let r2 = pedir(&mut s, &mut r, &load(&show, 4));
     assert!(r2.contains(r#""ok":true"#), "segundo load: {r2}");
     let j = d.parar();
+    assert!(j.contains(r#""event":"show_unloaded""#), "premissa: o unload aparece:\n{j}");
+    formato_jsonl_exato(&j); // inclui o show_unloaded do unload IPC (MC7c)
 
     assert_eq!(
         contar(&j, "network_assumed_by_operator"),
@@ -248,6 +250,7 @@ fn sem_override_o_load_ipc_e_recusado_e_a_razao_fica_no_journal() {
     nada_saiu_pelo_fio(&d);
     let j = d.parar();
     assert!(!armou_ou_tocou(&j), "depois do load recusado o daemon não pode tocar:\n{j}");
+    formato_jsonl_exato(&j);
 
     assert!(resp.contains("preflight_failed"), "sonda falhada sem override bloqueia: {resp}");
     assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"),
@@ -328,8 +331,9 @@ fn armou_ou_tocou(j: &str) -> bool {
 fn arranque_sem_override_com_sonda_falhada_nao_toca() {
     let show = escrever("td029-arranque-sem.lumyx");
     let d = Daemon::subir("arranque-sem", cfg(false, true), Some(show));
-    esperar_ticks(&d, 40);
+    nada_saiu_pelo_fio(&d); // inclui esperar 40 ticks; o fio, não só o runtime (MARR5)
     let j = d.parar();
+    formato_jsonl_exato(&j); // journal de RECUSA também no formato exato (MC7a)
     assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
     assert!(!armou_ou_tocou(&j), "sem a flag o arranque não arma nem toca:\n{j}");
     assert_eq!(contar(&j, "network_probe_failed"), 1, "a razão tem de ficar no journal:\n{j}");
@@ -342,8 +346,9 @@ fn arranque_sem_override_com_sonda_falhada_nao_toca() {
 fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
     let show = escrever("td029-wifi.lumyx");
     let d = Daemon::subir_com("wifi-arranque", cfg(true, true), Some(show.clone()), &WIFI);
-    esperar_ticks(&d, 40);
+    nada_saiu_pelo_fio(&d);
     let j = d.parar();
+    formato_jsonl_exato(&j);
     assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
     assert!(!armou_ou_tocou(&j), "WiFi ativo + flag: o arranque não pode armar nem tocar:\n{j}");
     assert_eq!(contar(&j, "network_refused"), 1, "{j}");
@@ -357,6 +362,7 @@ fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
     nada_saiu_pelo_fio(&d);
     let j = d.parar();
     assert!(!armou_ou_tocou(&j), "WiFi + flag: depois do load recusado o daemon não pode tocar:\n{j}");
+    formato_jsonl_exato(&j);
     assert!(resp.contains("preflight_failed"), "WiFi ativo + flag: o load tem de ser recusado: {resp}\n{j}");
     assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"), "WiFi + flag: o play não toca: {play}");
     assert_eq!(contar(&j, "network_refused"), 1, "{j}");
@@ -368,6 +374,9 @@ fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
 fn notice_exata(linha: &str) -> Option<&str> {
     let resto = linha.strip_prefix(r#"{"t_ms":"#)?;
     let n = resto.find(|c: char| !c.is_ascii_digit())?;
+    if resto.starts_with('0') && n > 1 {
+        return None; // zeros à esquerda: o notice_to_json nunca os escreve (MC7b)
+    }
     let resto = resto[n..].strip_prefix(r#","notice":""#)?;
     let fim_nome = resto.find('"')?;
     let (nome, resto) = resto.split_at(fim_nome);
@@ -413,7 +422,8 @@ fn casa(linha: &str, tpl: &str) -> bool {
             b'#' => {
                 let ini = i;
                 while i < l.len() && l[i].is_ascii_digit() { i += 1; }
-                if i == ini { return false; }
+                // Um u64 formatado com `{}`: pelo menos um dígito e sem zeros à esquerda (MC7b).
+                if i == ini || (l[ini] == b'0' && i - ini > 1) { return false; }
             }
             b'@' => {
                 let ini = i;
@@ -540,6 +550,7 @@ fn nao_armou_outcome(o: &led_daemon_bin::Outcome) {
 /// O EFEITO no modo CLI, não só a linha `arm_refused` (MCLI1): nenhuma transição para ready ou
 /// playing, e o processo termina como `NeverStarted`.
 fn nao_armou_cli(j: &str) {
+    formato_jsonl_exato(j);
     assert!(!j.contains(r#""to":"ready""#) && !j.contains(r#""to":"playing""#), "armou ou tocou:\n{j}");
     assert!(j.contains("NeverStarted"), "o modo CLI bloqueado termina como NeverStarted:\n{j}");
 }
@@ -595,35 +606,12 @@ fn o_binario_avisa_em_stderr_so_com_a_flag() {
     // E no modo de produção, --socket E --output juntos (MH7).
     let prod = correr(&["--assume-no-wifi", "--socket", sock.to_str().unwrap(), "--output", ALVO, "--profile", PRESET]);
     assert!(prod.contains("AVISO: --assume-no-wifi"), "com --socket + --output também avisa: {prod}");
-    // No ARRANQUE (MH3): num processo que fica a correr, o aviso chega antes de o mandarmos parar.
-    {
-        use std::io::Read;
-        let mut filho = std::process::Command::new(env!("CARGO_BIN_EXE_led-daemon"))
-            .args([show.as_str(), "--assume-no-wifi", "--assume-integrity", "--keep-running", "--tick-ms", "25"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("led-daemon");
-        let mut err = filho.stderr.take().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut b = [0u8; 256];
-            let mut acc = String::new();
-            while let Ok(n) = err.read(&mut b) {
-                if n == 0 { break; }
-                acc.push_str(&String::from_utf8_lossy(&b[..n]));
-                if acc.contains("AVISO: --assume-no-wifi") { let _ = tx.send(()); break; }
-            }
-        });
-        let a_tempo = rx.recv_timeout(Duration::from_secs(10)).is_ok();
-        // Premissa: o processo ainda está vivo (senão «antes do fim» não prova nada).
-        let vivo = filho.try_wait().expect("try_wait").is_none();
-        writeln!(filho.stdin.as_mut().unwrap(), "shutdown").ok();
-        let _ = filho.wait();
-        assert!(vivo, "premissa: com --keep-running o daemon tem de continuar vivo");
-        assert!(a_tempo, "o aviso tem de sair no arranque, com o processo ainda a correr");
-    }
+    // No ARRANQUE (MH3/MH8): num processo que fica a correr, o aviso chega antes de o mandarmos
+    // parar — no modo CLI e no de produção (--socket + --output).
+    let sock2 = std::env::temp_dir().join(format!("lumyx-td029-aviso2-{}.sock", std::process::id()));
+    aviso_no_arranque(&[show.as_str(), "--assume-no-wifi", "--assume-integrity", "--keep-running", "--tick-ms", "25"]);
+    aviso_no_arranque(&[show.as_str(), "--assume-no-wifi", "--assume-integrity", "--keep-running", "--tick-ms", "25",
+                        "--socket", sock2.to_str().unwrap(), "--output", ALVO, "--profile", PRESET]);
     let sem = correr(&[]);
     assert!(!sem.contains("--assume-no-wifi"), "sem a flag não há aviso: {sem}");
 }
@@ -687,4 +675,34 @@ fn flag_com_sonda_ok_deixa_o_aviso_sem_efeito_no_journal_nos_dois_caminhos() {
     let j = d.parar();
     assert_eq!(contar(&j, "network_override_unused"), 1, "arranque com --socket:\n{j}");
     formato_jsonl_exato(&j);
+}
+
+/// Arranca o binário com `args` (que o mantêm vivo) e exige o aviso em stderr ANTES de o mandar
+/// parar, com a premissa de que o processo ainda está vivo.
+fn aviso_no_arranque(args: &[&str]) {
+    use std::io::Read;
+    let mut filho = std::process::Command::new(env!("CARGO_BIN_EXE_led-daemon"))
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("led-daemon");
+    let mut err = filho.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut b = [0u8; 256];
+        let mut acc = String::new();
+        while let Ok(n) = err.read(&mut b) {
+            if n == 0 { break; }
+            acc.push_str(&String::from_utf8_lossy(&b[..n]));
+            if acc.contains("AVISO: --assume-no-wifi") { let _ = tx.send(()); break; }
+        }
+    });
+    let a_tempo = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+    let vivo = filho.try_wait().expect("try_wait").is_none();
+    writeln!(filho.stdin.as_mut().unwrap(), "shutdown").ok();
+    let _ = filho.wait();
+    assert!(vivo, "premissa: o daemon tem de continuar vivo ({args:?})");
+    assert!(a_tempo, "o aviso tem de sair no arranque, com o processo ainda a correr ({args:?})");
 }
