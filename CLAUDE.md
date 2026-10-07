@@ -159,7 +159,7 @@ cada `load` IPC; com a sonda OK regista `network_override_unused`. WiFi activo b
 `notice_to_json`, sem campos novos. IPC/`PROTOCOL_V`, contratos canónicos e ADRs intocados.
 
 **Invariants verified.** `cargo test --workspace --locked` 1170 · 0 · 9, exit 0 (107 binários). Controlos
-negativos M1/M2/M3/MD4 e as 37 mutações que o falsificador deixou vivas em cinco rondas (arranque sem a flag,
+negativos M1/M2/M3/MD4 e as 42 mutações que o falsificador deixou vivas em seis rondas (arranque sem a flag,
 WiFi + flag nos dois caminhos e no modo CLI, notices IPC incompletas/com campo/tipo novo, flag por ambiente
 ou por outra flag, aviso em stderr removido ou adiado, armar depois do arranque, a guarda permissiva no
 lugar da real, `play` depois de um `load` recusado, linhas JSONL de tipo novo) reprovam com `panicked`, nunca

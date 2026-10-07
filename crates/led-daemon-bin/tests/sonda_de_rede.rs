@@ -266,8 +266,12 @@ fn arranque_com_override_regista_o_evento() {
     while contar(&d.journal.texto(), "network_assumed_by_operator") == 0 && Instant::now() < fim {
         std::thread::yield_now();
     }
+    esperar_ticks(&d, 10);
     let j = d.parar();
     assert_eq!(contar(&j, "network_assumed_by_operator"), 1, "journal:\n{j}");
+    // Com play até ao fim: os eventos de tick também no formato exato (MC6h).
+    assert!(j.contains(r#""event":"position_changed""#) && j.contains(r#""event":"reached_end""#), "premissa:\n{j}");
+    formato_jsonl_exato(&j);
     // Controlo positivo do oráculo `armou_ou_tocou`: com a flag o mesmo arranque arma e toca.
     assert!(armou_ou_tocou(&j), "com a flag e a sonda falhada o arranque toca:\n{j}");
 }
@@ -304,9 +308,11 @@ fn nada_saiu_pelo_fio(d: &Daemon) {
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
     let st = pedir(&mut s, &mut r, r#"{"v":1,"id":2,"cmd":"status"}"#);
     assert!(st.contains(r#""frames":"#), "premissa: o palco está aberto e o status conta quadros: {st}");
-    for parte in st.split(r#""frames":"#).skip(1) {
-        let n: u64 = parte.split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap();
-        assert_eq!(n, 0, "um load recusado não pode pôr quadros no fio: {st}");
+    for chave in [r#""frames":"#, r#""errors":"#] {
+        for parte in st.split(chave).skip(1) {
+            let n: u64 = parte.split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap();
+            assert_eq!(n, 0, "um load recusado não pode tentar enviar nada ({chave}): {st}");
+        }
     }
 }
 
@@ -393,8 +399,41 @@ fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
         vistas += 1;
     }
     assert_eq!(vistas, 2, "uma linha por notice do pré-voo:\n{j}");
-    // D4 «zero tipos novos»: TODA a linha de notice do journal tem um nome que já existia
-    // (falsificador ronda 2, MC5). A linha final `state` tem outro formato (state_to_json).
+    formato_jsonl_exato(&j);
+}
+
+/// `linha` casa EXATAMENTE com `tpl`, onde `#` = um ou mais dígitos e `@` = uma ou mais letras
+/// minúsculas/`_`. Comparação da linha inteira: um espaço, um campo a mais ou uma ordem diferente
+/// reprovam (falsificador ronda 6, MC6g: um extrator de chaves deixava passar `"x" :1`).
+fn casa(linha: &str, tpl: &str) -> bool {
+    let (l, t) = (linha.as_bytes(), tpl.as_bytes());
+    let (mut i, mut k) = (0, 0);
+    while k < t.len() {
+        match t[k] {
+            b'#' => {
+                let ini = i;
+                while i < l.len() && l[i].is_ascii_digit() { i += 1; }
+                if i == ini { return false; }
+            }
+            b'@' => {
+                let ini = i;
+                while i < l.len() && (l[i].is_ascii_lowercase() || l[i] == b'_') { i += 1; }
+                if i == ini { return false; }
+            }
+            c => {
+                if i >= l.len() || l[i] != c { return false; }
+                i += 1;
+            }
+        }
+        k += 1;
+    }
+    i == l.len()
+}
+
+/// D4 «mesmo formato, zero campos/tipos novos», aplicado a TODA a linha do JSONL: notice com nome
+/// conhecido e forma exata do `notice_to_json`, a linha final do `state_to_json`, ou um evento com
+/// a forma exata do `event_to_json` para o seu tipo.
+fn formato_jsonl_exato(j: &str) {
     const CONHECIDAS: &[&str] = &[
         "mode", "profile", "output_open", "output_error", "output_failed", "load_refused",
         "arm_refused", "play_refused", "integrity_assumed", "started", "shutdown", "log_write_failed",
@@ -402,35 +441,22 @@ fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
         "network_probe_failed", "network_assumed_by_operator", "network_override_unused",
         "devices_checked", "devices_missing", "devices_unverified", "preflight_vacuous",
     ];
+    const EVENTOS: &[&str] = &[
+        r#"{"t_ms":#,"event":"transitioned","from":"@","to":"@"}"#,
+        r#"{"t_ms":#,"event":"show_loaded","show_id":#}"#,
+        r#"{"t_ms":#,"event":"show_unloaded","show_id":#}"#,
+        r#"{"t_ms":#,"event":"position_changed","ms":#,"cause":"@"}"#,
+        r#"{"t_ms":#,"event":"reached_end"}"#,
+        r#"{"t_ms":#,"event":"faulted","code":"@"}"#,
+        r#"{"t_ms":#,"event":"fault_cleared"}"#,
+        r#"{"t_ms":#,"notice":"state","state":"@","position_ms":#}"#,
+    ];
+    assert!(!j.is_empty(), "premissa: há journal");
     for linha in j.lines() {
-        assert!(
-            linha.starts_with(r#"{"t_ms":"#) && (linha.contains(r#","notice":""#) || linha.contains(r#","event":""#)),
-            "linha do JSONL que não é notice nem event (D4, MC6): {linha}"
-        );
-    }
-    const EVENTOS: &[&str] = &["transitioned", "position_changed", "show_loaded", "show_unloaded",
-                                "reached_end", "faulted", "fault_cleared"];
-    for linha in j.lines().filter(|l| l.contains(r#","event":""#)) {
-        let tipo = linha.split(r#","event":""#).nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
-        assert!(EVENTOS.contains(&tipo), "tipo de evento novo no journal (MC6e): {linha}");
-        // Chaves EXATAS do event_to_json, por tipo (MC6f: um campo novo nos eventos passava).
-        let extra: &[&str] = match tipo {
-            "transitioned" => &["from", "to"],
-            "show_loaded" | "show_unloaded" => &["show_id"],
-            "position_changed" => &["ms", "cause"],
-            "faulted" => &["code"],
-            _ => &[],
-        };
-        let mut esperadas: Vec<&str> = vec!["t_ms", "event"];
-        esperadas.extend_from_slice(extra);
-        let chaves: Vec<&str> = linha
-            .match_indices("\":")
-            .filter_map(|(i, _)| linha[..i].rsplit('"').next())
-            .collect();
-        assert_eq!(chaves, esperadas, "chaves do evento {tipo} diferentes do event_to_json: {linha}");
-    }
-    for linha in j.lines().filter(|l| l.contains(r#""notice":"#) && !l.contains(r#""notice":"state""#)) {
-        let nome = notice_exata(linha).unwrap_or_else(|| panic!("formato diferente do notice_to_json: {linha}"));
+        if EVENTOS.iter().any(|t| casa(linha, t)) {
+            continue;
+        }
+        let nome = notice_exata(linha).unwrap_or_else(|| panic!("linha fora dos formatos do journal (D4): {linha}"));
         assert!(CONHECIDAS.contains(&nome), "tipo de notice novo no journal: {linha}");
     }
 }
@@ -529,6 +555,7 @@ fn modo_cli_sem_override_com_sonda_falhada_nao_arma() {
     // Controlo positivo do mesmo oráculo: com a flag, arma e corre os 3 ticks.
     let j = correr_cli("td029-cli-com.lumyx", true, &FALHADA);
     assert_eq!(contar(&j, "arm_refused"), 0, "com a flag e a sonda falhada o modo CLI arma:\n{j}");
+    formato_jsonl_exato(&j);
     assert_eq!(contar(&j, "network_assumed_by_operator"), 1, "{j}");
 }
 
@@ -565,6 +592,9 @@ fn o_binario_avisa_em_stderr_so_com_a_flag() {
     let sock = std::env::temp_dir().join(format!("lumyx-td029-aviso-{}.sock", std::process::id()));
     let com_socket = correr(&["--assume-no-wifi", "--socket", sock.to_str().unwrap()]);
     assert!(com_socket.contains("AVISO: --assume-no-wifi"), "com --socket também avisa: {com_socket}");
+    // E no modo de produção, --socket E --output juntos (MH7).
+    let prod = correr(&["--assume-no-wifi", "--socket", sock.to_str().unwrap(), "--output", ALVO, "--profile", PRESET]);
+    assert!(prod.contains("AVISO: --assume-no-wifi"), "com --socket + --output também avisa: {prod}");
     // No ARRANQUE (MH3): num processo que fica a correr, o aviso chega antes de o mandarmos parar.
     {
         use std::io::Read;
@@ -643,6 +673,8 @@ fn flag_com_sonda_ok_deixa_o_aviso_sem_efeito_no_journal_nos_dois_caminhos() {
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
     let resp = pedir(&mut s, &mut r, &load(&show, 2));
     assert!(resp.contains(r#""ok":true"#), "{resp}");
+    // As notices do load são escritas ANTES da resposta: contar já, um por load (MC8d).
+    assert_eq!(contar(&d.journal.texto(), "network_override_unused"), 1, "depois do 1.º load");
     pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"unload"}"#);
     let resp = pedir(&mut s, &mut r, &load(&show, 4));
     assert!(resp.contains(r#""ok":true"#), "{resp}");
@@ -651,6 +683,8 @@ fn flag_com_sonda_ok_deixa_o_aviso_sem_efeito_no_journal_nos_dois_caminhos() {
     // O terceiro caminho: o arranque do modo --socket (MC8b).
     let show = escrever("td029-arranque-ok.lumyx");
     let d = Daemon::subir_com("arranque-ok", cfg(true, true), Some(show), &OK);
+    esperar_ticks(&d, 10);
     let j = d.parar();
     assert_eq!(contar(&j, "network_override_unused"), 1, "arranque com --socket:\n{j}");
+    formato_jsonl_exato(&j);
 }
