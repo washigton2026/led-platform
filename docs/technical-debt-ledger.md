@@ -3,7 +3,7 @@
 Canonical source of truth for all tracked debt items. One entry per TD-ID.
 Updates: edit this file + commit. Session ledger (in-chat) must not diverge.
 
-Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
+Last updated: 2026-10-07 (schema alinhado com o audit_gate R4.1 — `watched:` e região de prova)
 
 ---
 
@@ -11,13 +11,19 @@ Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
 - `open`                 — unfixed, work required
 - `diagnosed`            — root cause known, not yet fixed
 - `closed`               — permanently fixed; requires evidence_ref + negative_control (KB-012)
-- `pending-verification` — fix implemented; evidence gate not yet passed (blocks merge)
+- `pending-verification` — fix implemented; evidence gate not yet passed (OK dentro do `review_by`; Critical depois)
 - `wontfix`              — acknowledged, intentionally deferred
 
 ## Closure schema (enforced by scripts/audit_gate.py — KB-012)
 Every `closed` TD MUST have:
   evidence_ref:     path to committed artefact proving the fix (test output, grep, etc.)
   negative_control: description of the run that would FAIL if the fix were absent
+If it has `source_files:`, the evidence pins EACH of them by content, one line each, at the
+start of the line: `watched: <path> sha256:<hex>` (computed when the evidence is generated).
+If it has `required_test:`, the evidence declares ONE proof region (`--- prova ---` …
+`--- fim da prova ---`) with a structured result line for that test (`test [path::]<name> ... ok`
+or `<name>: N passed; 0 failed`, N>0), no FAILED for it, and an `N passed; 0 failed` summary.
+The authoritative rules are the docstring of scripts/audit_gate.py.
 
 ---
 
@@ -868,8 +874,10 @@ context: |
 
   PORQUE CONTINUA `open` E NAO `closed`: o `audit_gate.py` exige, para `closed`, um
   `evidence_ref` que aponte para um ficheiro EXISTENTE com `N passed; 0 failed` e `N > 0`
-  (`scripts/audit_gate.py:163-185`), mais um `git-hash:` de frescura (`:83`). Nao existe
-  `docs/evidence/td-019-*.txt` — a serie salta do `td-016` para nada. A correccao aterrou
+  (regras 2 e 6 do docstring de `scripts/audit_gate.py`), mais linhas `watched:` que fixam o
+  conteudo dos source_files (R4.1; o `git-hash:` deixou de servir de frescura).
+  [2026-10-07] Esta frase sobre a falta de artefacto e anterior a 2026-09-13: hoje existem
+  `docs/evidence/td-019-*.md` e o `evidence_ref` acima aponta para um deles. A correccao aterrou
   em codigo; a PROVA nunca foi capturada. Isto e o gate a funcionar, nao uma omissao:
   neste repositorio `closed` significa "provado fechado com artefacto", nao "acreditamos
   que esta corrigido".
@@ -1439,7 +1447,8 @@ falsification_required: |
   alloc_zeroed e realloc, uma assercao cada) — mutar para devolver sempre false -> vermelho.
   (3) Alocacao injetada no caminho quente -> vermelho.
   Ao fechar: o rename/remocao destes testes nao fica vermelho em nenhum gate (o e2e Inv3/C3 aceita
-  0 testes; required_test e substring e o audit_gate so o verifica com o TD `closed`) — fixar N
+  0 testes; required_test exige linha estruturada que passou desde o R4.1 (#26), mas o audit_gate
+  so o verifica com o TD `closed`) — fixar N
   por binario e os nomes completos na evidencia.
 review_by: 2026-10-12
 ```
@@ -1485,7 +1494,7 @@ severity:  High
 status:    closed
 closed_on: 2026-10-01
 closed_by: "eb791fe (correcao, PR #11) + 7ee2f89 (o teste passa a emitir «test_pre_commit_hook: N passed; M failed» dos contadores reais). Re-medido sobre 7ee2f89: 4 passed; 0 failed, exit 0."
-evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-01.md
+evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-07.md
 required_test: test_pre_commit_hook
 origin:    "Descrito na mensagem de eb791fe: D1 — o gate lia o ledger do worktree (indice 19 TD / worktree 20 -> «20 OK»); D2 — o stale usava git log <hash>..HEAD, cego as alteracoes em stage (o commit C4, 320ff94, passou o hook)."
 source_files: scripts/pre-commit-hook.sh
