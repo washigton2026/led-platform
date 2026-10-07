@@ -1406,9 +1406,17 @@ review_by: 2026-10-07
 td_id:     TD-023
 title:     "Os gates `tests/no_alloc.rs` do led-hal, led-sequencer, audio-core e led-pixel-engine usam um contador GLOBAL: alocacoes do libtest noutras threads entram na janela e o gate reprova sem o caminho quente ter alocado"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-10-08
+closed_by: "#23 (697048a, mergeado 2026-10-06): contador por thread nos 4 crates. Evidencia sobre a CI da main bc7991f (macOS e Ubuntu, run 37679587088); 16 runs pos-#23 sem falha TD-023 (flakes.log, R4.5)."
+evidence_ref: docs/evidence/td-023-contador-por-thread-2026-10-08.md
 origin:    "PR #8, run 36245590122 tentativa 2 (job macOS 108673138958, SHA 57cf21d, so docs): «calibrated hot path allocated 7 time(s) over 10000 frames». Mesma classe no led-sequencer: PR #20, run 37236057484, job 111535264226 (diff = so o ledger): «timeline render allocated 2 time(s) over 10000 frames» (180 vs 182). led-hal de novo no PR #17 (232 vs 237)."
-required_test: ruido_de_fundo_noutra_thread_nao_reprova
+required_test: o_contador_ainda_ve_o_que_e_alocado_na_thread_do_teste
+negative_control: |
+  R3.4 (mutacoes em copia, ~/lumyx-evidence/2026-10-05/r3.4/): `registar` sempre true (= contador global antigo) ->
+  `ruido_de_fundo_noutra_thread_nao_reprova_o_hot_path` FAILED (led-hal :138); `registar` sempre false (contador cego) ->
+  `o_contador_ainda_ve_o_que_e_alocado_na_thread_do_teste` FAILED (led-hal :155); led-sequencer alloc_zeroed cego,
+  realloc cego e corpo vazio -> o teste dono FAILED em cada. Falsificador R3.4 ronda 2: NOT_FALSIFIED.
 source_files: crates/led-hal/tests/no_alloc.rs, crates/led-sequencer/tests/no_alloc.rs, crates/audio-core/tests/no_alloc.rs, crates/led-pixel-engine/tests/no_alloc.rs
 context: |
   Os quatro ficheiros tinham `static ALLOCS: AtomicUsize` incrementado pelo alocador em
@@ -1426,12 +1434,12 @@ impact: |
   falso-verde: um contador que soma todas as threads nunca conta menos do que a thread do teste
   alocou. O contador por thread tem um limite proprio: ver LIMITE em required_fix.
 mitigation_now: |
-  Nenhuma automatica; re-run (1 por falha, regra de repeticao de jobs do Gauntlet).
+  [historico] re-run (1 por falha); desde 2026-10-07 regra D-REP (contagem por teste, flakes.log).
 required_fix: |
   Atribuir por thread, como a F7.2 fez em crates/led-protocols/tests/no_alloc.rs
   (`E_A_THREAD_DO_TESTE`, `FORA_DA_THREAD`, janela `MEDINDO`), replicado nos quatro ficheiros
   (um #[global_allocator] nao se partilha entre binarios; nao ha crate de utilitarios de teste).
-  Correcao proposta no ramo fix/td-023-contador-por-thread (R3.4, 2026-10-05).
+  Correcao no ramo fix/td-023-contador-por-thread (R3.4, 2026-10-05), mergeada pelo #23 (697048a, 2026-10-06).
   LIMITE (aceite, como na F7.2): o gate passa a provar «zero alocacoes NA THREAD QUE EXECUTA o
   caminho quente». Uma alocacao por frame delegada num worker persistente deixa de ser vista
   (falsificador R3.4, ataque b2: verde; com o contador global: «9921 time(s)»). Um spawn por
