@@ -85,6 +85,31 @@ fn heartbeat_resends_last_valid_and_never_zeros() {
     assert_eq!(sim1.frames_sent(), 1);
 }
 
+/// **R5.6 (mutação M2 do falsificador R4.7): o `record` guarda SEMPRE o quadro que lhe deram.**
+/// O teste acima regista UMA vez e bate UMA vez: um `record` que zerasse a partir do 2.º registo
+/// (ou só parte dos píxeis) passava-o. Aqui: três registos diferentes, duas batidas, e CADA canal
+/// dos dois universos tem de ser o do ÚLTIMO quadro — nunca zeros, nem parciais.
+#[test]
+fn heartbeat_resends_the_latest_of_several_records_and_never_zeros() {
+    let (sim1, sim2, hal) = setup();
+    let hb = Heartbeat::new();
+    hb.record(&LogicalFrame::new(vec![PixelColor::rgb(1, 2, 3); PIXELS], 0));
+    hb.record(&LogicalFrame::new(vec![PixelColor::rgb(4, 5, 6); PIXELS], 25));
+    hb.record(&LogicalFrame::new(vec![PixelColor::rgb(7, 8, 9); PIXELS], 50));
+    for batida in 1..=2u64 {
+        assert!(hb.beat(&hal).unwrap(), "batida {batida}: há quadro válido, tem de sair");
+        // GRB: rgb(7,8,9) sai [8,7,9]. Device 1: universo 0, píxeis 0..170 (510 canais).
+        for px in 0..170 {
+            let c = |k: usize| sim1.channel(0, px * 3 + k);
+            assert_eq!((c(0), c(1), c(2)), (Some(8), Some(7), Some(9)), "batida {batida}: pixel {px} do universo 0");
+        }
+        // Device 2: universo 1, o pixel 170.
+        let c = |k: usize| sim2.channel(1, k);
+        assert_eq!((c(0), c(1), c(2)), (Some(8), Some(7), Some(9)), "batida {batida}: pixel 170 do universo 1");
+    }
+    assert_eq!(sim1.frames_sent(), 2, "uma saída por batida");
+}
+
 #[test]
 fn core_reaches_hardware_only_through_protocol_output() {
     let (_s1, _s2, hal) = setup();
