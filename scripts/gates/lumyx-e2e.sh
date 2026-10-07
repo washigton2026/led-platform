@@ -41,6 +41,49 @@ FAILURES=0
 NOT_MEASURED=0
 TOTAL_TESTS=0
 
+# ── Gate: heartbeat never zeros (R4.7) ────────────────────────
+# Antes: `cargo test -p led-hal --lib heartbeat_resends | grep -q "test result: ok"` — o `--lib`
+# não vê tests/contract.rs, o filtro casava 0 testes e `ok. 0 passed` dava PASS (KB-012), com o
+# veredito lido por pipe (KB-013). Agora: N_esperado por LISTAGEM dos nomes exatos, execução com
+# `--exact`, saída para ficheiro, exit lido sem pipe, e N_executado == N_esperado == nº de nomes, por binário.
+# BEGIN gate_heartbeat_nunca_zeros
+# Uma linha por binário: «pacote|alvo|nomes exatos». Três binários, porque os dois testes do
+# contract.rs só batem UMA vez e só olham para o canal 0 (falsificador R4.7: zeros a partir da
+# 2.ª batida, só na thread do spawn, só depois de 50 ms ou zeros parciais passavam). O lifecycle
+# cobre a thread; o do stage do daemon compara o keep-alive com o quadro que estava no fio.
+HB_GRUPOS="led-hal|--test contract|heartbeat_resends_last_valid_and_never_zeros heartbeat_never_sends_zero_frame_when_record_never_called
+led-hal|--test lifecycle|heartbeat_thread_keeps_sending_the_last_valid_frame
+led-daemon-bin|--lib|stage::tests::pausado_o_palco_continua_vivo_e_nunca_recebe_zeros"
+gate_heartbeat_nunca_zeros() {
+    local out lista code esperado executado pacote alvo nomes n total=0 falhou=0
+    out=$(mktemp "${TMPDIR:-/tmp}/lumyx-hb.XXXXXX")
+    lista=$(mktemp "${TMPDIR:-/tmp}/lumyx-hb-lista.XXXXXX")
+    while IFS='|' read -r pacote alvo nomes; do
+        [ -n "$pacote" ] || continue
+        n=$(echo $nomes | wc -w | tr -d ' ')
+        # $RELEASE_FLAG: com --release o gate corre no mesmo perfil que o resto do e2e.
+        cargo test -p "$pacote" $alvo $RELEASE_FLAG -- --list --exact $nomes > "$lista" 2>&1
+        code=$?
+        esperado=$(grep -cE ': test$' "$lista")
+        if [ "$code" -ne 0 ] || [ "$esperado" -ne "$n" ]; then
+            fail "LED: heartbeat never-zeros — ${pacote} ${alvo}: listagem deu ${esperado} de ${n} (exit ${code}): nome mudou ou não compila"
+            falhou=1; continue
+        fi
+        cargo test -p "$pacote" $alvo $RELEASE_FLAG -- --exact $nomes > "$out" 2>&1
+        code=$?
+        executado=$(sed -nE 's/^test result: ok\. ([0-9]+) passed.*/\1/p' "$out" | head -1)
+        if [ "$code" -ne 0 ] || [ "${executado:-0}" -ne "$esperado" ]; then
+            fail "LED: heartbeat never-zeros — ${pacote} ${alvo}: exit ${code}, executados ${executado:-0} de ${esperado}"
+            grep -aE 'panicked at|FAILED' "$out" | head -5
+            falhou=1; continue
+        fi
+        total=$((total + executado))
+    done <<< "$HB_GRUPOS"
+    [ "$falhou" -eq 0 ] && pass "LED: heartbeat never sends zeros (${total}/4 testes: contract ×2, lifecycle, stage do daemon)"
+    rm -f "$out" "$lista"
+}
+# END gate_heartbeat_nunca_zeros
+
 # ── Helper: run tests and count ───────────────────────────────
 run_tests() {
     local dir="$1"
@@ -190,11 +233,7 @@ fi
 
 # Invariant 2: heartbeat never zeros
 cd "$LED_PLATFORM"
-if cargo test -p led-hal --lib heartbeat_resends 2>&1 | grep -q "test result: ok"; then
-    pass "LED: heartbeat never sends zeros"
-else
-    fail "LED: heartbeat never-zeros test failed"
-fi
+gate_heartbeat_nunca_zeros
 
 # Invariant 3: audio-core zero-alloc hot path
 if cargo test -p audio-core --test no_alloc 2>&1 | grep -q "test result: ok"; then
