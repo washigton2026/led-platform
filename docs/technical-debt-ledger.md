@@ -1269,7 +1269,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-09-26
 closed_by: "3c60ab8 (correcao do lado do teste) + sonda Linux run 36245228354: o writeln! interrompido devolve BrokenPipe (errno 32) em Linux, 3/3 — o mesmo que em macOS. Conjunto aceite NAO alargado."
-evidence_ref: docs/evidence/td-022-reverificacao-2026-09-28.md
+evidence_ref: docs/evidence/td-022-reverificacao-2026-10-07.md
 required_test: o_daemon_recusa_a_linha_longa_por_si_proprio
 source_files: crates/led-console-bin/tests/ipc_contra_o_daemon.rs
 negative_control: |
@@ -1676,5 +1676,18 @@ falsification_required: |
   ignorada; operstate ilegivel → ProbeUnavailable (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
   guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
   override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
+progress: |
+  2026-10-07 (fix/td-029-sonda-falhada-bloqueia, accept R5 aprovado — opcao B). FEITO: o ponto (3) e o ramo
+  `/sys/class/net` ausente/`read_dir` falhado. Variante nova `ProbeFailed { probe, error }` (Display CRITICAL);
+  Linux :234/:242 e macOS :149/:154 devolvem-na; `ProbeUnavailable` fica SO para SO nao suportado (D1, zero
+  docs/adr/). Pre-voo: ProbeFailed → network_ok false + `network_probe_failed`; com `--assume-no-wifi` (so CLI,
+  por execucao) → true + `network_assumed_by_operator` em CADA pre-voo; flag com sonda OK → `network_override_unused`;
+  WifiActive bloqueia sempre. O teste preflight.rs:462 foi PRESERVADO para ProbeUnavailable e INVERTIDO para
+  ProbeFailed (`sonda_falhada_numa_plataforma_suportada_bloqueia`).
+  ACHADO D4 (observabilidade): o caminho IPC do `load` (run.rs, `apply_ipc`) PERDIA TODAS as notices do pre-voo —
+  nenhuma chegava ao journal, nao so as de rede. Passa a escreve-las com o mesmo `notice_to_json` do caminho CLI,
+  zero campos novos (e2e `dois_loads_ipc_com_override_deixam_dois_eventos_no_journal`).
+  POR FAZER (mantem o TD aberto): pontos (1) operstate ilegivel ignorado e (2) `dormant`/`unknown` como inactivos,
+  e a extraccao `probe_linux_em(raiz)` — fora do accept R5. Nao executado em Linux real.
 review_by: 2026-10-31
 ```

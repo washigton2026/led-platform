@@ -30,10 +30,18 @@ pub enum NetworkPolicyError {
     /// (e.g. `["en0"]` on macOS, `["wlan0"]` on Linux).
     WifiActive { interfaces: Vec<String> },
 
-    /// The network state could not be determined (probe command failed or
-    /// was unavailable on this platform). The show is allowed to proceed but
-    /// this should be surfaced as a WARNING to the operator.
+    /// There is **no probe for this platform** (neither macOS nor Linux). The show is
+    /// allowed to proceed but this should be surfaced as a WARNING to the operator —
+    /// this is the case ADR-0005 («Consequências») and ADR-0018 decided as non-fatal.
+    ///
+    /// It is **not** used when a probe exists and fails: that is [`Self::ProbeFailed`].
     ProbeUnavailable { reason: String },
+
+    /// The platform **is supported**, but its probe failed to run (TD-029). Nothing can be
+    /// concluded — neither "WiFi is on" nor "WiFi is off" — and, unlike an unsupported
+    /// platform, this case was never decided as non-fatal: the caller must treat it as
+    /// a refusal unless the operator explicitly affirms otherwise.
+    ProbeFailed { probe: &'static str, error: String },
 }
 
 impl fmt::Display for NetworkPolicyError {
@@ -49,6 +57,11 @@ impl fmt::Display for NetworkPolicyError {
                 f,
                 "[LUMYX WARNING] WiFi check unavailable ({reason}). \
                  Cannot enforce WiFi-forbidden rule — verify manually."
+            ),
+            NetworkPolicyError::ProbeFailed { probe, error } => write!(
+                f,
+                "[LUMYX CRITICAL] WiFi probe `{probe}` failed ({error}). \
+                 The WiFi-forbidden rule could not be verified on a supported platform."
             ),
         }
     }
@@ -106,6 +119,8 @@ impl NetworkGuard for PermissiveGuard {
 /// | macOS | `networksetup -listallhardwareports` + `ifconfig <iface>` status |
 /// | Linux | `/sys/class/net/wl*/operstate` |
 /// | Other | `ProbeUnavailable` warning (allows show to proceed) |
+///
+/// On macOS and Linux a probe that **fails to run** returns `ProbeFailed` (TD-029).
 pub struct WifiBlockGuard;
 
 impl NetworkGuard for WifiBlockGuard {
@@ -146,13 +161,15 @@ fn probe_macos() -> Result<(), NetworkPolicyError> {
     let ports_out = Command::new("/usr/sbin/networksetup")
         .arg("-listallhardwareports")
         .output()
-        .map_err(|e| NetworkPolicyError::ProbeUnavailable {
-            reason: format!("networksetup failed: {e}"),
+        .map_err(|e| NetworkPolicyError::ProbeFailed {
+            probe: "networksetup -listallhardwareports",
+            error: e.to_string(),
         })?;
 
     if !ports_out.status.success() {
-        return Err(NetworkPolicyError::ProbeUnavailable {
-            reason: "networksetup -listallhardwareports returned non-zero".into(),
+        return Err(NetworkPolicyError::ProbeFailed {
+            probe: "networksetup -listallhardwareports",
+            error: format!("exit status {}", ports_out.status),
         });
     }
 
@@ -232,15 +249,17 @@ fn probe_linux() -> Result<(), NetworkPolicyError> {
 
     let net_path = Path::new("/sys/class/net");
     if !net_path.exists() {
-        return Err(NetworkPolicyError::ProbeUnavailable {
-            reason: "/sys/class/net not found".into(),
+        return Err(NetworkPolicyError::ProbeFailed {
+            probe: "sysfs /sys/class/net",
+            error: "/sys/class/net not found".into(),
         });
     }
 
     let mut active: Vec<String> = Vec::new();
 
-    let entries = fs::read_dir(net_path).map_err(|e| NetworkPolicyError::ProbeUnavailable {
-        reason: format!("read_dir /sys/class/net: {e}"),
+    let entries = fs::read_dir(net_path).map_err(|e| NetworkPolicyError::ProbeFailed {
+        probe: "sysfs /sys/class/net",
+        error: format!("read_dir: {e}"),
     })?;
 
     for entry in entries.flatten() {
@@ -310,6 +329,21 @@ mod tests {
         assert!(msg.contains("test reason"), "must include reason: {msg}");
     }
 
+    /// TD-029: a failed probe on a supported platform is CRITICAL, names the probe and
+    /// the error, and is distinct from "no probe for this platform".
+    #[test]
+    fn error_probe_failed_is_critical_and_names_probe_and_error() {
+        let err = NetworkPolicyError::ProbeFailed {
+            probe: "sysfs /sys/class/net",
+            error: "read_dir: permission denied".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("CRITICAL"), "must be critical, not a warning: {msg}");
+        assert!(msg.contains("sysfs /sys/class/net"), "must name the probe: {msg}");
+        assert!(msg.contains("permission denied"), "must carry the error: {msg}");
+        assert_ne!(err, NetworkPolicyError::ProbeUnavailable { reason: "x".into() });
+    }
+
     #[test]
     fn error_wifi_active_is_not_probe_unavailable() {
         let wifi = NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] };
@@ -334,7 +368,10 @@ mod tests {
                 assert!(!interfaces.is_empty(), "WifiActive must name at least one interface");
             }
             Err(NetworkPolicyError::ProbeUnavailable { reason }) => {
-                assert!(!reason.is_empty(), "ProbeUnavailable must include a reason");
+                panic!("macOS is a SUPPORTED platform: it must never report ProbeUnavailable ({reason})");
+            }
+            Err(NetworkPolicyError::ProbeFailed { probe, error }) => {
+                assert!(!probe.is_empty() && !error.is_empty(), "ProbeFailed must name probe and error");
             }
         }
     }

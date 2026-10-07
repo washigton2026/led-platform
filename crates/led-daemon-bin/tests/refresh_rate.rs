@@ -125,6 +125,7 @@ fn o_daemon_recusa_arrancar_acima_do_teto_e_nao_clampa() {
         integrity: Integrity::AssumedByOperator,
         output: vec![sock.local_addr().unwrap().to_string()],
         profile: Some("esp32-poe-wled-ddp".to_string()),
+        assume_no_wifi: false,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0 };
@@ -159,6 +160,7 @@ fn dentro_do_teto_o_mesmo_caminho_toca_ate_ao_fim() {
         integrity: Integrity::AssumedByOperator,
         output: vec![sock.local_addr().unwrap().to_string()],
         profile: Some("esp32-poe-wled-ddp".to_string()),
+        assume_no_wifi: false,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0 };
@@ -188,6 +190,7 @@ fn sem_saida_a_cadencia_nao_e_limitada() {
         integrity: Integrity::AssumedByOperator,
         output: Vec::new(),
         profile: None,
+        assume_no_wifi: false,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0 };

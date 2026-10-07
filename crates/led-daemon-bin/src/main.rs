@@ -22,6 +22,12 @@ OPÇÕES:
                           NÃO é verificação — nenhum hash é recomputado, e o
                           journal regista que foi afirmado. Sem isto o pré-voo
                           reprova e o daemon não toca.
+    --assume-no-wifi      O operador AFIRMA que não há WiFi ativo quando a
+                          sonda de rede de uma plataforma SUPORTADA falhou
+                          (TD-029). Sem isto, sonda falhada = output BLOQUEADO.
+                          Por execução, só aqui — nunca por omissão nem por
+                          ficheiro. NÃO desbloqueia WiFi ativo. Cada pré-voo
+                          que a use (incl. cada `load` por IPC) fica no journal.
     --output IP[:PORTA]   Endereço do controlador. EXIGE --profile. Aceita
                           também `proto://IP`, mas o esquema tem de CONCORDAR
                           com o protocolo do preset — o profile é que manda.
@@ -118,6 +124,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--profile" => cfg.profile = Some(valor("--profile")?),
             "--socket" => socket = Some(valor("--socket")?),
             "--assume-integrity" => cfg.integrity = Integrity::AssumedByOperator,
+            "--assume-no-wifi" => cfg.assume_no_wifi = true,
             "--no-autoplay" => cfg.autoplay = false,
             "--keep-running" => cfg.exit_on_finish = false,
             outro if outro.starts_with('-') => return Err(format!("opção desconhecida: {outro}")),
@@ -207,6 +214,14 @@ fn main() {
         journal = Journal::new(stdout.lock()).with_file(path).expect("verificado acima");
     }
 
+    if args.cfg.assume_no_wifi {
+        // Aviso VISÍVEL no arranque (D2). O registo no journal é por pré-voo, no `preflight`.
+        eprintln!(
+            "AVISO: --assume-no-wifi — o operador AFIRMA que não há WiFi ativo. Só tem efeito se \
+             a sonda de rede FALHAR; nunca desbloqueia WiFi ativo. Cada uso fica no journal."
+        );
+    }
+
     let flag = Arc::new(AtomicBool::new(false));
     spawn_stdin_shutdown(Arc::clone(&flag));
 
@@ -263,6 +278,15 @@ mod tests {
         assert_eq!(a.cfg.tick_ms, 20);
         assert_eq!(a.cfg.integrity, Integrity::NotVerified, "integridade NÃO é o padrão");
         assert!(a.cfg.output.is_empty(), "sem --output o daemon continua sem saída");
+        assert!(!a.cfg.assume_no_wifi, "TD-029: o override NUNCA é por omissão");
+    }
+
+    /// TD-029 (D2): a flag existe, é só da CLI, e liga o campo — nada mais o liga.
+    #[test]
+    fn assume_no_wifi_so_pela_flag_explicita() {
+        let a = args(&["s.lumyx", "--assume-no-wifi"]).unwrap();
+        assert!(a.cfg.assume_no_wifi);
+        assert!(!led_daemon_bin::run::Config::default().assume_no_wifi, "nunca por omissão");
     }
 
     #[test]

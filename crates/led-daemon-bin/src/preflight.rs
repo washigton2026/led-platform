@@ -14,13 +14,22 @@
 //! pré-voo falsificável sem rede, sem WiFi e sem hardware — que é precisamente a parte que
 //! não se pode testar no rig quando o rig não existe.
 //!
-//! ## Sonda indisponível ≠ sonda reprovada
+//! ## Sonda indisponível ≠ sonda falhada ≠ sonda reprovada
 //!
-//! Se a sonda não consegue medir, não se pode concluir nada — nem "há WiFi" nem "não há". A
-//! política do repo já está fixada desde 2026-06-25: `ProbeUnavailable` **deixa prosseguir
-//! com aviso**, em vez de bloquear ambientes sem hardware. O que este módulo garante é que a
-//! diferença fica **escrita no journal**: "verificado" e "não foi possível verificar" nunca
-//! aparecem com a mesma frase.
+//! Se a sonda não consegue medir, não se pode concluir nada — nem "há WiFi" nem "não há". Há
+//! dois casos, e só um deles foi alguma vez decidido:
+//!
+//! - **`ProbeUnavailable` — não há sonda para esta plataforma.** É o caso que o ADR-0005
+//!   («Consequências») tornou não-fatal em 2026-06-25: **prossegue com aviso**
+//!   (`network_unverified`), para não bloquear ambientes sem hardware.
+//! - **`ProbeFailed` — a plataforma é suportada e a sonda falhou** (TD-029). Nunca foi
+//!   decidido como não-fatal, e por isso **bloqueia** (`network_probe_failed`). O operador pode
+//!   AFIRMAR que não há WiFi com `--assume-no-wifi`, por execução; cada pré-voo que o use
+//!   regista `network_assumed_by_operator` com a causa da falha. A flag **nunca** desbloqueia
+//!   WiFi ativo, e quando a sonda verifica fica `network_override_unused`.
+//!
+//! O que este módulo garante é que a diferença fica **escrita no journal**: "verificado",
+//! "não foi possível verificar" e "afirmado pelo operador" nunca aparecem com a mesma frase.
 
 use crate::loader::Integrity;
 use crate::output::OutputConfig;
@@ -91,6 +100,7 @@ pub fn preflight(
     output: Option<&OutputConfig>,
     guard: &dyn NetworkGuard,
     presence: &dyn DevicePresence,
+    assume_no_wifi: bool,
 ) -> Preflight {
     let mut notices = Vec::new();
     let integrity_verified = integrity.satisfies_preflight();
@@ -139,6 +149,13 @@ pub fn preflight(
     let network_ok = match guard.check() {
         Ok(()) => {
             notices.push(("network_checked", format!("{}: sem WiFi ativo", guard.name())));
+            if assume_no_wifi {
+                // D2(b): a flag foi dada e a sonda mediu — não houve nada a afirmar.
+                notices.push((
+                    "network_override_unused",
+                    "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".into(),
+                ));
+            }
             true
         }
         Err(NetworkPolicyError::WifiActive { interfaces }) => {
@@ -154,6 +171,29 @@ pub fn preflight(
                 format!("NAO foi possivel verificar a rede ({reason}) — prosseguindo com aviso"),
             ));
             true
+        }
+        // TD-029: a sonda EXISTE nesta plataforma e falhou. Não se sabe se há WiFi, e este
+        // caso nunca foi decidido como não-fatal (o ADR-0005 só o decidiu para plataformas
+        // sem sonda). Bloqueia — salvo se o operador AFIRMAR, por execução, que não há WiFi.
+        Err(NetworkPolicyError::ProbeFailed { probe, error }) if assume_no_wifi => {
+            notices.push((
+                "network_assumed_by_operator",
+                format!(
+                    "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao \
+                     ha WiFi ativo — NAO verificado"
+                ),
+            ));
+            true
+        }
+        Err(NetworkPolicyError::ProbeFailed { probe, error }) => {
+            notices.push((
+                "network_probe_failed",
+                format!(
+                    "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, \
+                     --assume-no-wifi permite ao operador afirma-lo"
+                ),
+            ));
+            false
         }
     };
 
@@ -291,6 +331,7 @@ mod tests {
             Some(&saida()),
             &GuardaFalsa(g),
             &SondaFalsa(p),
+            false,
         )
     }
     fn tem(pf: &Preflight, n: &str) -> bool {
@@ -334,6 +375,7 @@ mod tests {
             Some(&cfg),
             &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
             &SondaFalsa(Presence::AllPresent),
+            false,
         );
 
         assert!(
@@ -377,6 +419,7 @@ mod tests {
             Some(&cfg),
             &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
             &SondaFalsa(Presence::AllPresent),
+            false,
         );
         assert!(pf.report.network_ok, "nenhum datagrama atravessa interface: a excecao vale");
         assert!(tem(&pf, "network_local"));
@@ -415,7 +458,7 @@ mod tests {
             sondados: std::cell::RefCell::new(Vec::new()),
         };
         let pf =
-            preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaFalsa(Ok(())), &sonda);
+            preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaFalsa(Ok(())), &sonda, false);
 
         assert_eq!(
             sonda.sondados.borrow().len(),
@@ -470,6 +513,99 @@ mod tests {
         assert!(!tem(&pf, "devices_checked"), "NAO pode afirmar que verificou");
     }
 
+    // ── TD-029: sonda FALHADA numa plataforma suportada ──────────────────────
+
+    fn falhada() -> NetworkPolicyError {
+        NetworkPolicyError::ProbeFailed {
+            probe: "sysfs /sys/class/net",
+            error: "read_dir: permission denied".into(),
+        }
+    }
+    fn corre_com(g: Result<(), NetworkPolicyError>, assume_no_wifi: bool) -> Preflight {
+        preflight(
+            Integrity::AssumedByOperator,
+            Some(&saida()),
+            &GuardaFalsa(g),
+            &SondaFalsa(Presence::AllPresent),
+            assume_no_wifi,
+        )
+    }
+    fn detalhe<'a>(pf: &'a Preflight, n: &str) -> &'a str {
+        pf.notices.iter().find(|(k, _)| *k == n).map(|(_, d)| d.as_str()).unwrap_or("")
+    }
+
+    /// **A inversão do teste acima para o caso que nunca foi decidido.** Numa plataforma
+    /// SUPORTADA a sonda falhou: não se sabe se há WiFi, e o ADR-0005 só tornou não-fatal o
+    /// caso «não há sonda para esta plataforma». O output fica BLOQUEADO.
+    #[test]
+    fn sonda_falhada_numa_plataforma_suportada_bloqueia() {
+        let pf = corre_com(Err(falhada()), false);
+        assert!(!pf.report.network_ok, "sonda falhada sem override tem de BLOQUEAR (TD-029)");
+        assert!(tem(&pf, "network_probe_failed"));
+        let d = detalhe(&pf, "network_probe_failed");
+        assert!(
+            d.contains("sysfs /sys/class/net") && d.contains("permission denied"),
+            "a recusa tem de nomear a sonda e o erro: {d}"
+        );
+        assert!(d.contains("--assume-no-wifi"), "e dizer como o operador pode afirmar: {d}");
+        assert!(!tem(&pf, "network_checked") && !tem(&pf, "network_unverified"));
+    }
+
+    /// **O caso decidido no ADR-0005 não muda.** Plataforma não suportada continua a
+    /// prosseguir com aviso — com ou sem a flag, que aqui não tem nada a afirmar.
+    #[test]
+    fn sonda_nao_suportada_mantem_o_comportamento_atual() {
+        for flag in [false, true] {
+            let pf = corre_com(
+                Err(NetworkPolicyError::ProbeUnavailable { reason: "SO nao suportado".into() }),
+                flag,
+            );
+            assert!(pf.report.network_ok, "nao suportado continua nao-fatal (flag={flag})");
+            assert!(tem(&pf, "network_unverified"), "flag={flag}");
+            assert!(!tem(&pf, "network_probe_failed") && !tem(&pf, "network_checked"));
+            assert!(!tem(&pf, "network_assumed_by_operator"), "a flag nao se aplica (flag={flag})");
+        }
+    }
+
+    /// **D2 — o override é explícito e deixa rasto.** Sem a flag bloqueia; com ela passa,
+    /// mas o journal diz que foi AFIRMADO, com a causa da falha — nunca «verificado».
+    #[test]
+    fn override_sem_flag_bloqueia_com_flag_passa_e_regista() {
+        let sem = corre_com(Err(falhada()), false);
+        assert!(!sem.report.network_ok);
+        let com = corre_com(Err(falhada()), true);
+        assert!(com.report.network_ok, "com --assume-no-wifi o operador assume");
+        assert!(tem(&com, "network_assumed_by_operator"));
+        let d = detalhe(&com, "network_assumed_by_operator");
+        assert!(
+            d.contains("sysfs /sys/class/net") && d.contains("permission denied"),
+            "o evento tem de registar a CAUSA da falha da sonda: {d}"
+        );
+        assert!(!tem(&com, "network_checked"), "afirmado nunca e verificado");
+        assert!(!tem(&com, "network_probe_failed"), "com override o veredito e outro");
+    }
+
+    /// **O override nunca desbloqueia WiFi ATIVO.** É a diferença entre «não consegui ver» e
+    /// «vi WiFi»: o operador só pode afirmar o que a sonda não mediu.
+    #[test]
+    fn override_nunca_desliga_o_bloqueio_de_wifi_ativo() {
+        let pf = corre_com(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] }), true);
+        assert!(!pf.report.network_ok, "WiFi ATIVO bloqueia sempre, com ou sem --assume-no-wifi");
+        assert!(tem(&pf, "network_refused"));
+        assert!(!tem(&pf, "network_assumed_by_operator"));
+    }
+
+    /// **D2(b) — flag presente e a sonda verificou.** A flag não teve efeito, e isso também
+    /// fica dito: um operador que a usa por hábito tem de o ver.
+    #[test]
+    fn flag_com_sonda_ok_regista_que_nao_teve_efeito() {
+        let pf = corre_com(Ok(()), true);
+        assert!(pf.report.network_ok && tem(&pf, "network_checked"));
+        assert!(tem(&pf, "network_override_unused"), "a flag sem efeito tem de ficar no journal");
+        let sem_flag = corre_com(Ok(()), false);
+        assert!(!tem(&sem_flag, "network_override_unused"), "sem flag nao ha nada a dizer");
+    }
+
     /// Sem saída a vacuidade continua correta — e continua a ser **dita**.
     #[test]
     fn sem_saida_continua_vacuoso_e_declarado() {
@@ -478,6 +614,7 @@ mod tests {
             None,
             &PermissiveGuard,
             &SondaFalsa(Presence::AllPresent),
+            false,
         );
         assert!(pf.report.network_ok && pf.report.devices_present);
         assert!(tem(&pf, "preflight_vacuous"));
@@ -492,6 +629,7 @@ mod tests {
                 saida_cfg,
                 &PermissiveGuard,
                 &SondaFalsa(Presence::AllPresent),
+                false,
             );
             assert!(!pf.report.integrity_verified, "sem afirmação do operador, reprova");
         }
@@ -513,6 +651,7 @@ mod tests {
             // Uma guarda que reprovaria SEMPRE: se fosse consultada, o teste falhava.
             &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
             &SondaFalsa(Presence::AllPresent),
+            false,
         );
         assert!(pf.report.network_ok, "loopback não atravessa interface");
         assert!(tem(&pf, "network_local"));
@@ -547,6 +686,7 @@ mod tests {
             Some(&cfg),
             &GuardaFalsa(Ok(())),
             &SondaFalsa(Presence::Missing(vec!["192.168.2.156".into()])),
+            false,
         );
         assert!(pf.report.devices_present, "declarar que nao responde nao e estar ausente");
         assert!(tem(&pf, "devices_unverified"), "e o journal tem de dizer que NAO sondou");

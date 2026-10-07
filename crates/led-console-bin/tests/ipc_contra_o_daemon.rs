@@ -46,6 +46,7 @@ fn subir(nome: &str) -> Daemon {
             // Sem saida: estes testes exercitam o IPC, nao o fio (ADR-0029 tornou-a uma lista).
             output: Vec::new(),
             profile: None,
+            assume_no_wifi: false,
         };
         let mut rt = ShowRuntime::new();
         let mut pacer = SystemPacer::default();
