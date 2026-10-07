@@ -92,6 +92,85 @@ pub struct Preflight {
     pub notices: Vec<(&'static str, String)>,
 }
 
+/// O que a política de rede decide para um resultado da sonda (TD-029, R5.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisaoRede {
+    /// O campo `network_ok` do `PreflightReport`.
+    pub network_ok: bool,
+    /// As linhas do journal, pela ordem em que saem.
+    pub notices: Vec<(&'static str, String)>,
+    /// O operador AFIRMOU, com `--assume-no-wifi`, o que a sonda não conseguiu verificar.
+    pub override_usado: bool,
+}
+
+/// **Toda a política de rede do pré-voo (D1–D3 do TD-029), numa função pura.** Recebe o que a
+/// sonda MEDIU e a flag do operador; não faz I/O e não consulta nada. É o único sítio que decide;
+/// `preflight` é o seu único chamador.
+///
+/// - `Ok` → verificado; com a flag, `network_override_unused` (D2(b)).
+/// - `WifiActive` → bloqueia SEMPRE, com ou sem flag (ADR-0005).
+/// - `ProbeUnavailable` (SO não suportado, D1) → prossegue com aviso, igual com ou sem flag.
+/// - `ProbeFailed` (sonda de plataforma suportada falhou, D3) → bloqueia; com a flag, prossegue e
+///   regista `network_assumed_by_operator` (D2).
+pub fn decidir_rede(
+    resultado: &Result<(), NetworkPolicyError>,
+    nome_guarda: &str,
+    assume_no_wifi: bool,
+) -> DecisaoRede {
+    let mut notices = Vec::new();
+    let (network_ok, override_usado) = match resultado {
+        Ok(()) => {
+            notices.push(("network_checked", format!("{nome_guarda}: sem WiFi ativo")));
+            if assume_no_wifi {
+                // D2(b): a flag foi dada e a sonda mediu — não houve nada a afirmar.
+                notices.push((
+                    "network_override_unused",
+                    "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".into(),
+                ));
+            }
+            (true, false)
+        }
+        Err(NetworkPolicyError::WifiActive { interfaces }) => {
+            notices.push((
+                "network_refused",
+                format!("WiFi ATIVO em {} — ADR-0005 proibe show ao vivo", interfaces.join(", ")),
+            ));
+            (false, false)
+        }
+        Err(NetworkPolicyError::ProbeUnavailable { reason }) => {
+            notices.push((
+                "network_unverified",
+                format!("NAO foi possivel verificar a rede ({reason}) — prosseguindo com aviso"),
+            ));
+            (true, false)
+        }
+        // TD-029: a sonda EXISTE nesta plataforma e falhou. Não se sabe se há WiFi, e este
+        // caso nunca foi decidido como não-fatal (o ADR-0005 só o decidiu para plataformas
+        // sem sonda). Bloqueia — salvo se o operador AFIRMAR, por execução, que não há WiFi.
+        Err(NetworkPolicyError::ProbeFailed { probe, error }) if assume_no_wifi => {
+            notices.push((
+                "network_assumed_by_operator",
+                format!(
+                    "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao \
+                     ha WiFi ativo — NAO verificado"
+                ),
+            ));
+            (true, true)
+        }
+        Err(NetworkPolicyError::ProbeFailed { probe, error }) => {
+            notices.push((
+                "network_probe_failed",
+                format!(
+                    "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, \
+                     --assume-no-wifi permite ao operador afirma-lo"
+                ),
+            ));
+            (false, false)
+        }
+    };
+    DecisaoRede { network_ok, notices, override_usado }
+}
+
 /// Corre o pré-voo.
 ///
 /// Com `output == None` os dois campos de rede continuam **vacuosos** — e continua a ser
@@ -148,56 +227,18 @@ pub fn preflight(
         };
     }
 
-    let network_ok = match guard.check() {
-        Ok(()) => {
-            notices.push(("network_checked", format!("{}: sem WiFi ativo", guard.name())));
-            if assume_no_wifi {
-                // D2(b): a flag foi dada e a sonda mediu — não houve nada a afirmar.
-                notices.push((
-                    "network_override_unused",
-                    "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".into(),
-                ));
-            }
-            true
-        }
-        Err(NetworkPolicyError::WifiActive { interfaces }) => {
-            notices.push((
-                "network_refused",
-                format!("WiFi ATIVO em {} — ADR-0005 proibe show ao vivo", interfaces.join(", ")),
-            ));
-            false
-        }
-        Err(NetworkPolicyError::ProbeUnavailable { reason }) => {
-            notices.push((
-                "network_unverified",
-                format!("NAO foi possivel verificar a rede ({reason}) — prosseguindo com aviso"),
-            ));
-            true
-        }
-        // TD-029: a sonda EXISTE nesta plataforma e falhou. Não se sabe se há WiFi, e este
-        // caso nunca foi decidido como não-fatal (o ADR-0005 só o decidiu para plataformas
-        // sem sonda). Bloqueia — salvo se o operador AFIRMAR, por execução, que não há WiFi.
-        Err(NetworkPolicyError::ProbeFailed { probe, error }) if assume_no_wifi => {
-            notices.push((
-                "network_assumed_by_operator",
-                format!(
-                    "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao \
-                     ha WiFi ativo — NAO verificado"
-                ),
-            ));
-            true
-        }
-        Err(NetworkPolicyError::ProbeFailed { probe, error }) => {
-            notices.push((
-                "network_probe_failed",
-                format!(
-                    "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, \
-                     --assume-no-wifi permite ao operador afirma-lo"
-                ),
-            ));
-            false
-        }
-    };
+    // TD-029 (R5.2): a guarda só MEDE; toda a política vive em `decidir_rede`, função pura,
+    // e este é o seu ÚNICO ponto de chamada (há um teste estrutural que o conta).
+    let decisao = decidir_rede(&guard.check(), guard.name(), assume_no_wifi);
+    if decisao.override_usado {
+        // D2(a): o aviso VISÍVEL sai em CADA pré-voo que use o override (não 1× por processo).
+        eprintln!(
+            "AVISO: --assume-no-wifi USADO neste pré-voo — a sonda de rede falhou e o operador \
+             AFIRMA que não há WiFi ativo (NAO verificado)."
+        );
+    }
+    notices.extend(decisao.notices);
+    let network_ok = decisao.network_ok;
 
     // ── Controladores (RT-003: palco escuro sem erro) ────────────────────────
     //
@@ -717,4 +758,107 @@ mod tests {
         let r = ArtPollPresence.probe("127.0.0.1".parse().unwrap());
         assert!(matches!(r, Presence::Unavailable(_)), "loopback não é um controlador: {r:?}");
     }
+
+    // ── R5.2: a política inteira numa tabela exaustiva ───────────────────────
+    use led_hal::NetworkPolicyError as E;
+
+    /// Força a exaustividade em COMPILAÇÃO: uma variante nova do `NetworkPolicyError` deixa de
+    /// compilar aqui, e a tabela abaixo tem de ganhar as suas linhas.
+    fn variante(e: &E) -> &'static str {
+        match e {
+            E::WifiActive { .. } => "WifiActive",
+            E::ProbeUnavailable { .. } => "ProbeUnavailable",
+            E::ProbeFailed { .. } => "ProbeFailed",
+        }
+    }
+
+    /// **Tabela exaustiva: todas as variantes do resultado da sonda × flag on/off → decisão.**
+    /// Uma linha por combinação, sem omissões (4 × 2 = 8), com as notices EXATAS por ordem.
+    #[test]
+    fn decidir_rede_tabela_exaustiva() {
+        let ok: Result<(), E> = Ok(());
+        let wifi: Result<(), E> = Err(E::WifiActive { interfaces: vec!["en0".into()] });
+        let nao_suportado: Result<(), E> = Err(E::ProbeUnavailable { reason: "SO X".into() });
+        let falhou: Result<(), E> = Err(E::ProbeFailed { probe: "sonda-x", error: "erro-y".into() });
+        // (resultado, flag, network_ok, override_usado, notices esperadas)
+        type Linha<'a> = (&'a Result<(), E>, bool, bool, bool, Vec<&'static str>);
+        let tabela: Vec<Linha> = vec![
+            (&ok, false, true, false, vec!["network_checked"]),
+            (&ok, true, true, false, vec!["network_checked", "network_override_unused"]),
+            (&wifi, false, false, false, vec!["network_refused"]),
+            (&wifi, true, false, false, vec!["network_refused"]),
+            (&nao_suportado, false, true, false, vec!["network_unverified"]),
+            (&nao_suportado, true, true, false, vec!["network_unverified"]),
+            (&falhou, false, false, false, vec!["network_probe_failed"]),
+            (&falhou, true, true, true, vec!["network_assumed_by_operator"]),
+        ];
+        // Sem omissões: cada (variante, flag) aparece exatamente uma vez.
+        let mut vistas = std::collections::BTreeSet::new();
+        for (r, flag, ..) in &tabela {
+            let v = match r { Ok(()) => "Ok", Err(e) => variante(e) };
+            assert!(vistas.insert((v, *flag)), "linha duplicada: {v} flag={flag}");
+        }
+        assert_eq!(vistas.len(), 8, "4 resultados × 2 flags");
+        for (r, flag, ok_esperado, override_esperado, nomes) in tabela {
+            let d = decidir_rede(r, "guarda-teste", flag);
+            let v = match r { Ok(()) => "Ok", Err(e) => variante(e) };
+            assert_eq!(d.network_ok, ok_esperado, "{v} flag={flag}");
+            assert_eq!(d.override_usado, override_esperado, "{v} flag={flag}");
+            let obtidos: Vec<&str> = d.notices.iter().map(|(k, _)| *k).collect();
+            assert_eq!(obtidos, nomes, "{v} flag={flag}");
+        }
+        // Os detalhes que o operador lê: a causa da falha e a palavra que diz que NÃO verificou.
+        let d = decidir_rede(&falhou, "g", true);
+        assert!(d.notices[0].1.contains("sonda-x") && d.notices[0].1.contains("erro-y"));
+        assert!(d.notices[0].1.contains("NAO verificado"));
+        let d = decidir_rede(&ok, "guarda-teste", false);
+        assert!(d.notices[0].1.contains("guarda-teste"), "network_checked nomeia a guarda");
+    }
+
+    /// **Estrutural: o binário só decide a rede através de `decidir_rede`, num ÚNICO ponto de
+    /// chamada.** Conta, no código de produção do crate (cada ficheiro de `src/` cortado no seu
+    /// `mod tests`), as chamadas a `decidir_rede(`, as sondas `.check()` e os padrões de
+    /// `NetworkPolicyError` — que só podem viver dentro da própria função.
+    #[test]
+    fn so_decidir_rede_decide_a_rede_e_e_chamada_uma_vez() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let (mut chamadas, mut sondas, mut padroes_fora, mut ficheiros) = (0, 0, 0, 0);
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().and_then(|x| x.to_str()) != Some("rs") {
+                continue;
+            }
+            ficheiros += 1;
+            let texto = std::fs::read_to_string(&p).unwrap();
+            let prod = texto.split("mod tests").next().unwrap();
+            let codigo: String = prod
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            chamadas += codigo.matches("decidir_rede(").count();
+            sondas += codigo.matches(".check()").count();
+            // Padrões do enum fora do corpo de `decidir_rede`.
+            let fora = match (codigo.find("pub fn decidir_rede("), codigo.find("DecisaoRede { network_ok, notices, override_usado }")) {
+                (Some(a), Some(b)) => format!("{}{}", &codigo[..a], &codigo[b..]),
+                _ => codigo.clone(),
+            };
+            padroes_fora += fora.matches("NetworkPolicyError::").count();
+        }
+        assert!(ficheiros >= 5, "premissa: leu o src ({ficheiros})");
+        assert_eq!(chamadas, 2, "1 definição + 1 chamada (o preflight) — mais é um segundo decisor");
+        assert_eq!(sondas, 1, "a guarda só é consultada num sítio (o preflight)");
+        assert_eq!(padroes_fora, 0, "NetworkPolicyError só é interpretado dentro de decidir_rede");
+        // D2(a): o aviso em stderr sai em CADA pré-voo que use o override — está guardado pelo
+        // `override_usado` da decisão, logo a seguir à única chamada. (Capturar o stderr real
+        // exigiria fazer a sonda falhar no binário, e hooks de injeção no binário estão proibidos:
+        // a cobertura deste aviso é estrutural, e o `override_usado` está na tabela.)
+        let fonte = include_str!("preflight.rs");
+        let prod = fonte.split("mod tests").next().unwrap();
+        let depois = &prod[prod.find("let decisao = decidir_rede(").expect("a chamada")..];
+        let guarda = depois.find("if decisao.override_usado {").expect("o aviso está guardado pela decisão");
+        assert!(depois[guarda..].trim_start_matches("if decisao.override_usado {").trim_start().contains("eprintln!"),
+                "o ramo do override escreve o aviso em stderr");
+    }
+
 }

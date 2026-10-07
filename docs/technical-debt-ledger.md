@@ -1725,7 +1725,15 @@ progress: |
       do proprio en0 e descartado nesta maquina, sem recetor que sirva de oraculo). A ORDEM das notices face aos
       eventos no journal nao e afirmada (MC8b, ronda 8: o D4 fala de formato, nao de ordem). O `esc()` do journal nao
       escapa `\n`: um erro de sonda com quebra de linha parte o JSONL nos dois caminhos (anterior ao TD-029).
-  (f) Leitura do D2(a) por decidir pelo operador (verifier O1): o aviso em stderr sai UMA vez, no arranque; em cada
-      pre-voo sai a notice JSONL. Se o D2(a) pede um aviso em stderr POR pre-voo, isso nao esta implementado.
+  (f) RESOLVIDO (R5.2, decisao do operador 2026-10-07): D2(a) = aviso em stderr E evento JSONL em CADA pre-voo que use
+      o override. O aviso sai no `preflight`, guardado por `DecisaoRede.override_usado`; cobertura ESTRUTURAL (capturar o
+      stderr real exigiria fazer a sonda falhar no binario, e hooks de injecao no binario estao proibidos).
+  FRONTEIRA (R5.2, aprovada pelo operador): toda a politica D1–D3 vive na funcao pura `preflight::decidir_rede`
+  (resultado da sonda × flag → network_ok, notices, override_usado). Prova: tabela EXAUSTIVA (4 resultados × 2 flags,
+  exaustividade forcada em compilacao) + teste ESTRUTURAL (1 so chamada de `decidir_rede`, 1 so `.check()` no src de
+  producao, `NetworkPolicyError` so interpretado dentro da funcao). Controlo negativo: WiFi+flag aceite, segundo
+  decisor no run.rs e aviso removido → os tres vermelhos. O que fica FORA da fronteira: os wrappers (run,
+  run_with_control, main) so encaminham — o que eles fazem com a decisao e coberto pelos e2e das rondas 1–8, sem
+  garantia de exaustividade (falsificador ronda 9).
 review_by: 2026-10-31
 ```
