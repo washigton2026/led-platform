@@ -61,9 +61,10 @@ ENCERRAMENTO:
 
 PRÉ-VOO:
     COM --output o pré-voo é REAL: WifiBlockGuard (ADR-0005, WiFi proibido ao
-    vivo) e descoberta ArtPoll dos controladores. Uma sonda que não consegue
-    medir deixa prosseguir COM AVISO — e o journal nunca diz `verificado`
-    quando não verificou.
+    vivo) e descoberta ArtPoll dos controladores. Sonda de rede FALHADA numa
+    plataforma suportada BLOQUEIA (TD-029; --assume-no-wifi afirma o contrário,
+    por execução); só numa plataforma NÃO suportada prossegue COM AVISO — e o
+    journal nunca diz `verificado` quando não verificou.
 
 HEARTBEAT:
     Pause/Stop/Finished NÃO apagam o palco: o último frame válido é reenviado

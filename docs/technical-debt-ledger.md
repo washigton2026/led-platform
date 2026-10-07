@@ -1711,7 +1711,9 @@ progress: |
       observam uma janela finita (40 ticks) depois do arranque. O teste da guarda REAL no binario reconhece a
       permissiva pelo NOME e, num runner sem WiFi, envia frames por software para 192.0.2.10 (TEST-NET); a sua
       asserção «sem a flag nao ha override» (MR4/MR5) so discrimina onde a guarda real nao reprova por WiFi (CI sem
-      WiFi, ou com falha injectada) — numa maquina com WiFi activo e cega a esse mutante.
+      WiFi, ou com falha injectada) — numa maquina com WiFi activo e cega a esse mutante. No caminho IPC o fio e
+      medido (status `frames == 0` depois de um load recusado); no modo CLI nao (MCLI4, NOT_MEASURED: UDP para o IP
+      do proprio en0 e descartado nesta maquina, sem recetor que sirva de oraculo).
   (f) Leitura do D2(a) por decidir pelo operador (verifier O1): o aviso em stderr sai UMA vez, no arranque; em cada
       pre-voo sai a notice JSONL. Se o D2(a) pede um aviso em stderr POR pre-voo, isso nao esta implementado.
 review_by: 2026-10-31

@@ -244,7 +244,10 @@ fn sem_override_o_load_ipc_e_recusado_e_a_razao_fica_no_journal() {
     let resp = pedir(&mut s, &mut r, &load(&show, 2));
     // O efeito, não só a resposta: um `play` a seguir também tem de ser recusado (MIPC1).
     let play = pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"play"}"#);
+    // E DEPOIS do play recusado: o laço não arma nem toca em silêncio (MIPC4), nem envia (MIPC5).
+    nada_saiu_pelo_fio(&d);
     let j = d.parar();
+    assert!(!armou_ou_tocou(&j), "depois do load recusado o daemon não pode tocar:\n{j}");
 
     assert!(resp.contains("preflight_failed"), "sonda falhada sem override bloqueia: {resp}");
     assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"),
@@ -293,6 +296,20 @@ fn esperar_ticks(d: &Daemon, n: u64) {
     }
 }
 
+/// Depois de um `load` recusado: deixa o laço correr 40 ticks e afirma, pelo `status`, que NENHUM
+/// quadro saiu (MIPC5: quadros enviados contornando o runtime) — o fio, não só o estado.
+fn nada_saiu_pelo_fio(d: &Daemon) {
+    esperar_ticks(d, 40);
+    let (mut s, mut r) = d.cliente();
+    pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+    let st = pedir(&mut s, &mut r, r#"{"v":1,"id":2,"cmd":"status"}"#);
+    assert!(st.contains(r#""frames":"#), "premissa: o palco está aberto e o status conta quadros: {st}");
+    for parte in st.split(r#""frames":"#).skip(1) {
+        let n: u64 = parte.split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap();
+        assert_eq!(n, 0, "um load recusado não pode pôr quadros no fio: {st}");
+    }
+}
+
 fn armou_ou_tocou(j: &str) -> bool {
     let fim = j.lines().rev().find(|l| l.contains(r#""notice":"state""#)).expect("linha final de estado");
     !fim.contains(r#""state":"loaded""#)
@@ -331,7 +348,9 @@ fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
     let resp = pedir(&mut s, &mut r, &load(&show, 2));
     let play = pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"play"}"#);
+    nada_saiu_pelo_fio(&d);
     let j = d.parar();
+    assert!(!armou_ou_tocou(&j), "WiFi + flag: depois do load recusado o daemon não pode tocar:\n{j}");
     assert!(resp.contains("preflight_failed"), "WiFi ativo + flag: o load tem de ser recusado: {resp}\n{j}");
     assert!(play.contains(r#""ok":false"#) && play.contains("not_armed"), "WiFi + flag: o play não toca: {play}");
     assert_eq!(contar(&j, "network_refused"), 1, "{j}");
@@ -394,6 +413,21 @@ fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
     for linha in j.lines().filter(|l| l.contains(r#","event":""#)) {
         let tipo = linha.split(r#","event":""#).nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
         assert!(EVENTOS.contains(&tipo), "tipo de evento novo no journal (MC6e): {linha}");
+        // Chaves EXATAS do event_to_json, por tipo (MC6f: um campo novo nos eventos passava).
+        let extra: &[&str] = match tipo {
+            "transitioned" => &["from", "to"],
+            "show_loaded" | "show_unloaded" => &["show_id"],
+            "position_changed" => &["ms", "cause"],
+            "faulted" => &["code"],
+            _ => &[],
+        };
+        let mut esperadas: Vec<&str> = vec!["t_ms", "event"];
+        esperadas.extend_from_slice(extra);
+        let chaves: Vec<&str> = linha
+            .match_indices("\":")
+            .filter_map(|(i, _)| linha[..i].rsplit('"').next())
+            .collect();
+        assert_eq!(chaves, esperadas, "chaves do evento {tipo} diferentes do event_to_json: {linha}");
     }
     for linha in j.lines().filter(|l| l.contains(r#""notice":"#) && !l.contains(r#""notice":"state""#)) {
         let nome = notice_exata(linha).unwrap_or_else(|| panic!("formato diferente do notice_to_json: {linha}"));
@@ -527,6 +561,10 @@ fn o_binario_avisa_em_stderr_so_com_a_flag() {
     // Também com saída — o caso de produção (MH5: avisar só sem --output passava).
     let com_saida = correr(&["--assume-no-wifi", "--output", ALVO, "--profile", PRESET]);
     assert!(com_saida.contains("AVISO: --assume-no-wifi"), "com --output também avisa: {com_saida}");
+    // E no modo --socket (MH6).
+    let sock = std::env::temp_dir().join(format!("lumyx-td029-aviso-{}.sock", std::process::id()));
+    let com_socket = correr(&["--assume-no-wifi", "--socket", sock.to_str().unwrap()]);
+    assert!(com_socket.contains("AVISO: --assume-no-wifi"), "com --socket também avisa: {com_socket}");
     // No ARRANQUE (MH3): num processo que fica a correr, o aviso chega antes de o mandarmos parar.
     {
         use std::io::Read;
@@ -604,7 +642,15 @@ fn flag_com_sonda_ok_deixa_o_aviso_sem_efeito_no_journal_nos_dois_caminhos() {
     let (mut s, mut r) = d.cliente();
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
     let resp = pedir(&mut s, &mut r, &load(&show, 2));
-    let j = d.parar();
     assert!(resp.contains(r#""ok":true"#), "{resp}");
-    assert_eq!(contar(&j, "network_override_unused"), 1, "load IPC:\n{j}");
+    pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"unload"}"#);
+    let resp = pedir(&mut s, &mut r, &load(&show, 4));
+    assert!(resp.contains(r#""ok":true"#), "{resp}");
+    let j = d.parar();
+    assert_eq!(contar(&j, "network_override_unused"), 2, "um por load IPC (MC8c):\n{j}");
+    // O terceiro caminho: o arranque do modo --socket (MC8b).
+    let show = escrever("td029-arranque-ok.lumyx");
+    let d = Daemon::subir_com("arranque-ok", cfg(true, true), Some(show), &OK);
+    let j = d.parar();
+    assert_eq!(contar(&j, "network_override_unused"), 1, "arranque com --socket:\n{j}");
 }
