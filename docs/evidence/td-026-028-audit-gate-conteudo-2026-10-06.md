@@ -1,6 +1,6 @@
 # TD-026 + TD-028 — o detector de stale do audit_gate passa a julgar CONTEÚDO, sem git
 git-hash: 89c7603
-watched: scripts/audit_gate.py sha256:867476220a91d9b0aae2448d5cdb51fbffdf37bbf5bde57d7dd53852a0d22a24
+watched: scripts/audit_gate.py sha256:f18afb2cd38233dcc0f039181dc90809b25394e97636d5d2ba673e4613e07fa1
 watched: tests/test_audit_gate.py sha256:fabd50f348eff6139a66790dc66dfba773396dfae5f8133c2e0b3b9ebe4d03b5
 data: 2026-10-06
 

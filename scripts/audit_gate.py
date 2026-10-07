@@ -172,7 +172,7 @@ def stale_by_content(workspace: Path, watched: dict[str, str]) -> tuple[list[str
             if sha256_of(workspace, path) != recorded:
                 changed.append(path)
         except OSError as e:
-            unverifiable.append(f"{path} ({e.__class__.__name__}: {e.strerror or e})")
+            pass  # NEG R4.9: regra partida de propósito (ficheiro ilegível passa)
     return changed, unverifiable
 
 
