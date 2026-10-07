@@ -174,14 +174,18 @@ prevented_by: |
     Depois: mesma barra para ambos.
 
 detector:     |
-  audit_gate.py verifica automaticamente:
-  1. Todo TD com status=closed tem campo evidence_ref: (path para artefato real)
-     e negative_control: (string não-vazia descrevendo o run que reprovaria).
-  2. evidence_ref aponta para arquivo existente que contém "result: ok" ou "passed"
-     com N > 0 testes.
-  3. TD sem evidence_ref ou negative_control → rebaixado automaticamente para
-     status: pending-verification com flag unsubstantiated: true.
-  4. TD com status: pending-verification bloqueia merge (Critical no gate).
+  audit_gate.py verifica automaticamente (regras completas: docstring de scripts/audit_gate.py,
+  que é a fonte — esta lista resume-a em 2026-10-07):
+  1. Todo TD com status=closed tem evidence_ref (ficheiro existente) e negative_control
+     (não-vazio). Falta de qualquer um → Critical (não há rebaixamento automático).
+  2. A evidência tem `N passed; 0 failed` com N > 0; «0 passed» é rejeitado.
+  3. Cada source_file está fixado por `watched: <path> sha256:<hex>`; conteúdo diferente →
+     stale (Critical); vigiado ilegível/inexistente → Critical. Sem git.
+  4. Com required_test: uma região de prova com a linha estruturada do teste que passou,
+     nenhum FAILED dele e um resumo N>0.
+  5. pending-verification é estado válido dentro do review_by; Critical depois.
+  O gate NÃO verifica `fixed_in` nem «detector silencioso» (a regra de fechamento acima é
+  mais exigente do que o gate — o resto é revisão humana).
 
 negative_control: |
   Um gate que fecha TD-006 com assert!(>= 183) deveria ser reprovado pelo

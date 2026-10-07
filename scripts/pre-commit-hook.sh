@@ -11,9 +11,12 @@
 # Porquê (2026-09-26, dois defeitos medidos):
 #   D1 — o gate lia o ledger e a evidência do WORKTREE. Um índice com 19 TD e um worktree
 #        com 20 dava «20 OK»: validava um estado que não ia ser commitado.
-#   D2 — o detector de evidência stale corre `git log <hash>..HEAD`, e o HEAD ainda NÃO
-#        contém as alterações em stage. O commit que torna uma evidência stale passava
-#        sempre (foi assim que o C4, 320ff94, deixou o TD-020 stale na main).
+#   D2 — o detector de evidência stale corria `git log <hash>..HEAD`, e o HEAD ainda NÃO
+#        continha as alterações em stage. O commit que tornava uma evidência stale passava
+#        sempre (foi assim que o C4, 320ff94, deixou o TD-020 stale na main). Desde o R4.1
+#        (TD-026/028) o stale compara o CONTEÚDO do worktree do candidato com os `watched:`;
+#        o candidato ser filho do HEAD já não é o que torna o stale visível — o D1 (julgar o
+#        índice e não o worktree) é que continua a exigir o worktree temporário.
 #
 # Correcção: o índice vira um commit candidato (`write-tree` + `commit-tree`, filho do HEAD),
 # que é materializado num worktree temporário; o gate corre lá, com HEAD = candidato. O
