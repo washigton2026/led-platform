@@ -1702,7 +1702,8 @@ progress: |
       de I/O. macOS: `networksetup` com exit 0 mas sem bloco Wi-Fi reconhecivel conta como «sem WiFi». Mesma classe do
       ponto (1): fail-open dentro da sonda.
   (e) Limites dos testes (falsificador ronda 2): remover um #[test] so e apanhado pela contagem N (o cargo da exit 0);
-      o teste de ambiente procura padroes textuais em src/ (um meio de leitura do ambiente que nao use `std::env`/
-      `var(` escapa-lhe).
+      o teste de ambiente procura padroes textuais so no src/ do led-daemon-bin (um meio que nao use `std::env`/`var(`,
+      ou uma leitura do ambiente noutro crate que alimente `Config`, escapa-lhe — MB1d, ronda 3); os oraculos temporais
+      observam uma janela finita (40 ticks) depois do arranque.
 review_by: 2026-10-31
 ```

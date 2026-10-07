@@ -231,9 +231,12 @@ fn sem_override_o_load_ipc_e_recusado_e_a_razao_fica_no_journal() {
     let (mut s, mut r) = d.cliente();
     pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
     let resp = pedir(&mut s, &mut r, &load(&show, 2));
+    // O efeito, não só a resposta: um `play` a seguir também tem de ser recusado (MIPC1).
+    let play = pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"play"}"#);
     let j = d.parar();
 
     assert!(resp.contains("preflight_failed"), "sonda falhada sem override bloqueia: {resp}");
+    assert!(play.contains(r#""ok":false"#), "depois do load recusado, o play não pode tocar: {play}");
     assert_eq!(contar(&j, "network_probe_failed"), 1, "a razão tem de ficar no journal:\n{j}");
     assert_eq!(contar(&j, "network_assumed_by_operator"), 0);
 }
@@ -290,7 +293,7 @@ fn armou_ou_tocou(j: &str) -> bool {
 fn arranque_sem_override_com_sonda_falhada_nao_toca() {
     let show = escrever("td029-arranque-sem.lumyx");
     let d = Daemon::subir("arranque-sem", cfg(false, true), Some(show));
-    esperar_ticks(&d, 3);
+    esperar_ticks(&d, 40);
     let j = d.parar();
     assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
     assert!(!armou_ou_tocou(&j), "sem a flag o arranque não arma nem toca:\n{j}");
@@ -304,7 +307,7 @@ fn arranque_sem_override_com_sonda_falhada_nao_toca() {
 fn wifi_ativo_com_flag_bloqueia_no_arranque_e_no_ipc() {
     let show = escrever("td029-wifi.lumyx");
     let d = Daemon::subir_com("wifi-arranque", cfg(true, true), Some(show.clone()), &WIFI);
-    esperar_ticks(&d, 3);
+    esperar_ticks(&d, 40);
     let j = d.parar();
     assert!(j.contains(r#""to":"loaded""#), "premissa: o show carregou:\n{j}");
     assert!(!armou_ou_tocou(&j), "WiFi ativo + flag: o arranque não pode armar nem tocar:\n{j}");
@@ -366,6 +369,12 @@ fn o_load_ipc_escreve_todas_as_notices_do_pre_voo_no_formato_exato() {
         "network_probe_failed", "network_assumed_by_operator", "network_override_unused",
         "devices_checked", "devices_missing", "devices_unverified", "preflight_vacuous",
     ];
+    for linha in j.lines() {
+        assert!(
+            linha.starts_with(r#"{"t_ms":"#) && (linha.contains(r#","notice":""#) || linha.contains(r#","event":""#)),
+            "linha do JSONL que não é notice nem event (D4, MC6): {linha}"
+        );
+    }
     for linha in j.lines().filter(|l| l.contains(r#""notice":"#) && !l.contains(r#""notice":"state""#)) {
         let nome = notice_exata(linha).unwrap_or_else(|| panic!("formato diferente do notice_to_json: {linha}"));
         assert!(CONHECIDAS.contains(&nome), "tipo de notice novo no journal: {linha}");
@@ -432,11 +441,19 @@ fn correr_cli(nome: &str, assume_no_wifi: bool, guarda: &dyn NetworkGuard) -> St
     buf.texto()
 }
 
+/// O EFEITO no modo CLI, não só a linha `arm_refused` (MCLI1): nenhuma transição para ready ou
+/// playing, e o processo termina como `NeverStarted`.
+fn nao_armou_cli(j: &str) {
+    assert!(!j.contains(r#""to":"ready""#) && !j.contains(r#""to":"playing""#), "armou ou tocou:\n{j}");
+    assert!(j.contains("NeverStarted"), "o modo CLI bloqueado termina como NeverStarted:\n{j}");
+}
+
 #[test]
 fn modo_cli_sem_override_com_sonda_falhada_nao_arma() {
     let j = correr_cli("td029-cli-sem.lumyx", false, &FALHADA);
     assert_eq!(contar(&j, "network_probe_failed"), 1, "{j}");
     assert_eq!(contar(&j, "arm_refused"), 1, "sem a flag o modo CLI não arma:\n{j}");
+    nao_armou_cli(&j);
     assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "{j}");
     // Controlo positivo do mesmo oráculo: com a flag, arma e corre os 3 ticks.
     let j = correr_cli("td029-cli-com.lumyx", true, &FALHADA);
@@ -450,6 +467,7 @@ fn modo_cli_wifi_ativo_com_flag_nao_arma() {
     let j = correr_cli("td029-cli-wifi.lumyx", true, &WIFI);
     assert_eq!(contar(&j, "network_refused"), 1, "{j}");
     assert_eq!(contar(&j, "arm_refused"), 1, "WiFi ativo + flag: o modo CLI não pode armar:\n{j}");
+    nao_armou_cli(&j);
 }
 
 /// **O aviso em stderr (accept item 4), no binário real** — e só com a flag (MH2).
@@ -468,6 +486,63 @@ fn o_binario_avisa_em_stderr_so_com_a_flag() {
     };
     let com = correr(&["--assume-no-wifi"]);
     assert!(com.contains("AVISO: --assume-no-wifi"), "a flag tem de avisar em stderr: {com}");
+    // No ARRANQUE (MH3): num processo que fica a correr, o aviso chega antes de o mandarmos parar.
+    {
+        use std::io::Read;
+        let mut filho = std::process::Command::new(env!("CARGO_BIN_EXE_led-daemon"))
+            .args([show.as_str(), "--assume-no-wifi", "--assume-integrity", "--keep-running", "--tick-ms", "25"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("led-daemon");
+        let mut err = filho.stderr.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut b = [0u8; 256];
+            let mut acc = String::new();
+            while let Ok(n) = err.read(&mut b) {
+                if n == 0 { break; }
+                acc.push_str(&String::from_utf8_lossy(&b[..n]));
+                if acc.contains("AVISO: --assume-no-wifi") { let _ = tx.send(()); break; }
+            }
+        });
+        let a_tempo = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        // Premissa: o processo ainda está vivo (senão «antes do fim» não prova nada).
+        let vivo = filho.try_wait().expect("try_wait").is_none();
+        writeln!(filho.stdin.as_mut().unwrap(), "shutdown").ok();
+        let _ = filho.wait();
+        assert!(vivo, "premissa: com --keep-running o daemon tem de continuar vivo");
+        assert!(a_tempo, "o aviso tem de sair no arranque, com o processo ainda a correr");
+    }
     let sem = correr(&[]);
     assert!(!sem.contains("--assume-no-wifi"), "sem a flag não há aviso: {sem}");
+}
+
+/// **A guarda REAL é a que o binário usa com `--output`, nos dois modos** (MR1/MR2: passar a
+/// permissiva ao `run_com`, ou escolhê-la sempre no `guarda_para`, deixava a suite verde — todos os
+/// outros testes com saída injetam a guarda ou usam loopback). Portável: não importa o que a guarda
+/// real decide nesta máquina (WiFi ativo, inativo ou sonda falhada), importa que NÃO é a permissiva.
+#[test]
+fn o_binario_com_saida_consulta_a_guarda_real_nos_dois_modos() {
+    let show = escrever("td029-guarda-real.lumyx");
+    let sock = std::env::temp_dir().join(format!("lumyx-td029-gr-{}.sock", std::process::id()));
+    let sock = sock.to_str().unwrap().to_string();
+    for extra in [vec![], vec!["--socket", sock.as_str()]] {
+        let mut args = vec![show.as_str(), "--output", ALVO, "--profile", PRESET, "--assume-integrity",
+                            "--max-ticks", "2", "--tick-ms", "25"];
+        args.extend(extra.iter().copied());
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_led-daemon"))
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("led-daemon");
+        let j = String::from_utf8_lossy(&o.stdout);
+        let rede = ["network_checked", "network_refused", "network_probe_failed", "network_unverified"]
+            .iter()
+            .map(|n| contar(&j, n))
+            .sum::<usize>();
+        assert_eq!(rede, 1, "premissa: o pré-voo de rede correu uma vez ({extra:?}):\n{j}");
+        assert!(!j.contains("PermissiveGuard"), "com --output a guarda tem de ser a real ({extra:?}):\n{j}");
+    }
 }

@@ -291,11 +291,14 @@ mod tests {
         let todas = [
             "--assume-integrity", "--no-autoplay", "--keep-running", "--tick-ms", "20", "--max-ticks", "1",
             "--log", "/tmp/x.jsonl", "--output", "192.0.2.10", "--profile", "esp32-poe-wled-ddp",
+            "--socket", "/tmp/x.sock",
         ];
         let mut v = vec!["s.lumyx"];
         v.extend_from_slice(&todas);
         let a = args(&v).unwrap();
         assert!(!a.cfg.assume_no_wifi, "só --assume-no-wifi liga o override");
+        // E o operador consegue descobri-la (MH4): o --help documenta-a.
+        assert!(USAGE.contains("--assume-no-wifi"), "a flag tem de estar no --help");
     }
 
     #[test]
