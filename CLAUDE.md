@@ -19,7 +19,7 @@ entry to the `## Session changelog` below at the end of every session).
 ## Build & test
 
 ```sh
-cargo test --workspace                  # all suites (1135 tests)
+cargo test --workspace                  # all suites (1151 macOS · 1147 Linux · 106 binários — medido em 42ebb90 (2026-10-08), CI run 37735192636)
 cargo build --workspace --all-targets   # must be warning-free
 cargo +nightly miri test -p led-triple   # lock-free unsafe under Miri (5 constructs; led-pixel-engine/src has 0)
 ~/lumyx-e2e.sh                          # full cross-platform E2E validation
@@ -97,15 +97,15 @@ pipeline: SineGen → Analyzer → adapt → AudioShare → BandPulse/BeatFlash 
 ## Status (keep current)
 
 ```
-cargo test --workspace                  # all suites (1135 tests)
+cargo test --workspace                  # all suites (1151 macOS · 1147 Linux · 106 binários — medido em 42ebb90 (2026-10-08), CI run 37735192636)
 ```
 
-17 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1135 tests green** · zero warnings.
+17 lib crates + `led-demo` binary + `led-bridge` integration crate + `led-show-recorder` · **1151 tests green no macOS, 1147 no Linux** (0 failed · 9 ignored · 106 binários; a diferença de 4 são testes macOS-only do `network_guard`) — medido em 42ebb90 (2026-10-08), CI run 37735192636, jobs 113173034279 e 113173034518, lido no log · zero warnings.
 (20 workspace members; the 17 is that total minus the three named separately.)
 
 Miri clean (contagens = **testes**, não construções `unsafe`): `audio-core/ring_buffer` (5 testes), **`led-triple`** (7 testes, 0 UB — o crate que hoje detém o `unsafe` do triple buffer; 24 scheduler seeds numa sessão anterior), `led-bridge/adapter` (6 testes, 1M iter — **histórico**: o `led-bridge` já não tem `unsafe` em `src/`).
 Miri **corre na CI**: job `miri (led-triple)`, ubuntu-latest, `nightly-2026-06-02` pinado, **bloqueante** (promovido depois de observado a passar). Cobre as **5 construções `unsafe`** do `led-triple` (3 `unsafe impl` + 2 blocos `unsafe {}`). O step **exige `N > 0`** testes executados — `test result: ok` sozinho é satisfeito por `0 passed; N filtered out`, e sem essa exigência um filtro errado daria verde sem correr nada (KB-012). Execução observada **já com o job bloqueante** (run 35536724237, `2e603c9`): **7 passed · 0 failed · 0 ignored · 0 UB**, 203,77 s, com `miri: 7 testes executados, exit 0` no log. **O que NÃO está coberto** (medido em 2026-09-20 com `rg -n 'unsafe (impl|fn)|unsafe \{' crates/`, triado `src/` vs `tests/`): em produção havia **12 construções `unsafe`** no workspace e **há agora 8** — `led-triple` **5**, `audio-core` **3** (`ring_buffer.rs:24,55,75`). O `led-hal` tinha **4** (`metrics.rs:183,184` + `shared_clock.rs:117,118`, todas `unsafe impl Send/Sync`) e passou a **0**: eram redundantes (os campos já são `Send + Sync`, o compilador deriva-os) e tapavam o `assert_send_sync` dos próprios ficheiros. O mesmo `rg` ainda devolve 12 linhas, porque apanha 4 comentários do `led-hal` que citam o `unsafe impl` — a contagem de construções é 8. Destas, **só as 5 do `led-triple` têm gate de CI**. O `audio-core` corre apenas no `~/lumyx-e2e.sh --miri`, que é opt-in e **não versionado**. O `led-hal` deixou de ter `unsafe` próprio, logo não precisa de Miri por essa razão. `led-bridge` e `led-pixel-engine` **não têm `unsafe` em `src/`** (as suas construções vivem em `tests/no_alloc.rs` e são o alocador contador `GlobalAlloc`).
-Governance: `scripts/audit_gate.py` (KB-012) — medido na `main` 24d5b91 (2026-10-07): **27 TD entries · 16 OK** (15 closed + TD-014 `pending-verification`) · 9 open · 2 wontfix, exit 0. `tests/test_audit_gate.py` **34/34**. Regras do gate: docstring de `scripts/audit_gate.py` (desde o R4.1, `watched:` por conteúdo + região de prova). `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) correm só quando o e2e é corrido à mão — **a CI não corre o e2e**.
+Governance: `scripts/audit_gate.py` (KB-012) — medido em 42ebb90 (2026-10-08), debt gate da CI run 37735192636 lido no log: **28 TD entries · 17 OK** (16 closed + TD-014 `pending-verification`) · 9 open · 2 wontfix, exit 0. `tests/test_audit_gate.py` **34/34** e `tests/test_pre_commit_hook.sh` **4/4** — medido em 42ebb90 (2026-10-08), job `gate suite` (#27). Regras do gate: docstring de `scripts/audit_gate.py` (desde o R4.1, `watched:` por conteúdo + região de prova). `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) correm só quando o e2e é corrido à mão — **a CI não corre o e2e**.
 
 | Crate | Status |
 |---|---|
