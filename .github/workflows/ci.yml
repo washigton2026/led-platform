@@ -13,6 +13,11 @@
 # - Imagem Linux FIXADA em `ubuntu-24.04`: o `ubuntu-latest` migra para 26.04 entre 2026-10-19
 #   e 2026-11-19 (changelog GitHub 2026-09-17). Mudar de SO tem de ser uma decisão com a CI lida,
 #   não um efeito colateral — ver TD-DRAFT da migração para Ubuntu 26.
+# - Imagem macOS FIXADA em `macos-26` (arm64), pela mesma lógica. Fonte oficial
+#   (github.com/actions/runner-images README, 2026-10-07): `macos-latest` = «macOS 26 Arm64»,
+#   etiquetas `macos-latest`, `macos-26` ou `macos-26-xlarge`. Medido no log da main 24d5b91
+#   (run 37576929449): `Image: macos-26-arm64`, Version 20260907.0351.1. Hoje é a MESMA imagem;
+#   fixar só impede que a próxima migração do `-latest` mude o SO sem decisão.
 # - `actions/checkout@v7`: corre em Node 24 (a v4 corria em Node 20).
 name: CI
 
@@ -32,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-24.04, macos-26]
     steps:
       - uses: actions/checkout@v7
       - name: Rust stable + clippy
