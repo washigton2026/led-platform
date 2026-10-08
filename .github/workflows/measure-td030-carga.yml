@@ -36,10 +36,17 @@ jobs:
       - name: Ciclo N=500 com a suite do workspace em paralelo
         shell: bash {0}
         run: |
-          ( while true; do cargo test --workspace --locked -q > /dev/null 2>&1; done ) &
+          # Carga EVIDENCIADA: cada volta completa da suite fica contada em carga.voltas, e cada
+          # iteração do ciclo amostra quantos binários de teste DA CARGA estão vivos nesse instante.
+          # Sem isto, «com carga» era uma afirmação sem prova (a 1.ª medição durou 9 s).
+          echo 0 > carga.voltas
+          ( while true; do cargo test --workspace --locked -q > /dev/null 2>&1; echo $(( $(cat carga.voltas) + 1 )) > carga.voltas; done ) &
           CARGA=$!
-          falhas=0; vacuas=0
+          for _ in $(seq 1 120); do [ "$(pgrep -f 'target/debug/deps/' | wc -l)" -gt 0 ] && break; sleep 1; done
+          falhas=0; vacuas=0; sob_carga=0
           for i in $(seq 1 "$N"); do
+            vivos=$(pgrep -f 'target/debug/deps/' | wc -l)
+            [ "$vivos" -gt 0 ] && sob_carga=$((sob_carga+1))
             "$BIN" --exact "$TESTE" > it.txt 2>&1
             code=$?
             n=$(sed -nE 's/^test result: [a-zA-Z]+\. ([0-9]+) passed; ([0-9]+) failed.*/\1+\2/p' it.txt | head -1)
@@ -50,6 +57,8 @@ jobs:
               grep -aE 'coherence violated|panicked' it.txt | head -3
             fi
           done
+          kill -0 $CARGA 2>/dev/null && carga_viva=sim || carga_viva=nao
           kill $CARGA 2>/dev/null; pkill -f 'cargo test' 2>/dev/null
-          echo "RESULTADO td030-carga os=${{ matrix.os }} arch=$(uname -m) N=$N falhas=$falhas vacuas=$vacuas"
+          echo "RESULTADO td030-carga os=${{ matrix.os }} arch=$(uname -m) N=$N falhas=$falhas vacuas=$vacuas sob_carga=$sob_carga voltas_da_suite=$(cat carga.voltas) carga_viva_no_fim=$carga_viva"
+          [ "$carga_viva" = sim ] || { echo "premissa falhou: a carga morreu"; exit 1; }
           [ "$vacuas" -eq 0 ] || { echo "premissa falhou"; exit 1; }
