@@ -443,35 +443,62 @@ mod adversarial_tests {
         let violations = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
         // Writer: publishes 10_000 frames alternating beat/no-beat with matched timestamps.
+        // TD-030 (R6.2): `publicado` = índice do último publish CONCLUÍDO, para o diagnóstico.
+        let publicado = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
         let ws = share.clone();
+        let wp = publicado.clone();
         let writer = thread::spawn(move || {
             for i in 0u64..10_000 {
                 let beat = i % 2 == 1;
                 ws.publish(&af(beat, i, 0.0, 0.0));
+                wp.store(i, Ordering::SeqCst);
             }
         });
 
         // Reader: reads in a tight loop, checks coherence of every snapshot.
+        // Diagnóstico (TD-030, R6.2): a PRIMEIRA snapshot incoerente fica registada — beat,
+        // timestamp_ms, o índice publicado nesse instante e a iteração do reader.
         let rs = share.clone();
         let st = stop.clone();
         let viol = violations.clone();
+        let rp = publicado.clone();
         let reader = thread::spawn(move || {
+            let mut iteracao: u64 = 0;
+            let mut primeira: Option<(bool, u64, u64, u64)> = None;
             while !st.load(Ordering::Relaxed) {
+                iteracao += 1;
                 let sc = rs.scalars();
                 // Coherence invariant: beat ↔ odd timestamp.
                 let expected_beat = sc.timestamp_ms % 2 == 1;
                 if sc.timestamp_ms > 0 && sc.beat != expected_beat {
                     viol.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if primeira.is_none() {
+                        primeira = Some((sc.beat, sc.timestamp_ms, rp.load(Ordering::SeqCst), iteracao));
+                    }
                 }
             }
+            (primeira, iteracao)
         });
 
         writer.join().unwrap();
         stop.store(true, Ordering::Relaxed);
-        reader.join().unwrap();
+        let (primeira, iteracoes) = reader.join().unwrap();
 
         let v = violations.load(Ordering::Relaxed);
-        assert_eq!(v, 0, "coherence violated {v} times: beat/timestamp_ms from different publishes");
+        assert_eq!(
+            v,
+            0,
+            "coherence violated {v} times: beat/timestamp_ms from different publishes — primeira: {} \
+             (reader leu {iteracoes} snapshots)",
+            match primeira {
+                Some((beat, ts, publ, it)) => format!(
+                    "beat={beat} timestamp_ms={ts} (esperado beat={}) · ultimo publish concluido={} · iteracao do reader={it}",
+                    ts % 2 == 1,
+                    if publ == u64::MAX { "nenhum".to_string() } else { publ.to_string() }
+                ),
+                None => "nao registada".into(),
+            }
+        );
     }
 
     // ── REAL-TIME: BeatFlash render must complete in < 1ms (50ms tick budget) ─
