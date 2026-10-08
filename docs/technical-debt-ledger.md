@@ -1277,7 +1277,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-09-26
 closed_by: "3c60ab8 (correcao do lado do teste) + sonda Linux run 36245228354: o writeln! interrompido devolve BrokenPipe (errno 32) em Linux, 3/3 — o mesmo que em macOS. Conjunto aceite NAO alargado."
-evidence_ref: docs/evidence/td-022-reverificacao-2026-10-07.md
+evidence_ref: docs/evidence/td-022-reverificacao-2026-10-08.md
 required_test: o_daemon_recusa_a_linha_longa_por_si_proprio
 source_files: crates/led-console-bin/tests/ipc_contra_o_daemon.rs
 negative_control: |
@@ -1796,6 +1796,21 @@ progress: |
   - NV8 (e N7 na mesma classe): escrever `network_ok` num `PreflightReport` antes do `Arm` — ACEITE pelo operador
     (ADR-0023 congelado; N7 apanhado por `cada_load_decide_com_o_resultado_da_sua_propria_sonda`);
   - MF9 (wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9) — fora da fronteira, como nas rondas 9/10.
+  R8.5 (reforco aprovado pelo operador, ramo fix/td-029-reforco a partir da main 93cfc26):
+  - NV1/NV3: «sem fio a proteger» e uma ENTRADA do decisor (`Fio::{SemSaida, SoLoopback, Rede}`); o
+    `Preflight` tem UM construtor (`novo`), que exige uma `DecisaoRede` — `sem_fio_a_proteger` deixou de existir;
+  - NV10: o override e um TOKEN (`AssumeNoWifi`, sem campos publicos) cujo unico construtor
+    (`da_linha_de_comando`) e chamado so pelo parser da CLI; `Config.assume_no_wifi: Option<AssumeNoWifi>`;
+    `decidir_rede` e `preflight` recebem `Option<&AssumeNoWifi>`;
+  - NV2: `medicao::medir` consulta a guarda e devolve a entrada do decisor + um `Detalhe` OPACO (campos privados);
+    o `preflight()` ja nao ve o texto do erro (o `NetworkPolicyError` deixou de ser importado no modulo);
+  - NV4: as CHAVES do journal sao funcao so do `Veredito` (`Veredito::chaves`); o `Detalhe` so escreve o texto;
+  - NV7: o aviso D2(a) verificado COMPLETO no stderr do filho com o rig de 5 alvos;
+  - NV8: NAO alterado (ADR-0023); teste estrutural — um so literal `PreflightReport {..}` no crate (em
+    `Preflight::novo`), zero `all_clear`, zero escritas em `.network_ok`.
+  Fixtures = o rig real: 5 alvos de rede, discovery ligado/desligado, presenca toda/um calado/um nao sondavel,
+  13 payloads reais × 3 nomes de guarda × override → journal verificado linha a linha em 468 pre-voos; e2e com
+  5 alvos (6200 px) nos caminhos CLI e IPC. Tabela exaustiva 3×4×2×2 = 48.
 review_by: 2026-10-31
 ```
 

@@ -125,7 +125,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--profile" => cfg.profile = Some(valor("--profile")?),
             "--socket" => socket = Some(valor("--socket")?),
             "--assume-integrity" => cfg.integrity = Integrity::AssumedByOperator,
-            "--assume-no-wifi" => cfg.assume_no_wifi = true,
+            "--assume-no-wifi" => {
+                cfg.assume_no_wifi = led_daemon_bin::preflight::AssumeNoWifi::da_linha_de_comando(&[a])
+            }
             "--no-autoplay" => cfg.autoplay = false,
             "--keep-running" => cfg.exit_on_finish = false,
             outro if outro.starts_with('-') => return Err(format!("opção desconhecida: {outro}")),
@@ -215,7 +217,7 @@ fn main() {
         journal = Journal::new(stdout.lock()).with_file(path).expect("verificado acima");
     }
 
-    if args.cfg.assume_no_wifi {
+    if args.cfg.assume_no_wifi.is_some() {
         // Aviso VISÍVEL no arranque (D2). O registo no journal é por pré-voo, no `preflight`.
         eprintln!(
             "AVISO: --assume-no-wifi — o operador AFIRMA que não há WiFi ativo. Só tem efeito se \
@@ -279,15 +281,15 @@ mod tests {
         assert_eq!(a.cfg.tick_ms, 20);
         assert_eq!(a.cfg.integrity, Integrity::NotVerified, "integridade NÃO é o padrão");
         assert!(a.cfg.output.is_empty(), "sem --output o daemon continua sem saída");
-        assert!(!a.cfg.assume_no_wifi, "TD-029: o override NUNCA é por omissão");
+        assert!(a.cfg.assume_no_wifi.is_none(), "TD-029: o override NUNCA é por omissão");
     }
 
     /// TD-029 (D2): a flag existe, é só da CLI, e liga o campo — nada mais o liga.
     #[test]
     fn assume_no_wifi_so_pela_flag_explicita() {
         let a = args(&["s.lumyx", "--assume-no-wifi"]).unwrap();
-        assert!(a.cfg.assume_no_wifi);
-        assert!(!led_daemon_bin::run::Config::default().assume_no_wifi, "nunca por omissão");
+        assert!(a.cfg.assume_no_wifi.is_some());
+        assert!(led_daemon_bin::run::Config::default().assume_no_wifi.is_none(), "nunca por omissão");
         // Nenhuma outra flag o liga (falsificador ronda 2, MH1: `--assume-integrity` ligava-o).
         let todas = [
             "--assume-integrity", "--no-autoplay", "--keep-running", "--tick-ms", "20", "--max-ticks", "1",
@@ -297,12 +299,12 @@ mod tests {
         let mut v = vec!["s.lumyx"];
         v.extend_from_slice(&todas);
         let a = args(&v).unwrap();
-        assert!(!a.cfg.assume_no_wifi, "só --assume-no-wifi liga o override");
+        assert!(a.cfg.assume_no_wifi.is_none(), "só --assume-no-wifi liga o override");
         // Nem a AUSÊNCIA de show (o modo do ledctl: só --socket) o liga (MF8).
         for v in [vec!["--socket", "/tmp/x.sock"], vec!["--socket", "/tmp/x.sock", "--output", "192.0.2.10", "--profile", "esp32-poe-wled-ddp"]] {
             let a = args(&v).unwrap();
             assert!(a.show.is_none(), "premissa: sem show");
-            assert!(!a.cfg.assume_no_wifi, "sem show e sem a flag não há override: {v:?}");
+            assert!(a.cfg.assume_no_wifi.is_none(), "sem show e sem a flag não há override: {v:?}");
         }
         // E o operador consegue descobri-la (MH4): o --help documenta-a.
         assert!(USAGE.contains("--assume-no-wifi"), "a flag tem de estar no --help");
