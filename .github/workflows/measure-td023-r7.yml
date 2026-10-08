@@ -1,0 +1,102 @@
+# [MEDIÇÃO] TD-023 R7.2 — NÃO MERGEAR. Ramo descartável measure/td-023-r7 (sobre a98ff98, PR #42).
+#
+# Corre os 5 binários tests/no_alloc (audio-core, led-hal, led-pixel-engine, led-sequencer,
+# led-protocols) N=500 vezes cada, com a suite do workspace em ciclo noutro processo. A carga fica
+# PROVADA no log (lição do R6.2): em cada iteração conta-se quantos binários de teste da carga
+# estão vivos (sob_carga), contam-se as voltas completas da suite, e a carga tem de estar viva
+# no fim.
+#
+# Variantes:
+#   corrigido — o código do #42 (contagem por thread_local, marca desligada ao fechar);
+#   regressao — CONTROLO NEGATIVO: repõe a contagem errada (AtomicUsize global somado por qualquer
+#               thread marcada, marca nunca desligada) — as falhas do R6.1 têm de voltar.
+# Nas duas variantes salta-se o teste determinístico novo (`outra_thread_marcada_…`): na
+# regressão ele reprova sempre por construção, e o que se mede aqui é a recorrência sob carga
+# dos testes de sempre.
+name: measure-td023-r7
+
+on:
+  pull_request:
+
+jobs:
+  recorrencia:
+    name: td023 r7 (${{ matrix.os }}, ${{ matrix.variante }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04]
+        variante: [corrigido, regressao]
+    env:
+      N: 500
+      SALTAR: outra_thread_marcada_nao_entra_na_contagem_desta
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio no Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Controlo negativo — repor a contagem errada
+        if: matrix.variante == 'regressao'
+        shell: bash {0}
+        run: |
+          python3 - <<'PY'
+          for c in ["audio-core","led-hal","led-pixel-engine","led-sequencer","led-protocols"]:
+              p=f"crates/{c}/tests/no_alloc.rs"; s=open(p).read()
+              a="fn contar_nesta_thread() {\n    let _ = ALLOCS_DESTA_THREAD.try_with(|c| c.set(c.get() + 1));\n}"
+              b="static ALLOCS_GLOBAL: AtomicUsize = AtomicUsize::new(0);\nfn contar_nesta_thread() {\n    ALLOCS_GLOBAL.fetch_add(1, Ordering::SeqCst);\n}"
+              assert s.count(a)==1, c; s=s.replace(a,b)
+              a2="    ALLOCS_DESTA_THREAD.with(|c| c.get())\n"; assert s.count(a2)==1, c
+              s=s.replace(a2,"    ALLOCS_GLOBAL.load(Ordering::SeqCst)\n")
+              n=0
+              for u in ["    E_A_THREAD_DO_TESTE.with(|c| c.set(false));\n",
+                        "    E_A_THREAD_DO_TESTE.with(|c| c.set(false)); // desmarcar ao fechar (TD-023, R7.2)\n"]:
+                  n+=s.count(u); s=s.replace(u,"")
+              assert n>=1, (c,"marca"); open(p,"w").write(s); print(c, "regressao aplicada; desmarcações removidas:", n)
+          PY
+          git diff --stat
+      - name: Compilar tudo (uma vez)
+        shell: bash {0}
+        run: |
+          uname -a; uname -m
+          cargo test --workspace --locked --no-run > build.log 2>&1 || { tail -30 build.log; exit 1; }
+          : > bins.txt
+          for c in audio-core led-hal led-pixel-engine led-sequencer led-protocols; do
+            cargo test -p $c --test no_alloc --locked --no-run --message-format=json 2>/dev/null \
+              | grep -o '"executable":"[^"]*no_alloc[^"]*"' | head -1 | sed 's/"executable":"//; s/"$//' > b.txt
+            b=$(cat b.txt); [ -x "$b" ] || { echo "sem binário para $c"; exit 1; }
+            esp=$("$b" --list --skip "$SALTAR" 2>/dev/null | grep -c ': test$')
+            echo "$c $b $esp" >> bins.txt
+          done
+          cat bins.txt
+      - name: Ciclo N=500 com carga provada
+        shell: bash {0}
+        run: |
+          echo 0 > carga.voltas
+          ( while true; do cargo test --workspace --locked -q > /dev/null 2>&1; echo $(( $(cat carga.voltas) + 1 )) > carga.voltas; done ) &
+          CARGA=$!
+          for _ in $(seq 1 180); do [ "$(pgrep -f 'target/debug/deps/' | wc -l)" -gt 0 ] && break; sleep 1; done
+          sob_carga=0; vacuas=0; total_falhas=0
+          declare -A falhas
+          for i in $(seq 1 "$N"); do
+            vivos=$(pgrep -f 'target/debug/deps/' | wc -l)
+            [ "$vivos" -gt 0 ] && sob_carga=$((sob_carga+1))
+            while read -r c b esp; do
+              "$b" --skip "$SALTAR" > it.txt 2>&1
+              code=$?
+              n=$(sed -nE 's/^test result: [a-zA-Z]+\. ([0-9]+) passed; ([0-9]+) failed.*/\1+\2/p' it.txt | head -1)
+              [ "$(( ${n:-0} ))" -eq "$esp" ] || vacuas=$((vacuas+1))
+              if [ "$code" -ne 0 ]; then
+                falhas[$c]=$(( ${falhas[$c]:-0} + 1 )); total_falhas=$((total_falhas+1))
+                echo "::warning::iteração $i $c FALHOU (exit $code)"
+                grep -aE 'panicked|allocated|alocou|alocação' it.txt | head -4
+              fi
+            done < bins.txt
+          done
+          kill -0 $CARGA 2>/dev/null && viva=sim || viva=nao
+          kill $CARGA 2>/dev/null; pkill -f 'cargo test' 2>/dev/null
+          por=""; for c in audio-core led-hal led-pixel-engine led-sequencer led-protocols; do por="$por $c=${falhas[$c]:-0}"; done
+          echo "RESULTADO td023-r7 os=${{ matrix.os }} arch=$(uname -m) variante=${{ matrix.variante }} N=$N falhas=$total_falhas [$por ] vacuas=$vacuas sob_carga=$sob_carga voltas_da_suite=$(cat carga.voltas) carga_viva_no_fim=$viva"
+          [ "$viva" = sim ] || { echo "premissa falhou: a carga morreu"; exit 1; }
+          [ "$vacuas" -eq 0 ] || { echo "premissa falhou: iterações com nº de testes errado"; exit 1; }
