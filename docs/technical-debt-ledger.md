@@ -1572,9 +1572,13 @@ review_by: 2026-10-12
 td_id:     TD-027
 title:     "As 3 construcoes `unsafe` do `audio-core` (ring buffer SPSC) nao estao sob Miri na CI; a unica via e um script opt-in fora do repositorio"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-10-05
+closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-08.md
+required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
-source_files: crates/audio-core/src/ring_buffer.rs
+source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml
 context: |
   crates/audio-core/src/ring_buffer.rs:24 (`unsafe impl Sync`), :55 e :75 (blocos `unsafe`).
   .github/workflows/ci.yml:202 — o job `miri` corre so `cargo +nightly-2026-06-02 miri test
@@ -1592,6 +1596,12 @@ required_fix: |
 falsification_required: |
   Com o gate ligado: violar a disciplina SPSC do ring buffer (mutacao) -> Miri reporta UB e
   o job reprova; revertida -> verde com N > 0.
+negative_control: |
+  PR #22 [NEG-CTL] (fechado sem merge), headSha a29451a: `self.write.load(Ordering::Acquire)` ->
+  `Ordering::Relaxed` em crates/audio-core/src/ring_buffer.rs. Run 37236379756, job 111536190663,
+  mesmo toolchain pinado (rustc 1.98.0-nightly 6bdf43094): o passo do audio-core reprovou com
+  «Undefined Behavior: Data race detected» em spsc_stress_no_loss_or_reorder_under_threads,
+  exit 1, 0 `error[E` (vermelho do Miri, nao de compilacao). Excerto no evidence_ref, sec. 2.
 review_by: 2026-10-12
 ```
 
@@ -1747,4 +1757,42 @@ progress: |
   wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9: subscritores em loads recusados, eventos depois
   do show_loaded, campo novo na resposta com sonda OK, codigo de recusa novo, serializador sem escape de `\`).
 review_by: 2026-10-31
+```
+
+---
+
+## TD-030 — O detetor de coerência do TD-002 disparou em arm64 (macos-26): «coherence violated 1 times»
+
+```yaml
+td_id:     TD-030
+title:     "audioshare_scalars_beat_timestamp_coherent_under_concurrency (o detetor do TD-002, closed) reprovou uma vez no runner macos-26-arm64: uma snapshot de AudioShare::scalars() com beat e timestamp_ms incoerentes"
+severity:  High
+severity_note: "PROVISORIA (operador, 2026-10-07): passa a Critical se a reproducao confirmar incoerencia real — o render podia ver o beat de um publish e o timestamp de outro (BeatFlash errado)."
+status:    open
+origin:    "PR #30 (R4.6, so a etiqueta da imagem macOS mudou), run 37585504571, job 112674573237 `test (macos-26)`, Image macos-26-arm64 20260907.0351.1 (a mesma do macos-latest): `panicked at crates/led-pixel-engine/src/reactive.rs:474:9: coherence violated 1 times: beat/timestamp_ms from different publishes`. Nao repetido (STOP, 2026-10-07). Unica ocorrencia conhecida; o teste passou em todas as runs anteriores lidas."
+source_files: crates/led-pixel-engine/src/reactive.rs
+context: |
+  Leitura (R5.1 passo A, origin/main bc7991f) — NENHUMA das hipoteses de defeito no codigo se confirma:
+  H4 um so `load()` por `scalars()` (reactive.rs:101-103, `*self.scalars.load().as_ref()`);
+  H5 todos os escalares publicados numa so struct (`publish`, :81-91; o `spectrum` esta num RwLock a parte e nao entra
+     em `scalars()`);
+  H6 o reader do teste usa UMA snapshot por verificacao (:460-466);
+  H2 o estado inicial (ts=0, beat=false) esta excluido por `timestamp_ms > 0`.
+  O fecho do TD-002 (2026-06-19) foi verificado so em x86_64 (macOS Intel local); o Miri correu so o subset simples.
+  arc-swap 1.9.1 (Cargo.lock). Hipoteses abertas: ordenacao de memoria em arm64 (no arc-swap ou na leitura da struct
+  pelo Guard), ou um defeito do proprio teste que a leitura nao viu.
+impact: |
+  Se for real: em arm64 (Apple Silicon, Raspberry Pi 5, nos ARM) o render pode ler beat e timestamp de publishes
+  diferentes — o defeito exato que o TD-002 fechou em x86. O rig de producao e x86/Linux hoje; o macOS de autoria e arm64.
+required_fix: |
+  Medir primeiro (R5.1 passo B: o teste em ciclo, N=500, macos-26 arm64 · ubuntu-24.04 x86 · ubuntu-24.04-arm). Se a
+  taxa > 0 em arm64 e 0 em x86 → incoerencia real → accept da correcao (contrato canonico + hot-path = area protegida)
+  antes de tocar no codigo. Se 0 em todas → registar a taxa e decidir (flake raro vs defeito raro).
+measured: |
+  R5.1 passo B (PR #34 [MEDICAO], fechado sem merge; run 37679978773): o teste ISOLADO, binario compilado uma vez,
+  N=500 por runner, premissa 1 teste/iteracao: macos-26 arm64 0/500 · ubuntu-24.04-arm aarch64 0/500 ·
+  ubuntu-24.04 x86_64 0/500 (0 vacuas). Taxa isolada < ~0,6 % em todas — nao reproduz. A ocorrencia unica foi no
+  workspace inteiro sob carga. Nao ha base para Critical nem para fechar; proposta: medicao com carga, ou D-REP
+  (a 2.a ocorrencia em qualquer lado → STOP).
+review_by: 2026-10-21
 ```
