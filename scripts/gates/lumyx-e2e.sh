@@ -51,7 +51,7 @@ TOTAL_TESTS=0
 # contract.rs só batem UMA vez e só olham para o canal 0 (falsificador R4.7: zeros a partir da
 # 2.ª batida, só na thread do spawn, só depois de 50 ms ou zeros parciais passavam). O lifecycle
 # cobre a thread; o do stage do daemon compara o keep-alive com o quadro que estava no fio.
-HB_GRUPOS="led-hal|--test contract|heartbeat_resends_last_valid_and_never_zeros heartbeat_never_sends_zero_frame_when_record_never_called
+HB_GRUPOS="led-hal|--test contract|heartbeat_resends_last_valid_and_never_zeros heartbeat_never_sends_zero_frame_when_record_never_called heartbeat_resends_the_latest_of_several_records_and_never_zeros
 led-hal|--test lifecycle|heartbeat_thread_keeps_sending_the_last_valid_frame
 led-daemon-bin|--lib|stage::tests::pausado_o_palco_continua_vivo_e_nunca_recebe_zeros"
 gate_heartbeat_nunca_zeros() {
@@ -79,7 +79,7 @@ gate_heartbeat_nunca_zeros() {
         fi
         total=$((total + executado))
     done <<< "$HB_GRUPOS"
-    [ "$falhou" -eq 0 ] && pass "LED: heartbeat never sends zeros (${total}/4 testes: contract ×2, lifecycle, stage do daemon)"
+    [ "$falhou" -eq 0 ] && pass "LED: heartbeat never sends zeros (${total}/5 testes: contract ×3, lifecycle, stage do daemon)"
     rm -f "$out" "$lista"
 }
 # END gate_heartbeat_nunca_zeros
