@@ -526,8 +526,8 @@ fn a_flag_nao_vem_do_ambiente() {
         for (i, _) in fonte.match_indices("std::env") {
             let resto = &fonte[i + "std::env".len()..];
             assert!(
-                resto.starts_with("::args()") || resto.starts_with("::temp_dir()"),
-                "{nome}: uso de std::env que não é args()/temp_dir(): {}",
+                resto.starts_with("::args()") || resto.starts_with("::temp_dir()") || resto.starts_with("::current_exe()"),
+                "{nome}: uso de std::env que não é args()/temp_dir()/current_exe(): {}",
                 &fonte[i..(i + 40).min(fonte.len())]
             );
         }
@@ -749,4 +749,56 @@ fn aviso_no_arranque(args: &[&str]) {
     let _ = filho.wait();
     assert!(vivo, "premissa: o daemon tem de continuar vivo ({args:?})");
     assert!(a_tempo, "o aviso tem de sair no arranque, com o processo ainda a correr ({args:?})");
+}
+
+/// Guarda que devolve um resultado fixo (vários payloads por variante).
+struct GuardaFixa(Result<(), NetworkPolicyError>);
+impl NetworkGuard for GuardaFixa {
+    fn check(&self) -> Result<(), NetworkPolicyError> {
+        self.0.clone()
+    }
+    fn name(&self) -> &'static str {
+        "guarda-fixa"
+    }
+}
+
+/// **Ronda 10 (B1/B2/B3/MP9): o EFEITO no binário é, caso a caso, o que `decidir_rede` decide.**
+/// Por tabela — cada variante com vários payloads × flag on/off — nos dois caminhos de produção que
+/// correm o pré-voo (modo CLI `run_com` e `load` por IPC): arma sse `decidir_rede(..).network_ok`.
+/// Um segundo decisor em qualquer sítio (reescrever `network_ok`, alias do enum, ponteiro de função)
+/// muda o efeito numa linha da tabela e reprova aqui, seja qual for a grafia.
+#[test]
+fn o_efeito_no_cli_e_no_ipc_e_o_que_decidir_rede_decide() {
+    use led_daemon_bin::preflight::decidir_rede;
+    let mut resultados: Vec<Result<(), NetworkPolicyError>> = vec![Ok(())];
+    for i in [vec!["en0"], vec!["wlan0"], vec!["wlp2s0", "en0"]] {
+        resultados.push(Err(NetworkPolicyError::WifiActive { interfaces: i.iter().map(|s| s.to_string()).collect() }));
+    }
+    for r in ["SO nao suportado", "freebsd"] {
+        resultados.push(Err(NetworkPolicyError::ProbeUnavailable { reason: r.into() }));
+    }
+    for (pr, er) in [("networksetup -listallhardwareports", "exit status 1"), ("sysfs /sys/class/net", "EACCES")] {
+        resultados.push(Err(NetworkPolicyError::ProbeFailed { probe: pr, error: er.into() }));
+    }
+    let show = escrever("td029-tabela.lumyx");
+    let mut casos = 0;
+    for (n, r) in resultados.into_iter().enumerate() {
+        for flag in [false, true] {
+            let esperado = decidir_rede(&r, "guarda-fixa", flag).network_ok;
+            let guarda: &'static GuardaFixa = Box::leak(Box::new(GuardaFixa(r.clone())));
+            // Modo CLI.
+            let (j, o) = correr_cli_com_outcome(&format!("td029-tab-{n}-{flag}.lumyx"), flag, guarda);
+            let armou = o.reason != led_daemon_bin::ExitReason::NeverStarted;
+            assert_eq!(armou, esperado, "CLI: {r:?} flag={flag} → {o:?}\n{j}");
+            // load por IPC.
+            let d = Daemon::subir_com(&format!("tab-{n}-{flag}"), cfg(flag, false), None, guarda);
+            let (mut s, mut rd) = d.cliente();
+            pedir(&mut s, &mut rd, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+            let resp = pedir(&mut s, &mut rd, &load(&show, 2));
+            let j = d.parar();
+            assert_eq!(resp.contains(r#""ok":true"#), esperado, "IPC: {r:?} flag={flag} → {resp}\n{j}");
+            casos += 1;
+        }
+    }
+    assert_eq!(casos, 16, "8 resultados × 2 flags");
 }

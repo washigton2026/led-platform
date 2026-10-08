@@ -1732,8 +1732,19 @@ progress: |
   (resultado da sonda × flag → network_ok, notices, override_usado). Prova: tabela EXAUSTIVA (4 resultados × 2 flags,
   exaustividade forcada em compilacao) + teste ESTRUTURAL (1 so chamada de `decidir_rede`, 1 so `.check()` no src de
   producao, `NetworkPolicyError` so interpretado dentro da funcao). Controlo negativo: WiFi+flag aceite, segundo
-  decisor no run.rs e aviso removido → os tres vermelhos. O que fica FORA da fronteira: os wrappers (run,
-  run_with_control, main) so encaminham — o que eles fazem com a decisao e coberto pelos e2e das rondas 1–8, sem
-  garantia de exaustividade (falsificador ronda 9).
+  decisor no run.rs e aviso removido → os tres vermelhos.
+  RONDA 10 (falsificador, contra a fronteira): FALSE_GREEN com 12 sobreviventes DENTRO (tabela com 1 payload por variante;
+  estrutural textual contornavel por alias/espaco/comentario; aviso stderr so verificado como texto). Fechados por
+  CLASSE, sem hooks: (i) `decidir_rede_e_invariante_ao_payload` (varios payloads reais por variante; a decisao e a da
+  tabela e os detalhes nomeiam o que a sonda disse); (ii) `o_efeito_no_cli_e_no_ipc_e_o_que_decidir_rede_decide`
+  (e2e por tabela: 8 resultados × 2 flags, nos caminhos CLI e IPC, arma sse decidir_rede(..).network_ok — apanha um
+  2.o decisor seja qual for a grafia); (iii) o estrutural tira comentarios ANTES do corte, conta o identificador em
+  qualquer forma e sem espacos, e recusa alias do enum; (iv) `o_aviso_sai_em_stderr_em_cada_pre_voo_com_override`
+  re-executa o proprio binario de teste e conta o aviso no stderr real (2 pre-voos → 2 avisos). Os 12 reaplicados:
+  vermelhos. Ronda 11 NAO aberta (ordem do operador).
+  FORA da fronteira (ronda 9/10, declarado): MF9 (wrapper run_with_control a ligar o override sem show — so
+  discriminavel com injecao no binario, proibida; o e2e por tabela cobre run_com/run_with_control_com, nao os
+  wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9: subscritores em loads recusados, eventos depois
+  do show_loaded, campo novo na resposta com sonda OK, codigo de recusa novo, serializador sem escape de `\`).
 review_by: 2026-10-31
 ```

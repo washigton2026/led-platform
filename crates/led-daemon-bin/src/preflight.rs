@@ -830,23 +830,28 @@ mod tests {
             }
             ficheiros += 1;
             let texto = std::fs::read_to_string(&p).unwrap();
-            let prod = texto.split("mod tests").next().unwrap();
-            let codigo: String = prod
+            // Comentários fora PRIMEIRO (um «// mod tests» no topo escondia o ficheiro inteiro — ronda 10, B5);
+            // depois o corte no módulo de testes REAL; depois sem espaços (`.check ()` contava 0 — B2).
+            let sem_comentarios: String = texto
                 .lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
+                .map(|l| match l.find("//") { Some(i) => &l[..i], None => l })
                 .collect::<Vec<_>>()
                 .join("\n");
-            chamadas += codigo.matches("decidir_rede(").count();
-            sondas += codigo.matches(".check()").count();
+            let prod = sem_comentarios.split("mod tests {").next().unwrap();
+            let codigo: String = prod.chars().filter(|c| !c.is_whitespace()).collect();
+            // O IDENTIFICADOR, em qualquer forma: chamada, ponteiro de função (`let f = decidir_rede;`), etc.
+            chamadas += codigo.matches("decidir_rede").count();
+            sondas += codigo.matches(".check(").count();
+            assert!(!codigo.contains("NetworkPolicyErroras"), "{}: alias do enum esconde a interpretação (B2)", p.display());
             // Padrões do enum fora do corpo de `decidir_rede`.
-            let fora = match (codigo.find("pub fn decidir_rede("), codigo.find("DecisaoRede { network_ok, notices, override_usado }")) {
+            let fora = match (codigo.find("pubfndecidir_rede("), codigo.find("DecisaoRede{network_ok,notices,override_usado}")) {
                 (Some(a), Some(b)) => format!("{}{}", &codigo[..a], &codigo[b..]),
                 _ => codigo.clone(),
             };
             padroes_fora += fora.matches("NetworkPolicyError::").count();
         }
         assert!(ficheiros >= 5, "premissa: leu o src ({ficheiros})");
-        assert_eq!(chamadas, 2, "1 definição + 1 chamada (o preflight) — mais é um segundo decisor");
+        assert_eq!(chamadas, 2, "o identificador decidir_rede: 1 definição + 1 chamada (o preflight) — mais é um segundo decisor");
         assert_eq!(sondas, 1, "a guarda só é consultada num sítio (o preflight)");
         assert_eq!(padroes_fora, 0, "NetworkPolicyError só é interpretado dentro de decidir_rede");
         // D2(a): o aviso em stderr sai em CADA pré-voo que use o override — está guardado pelo
@@ -854,11 +859,81 @@ mod tests {
         // exigiria fazer a sonda falhar no binário, e hooks de injeção no binário estão proibidos:
         // a cobertura deste aviso é estrutural, e o `override_usado` está na tabela.)
         let fonte = include_str!("preflight.rs");
-        let prod = fonte.split("mod tests").next().unwrap();
+        let prod = fonte.split("mod tests {").next().unwrap();
         let depois = &prod[prod.find("let decisao = decidir_rede(").expect("a chamada")..];
         let guarda = depois.find("if decisao.override_usado {").expect("o aviso está guardado pela decisão");
         assert!(depois[guarda..].trim_start_matches("if decisao.override_usado {").trim_start().contains("eprintln!"),
                 "o ramo do override escreve o aviso em stderr");
+    }
+
+
+    /// **Ronda 10, A1/A2/A4/A5: a decisão depende só da VARIANTE e da flag, nunca do payload.**
+    /// A tabela acima fixa um payload por variante; aqui cada variante leva vários (os nomes REAIS das
+    /// sondas e interfaces en0/wlan0/wlp2s0), e a decisão tem de ser a mesma que a da tabela — e os
+    /// detalhes têm de nomear o que a sonda disse (interfaces, razão, sonda, erro).
+    #[test]
+    fn decidir_rede_e_invariante_ao_payload() {
+        let mut casos: Vec<(E, &str)> = Vec::new();
+        for i in [vec!["en0"], vec!["wlan0"], vec!["wlp2s0", "en0"]] {
+            casos.push((E::WifiActive { interfaces: i.iter().map(|s| s.to_string()).collect() }, "WifiActive"));
+        }
+        for r in ["SO nao suportado", "windows", "freebsd 14"] {
+            casos.push((E::ProbeUnavailable { reason: r.into() }, "ProbeUnavailable"));
+        }
+        for (pr, er) in [("networksetup -listallhardwareports", "exit status 1"), ("sysfs /sys/class/net", "read_dir: EACCES"), ("ifconfig", "x")] {
+            casos.push((E::ProbeFailed { probe: pr, error: er.into() }, "ProbeFailed"));
+        }
+        let canonico = |v: &str, flag: bool| -> (bool, bool) {
+            match (v, flag) {
+                ("WifiActive", _) => (false, false),
+                ("ProbeUnavailable", _) => (true, false),
+                ("ProbeFailed", false) => (false, false),
+                ("ProbeFailed", true) => (true, true),
+                _ => unreachable!(),
+            }
+        };
+        for (e, v) in &casos {
+            assert_eq!(variante(e), *v);
+            for flag in [false, true] {
+                let d = decidir_rede(&Err(e.clone()), "g", flag);
+                assert_eq!((d.network_ok, d.override_usado), canonico(v, flag), "{e:?} flag={flag}");
+                let texto = d.notices.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" | ");
+                match e {
+                    E::WifiActive { interfaces } => {
+                        for i in interfaces { assert!(texto.contains(i.as_str()), "a interface {i} tem de constar: {texto}"); }
+                    }
+                    E::ProbeUnavailable { reason } => assert!(texto.contains(reason.as_str()), "{texto}"),
+                    E::ProbeFailed { probe, error } => {
+                        assert!(texto.contains(probe) && texto.contains(error.as_str()), "{texto}")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Filho do teste seguinte: dois pré-voos com a sonda falhada e a flag. Corre também no
+    /// conjunto normal (escreve dois avisos em stderr, sem afirmar nada).
+    #[test]
+    fn filho_dois_pre_voos_com_override() {
+        let falhou = || Err(NetworkPolicyError::ProbeFailed { probe: "sonda-x", error: "erro-y".into() });
+        let _ = corre_com(falhou(), true);
+        let _ = corre_com(falhou(), true);
+        let _ = corre_com(Ok(()), true); // sonda OK + flag: sem aviso de USO
+    }
+
+    /// **D2(a) medido, sem hook no binário (ronda 10, C1–C3):** re-executa o PRÓPRIO binário de
+    /// teste só com o filho acima e conta o aviso no stderr real: dois pré-voos com override → dois
+    /// avisos; o pré-voo com a sonda OK não avisa. Um aviso 1× por processo, atrás de uma guarda morta,
+    /// ou apagado deixa este teste vermelho.
+    #[test]
+    fn o_aviso_sai_em_stderr_em_cada_pre_voo_com_override() {
+        let o = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "preflight::tests::filho_dois_pre_voos_com_override", "--nocapture", "--test-threads=1"])
+            .output()
+            .unwrap();
+        let tudo = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+        assert!(o.status.success() && tudo.contains("1 passed"), "premissa: o filho correu: {tudo}");
+        assert_eq!(tudo.matches("AVISO: --assume-no-wifi USADO").count(), 2, "um aviso POR pré-voo com override:\n{tudo}");
     }
 
 }
