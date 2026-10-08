@@ -33,6 +33,68 @@ static FORA_DA_THREAD: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
     /// Marca a thread que corre o corpo do teste. `const` para não alocar ao inicializar.
     static E_A_THREAD_DO_TESTE: Cell<bool> = const { Cell::new(false) };
+    /// Identidade da thread para o diagnóstico (R6.1). 0 = ainda sem id. `const`, não aloca.
+    static ID_DA_THREAD: Cell<usize> = const { Cell::new(0) };
+}
+
+// ── Diagnóstico do TD-023 (R6.1, só código de teste) ─────────────────────────────────────
+//
+// Cada alocação CONTADA dentro da janela fica registada em slots pré-alocados: tamanho,
+// alinhamento, entrada do alocador (1 alloc · 2 alloc_zeroed · 3 realloc) e se veio da thread
+// DONA da janela ou de OUTRA thread marcada (o `ALLOCS` é global e a marca nunca é desligada:
+// uma thread de um teste anterior ainda viva também conta). Discrimina H1/H2 (a dona aloca;
+// o tamanho diz o quê) de H3 (outra thread marcada — o arnês). Nada aqui aloca.
+const SLOTS: usize = 8;
+static PROXIMO_ID: AtomicUsize = AtomicUsize::new(1);
+static DONO: AtomicUsize = AtomicUsize::new(0);
+static N_REG: AtomicUsize = AtomicUsize::new(0);
+static REG_TAMANHO: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
+static REG_ALINHAMENTO: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
+static REG_ENTRADA: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
+static REG_THREAD: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
+
+fn id_desta_thread() -> usize {
+    ID_DA_THREAD
+        .try_with(|c| {
+            if c.get() == 0 {
+                c.set(PROXIMO_ID.fetch_add(1, Ordering::SeqCst));
+            }
+            c.get()
+        })
+        .unwrap_or(usize::MAX)
+}
+
+/// Chamada do alocador, só para alocações JÁ contadas: regista-as se a janela está aberta.
+fn diagnosticar(tamanho: usize, alinhamento: usize, entrada: usize) {
+    if !MEDINDO.load(Ordering::Relaxed) {
+        return;
+    }
+    let i = N_REG.fetch_add(1, Ordering::SeqCst);
+    if i < SLOTS {
+        REG_TAMANHO[i].store(tamanho, Ordering::SeqCst);
+        REG_ALINHAMENTO[i].store(alinhamento, Ordering::SeqCst);
+        REG_ENTRADA[i].store(entrada, Ordering::SeqCst);
+        REG_THREAD[i].store(id_desta_thread(), Ordering::SeqCst);
+    }
+}
+
+/// O relatório, montado DEPOIS de a janela fechar (aqui já se pode alocar).
+fn relatorio_diagnostico() -> String {
+    let n = N_REG.load(Ordering::SeqCst);
+    let dono = DONO.load(Ordering::SeqCst);
+    let mut s = format!("diagnostico: {n} alocacao(oes) contadas na janela (thread dona = id {dono})");
+    for i in 0..n.min(SLOTS) {
+        let entrada = match REG_ENTRADA[i].load(Ordering::SeqCst) { 1 => "alloc", 2 => "alloc_zeroed", 3 => "realloc", _ => "?" };
+        let t = REG_THREAD[i].load(Ordering::SeqCst);
+        s.push_str(&format!(
+            "; #{i}: {entrada} tamanho={} alinhamento={} thread={} ({})",
+            REG_TAMANHO[i].load(Ordering::SeqCst),
+            REG_ALINHAMENTO[i].load(Ordering::SeqCst),
+            t,
+            if t == dono { "DONA da janela" } else { "OUTRA thread marcada" }
+        ));
+    }
+    s
 }
 
 /// Chamada de dentro do alocador: **sem alocar**. `true` se a alocação é da thread do teste.
@@ -50,6 +112,7 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         if registar() {
             ALLOCS.fetch_add(1, Ordering::SeqCst);
+            diagnosticar(l.size(), l.align(), 1);
         }
         System.alloc(l)
     }
@@ -59,12 +122,14 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         if registar() {
             ALLOCS.fetch_add(1, Ordering::SeqCst);
+            diagnosticar(l.size(), l.align(), 2);
         }
         System.alloc_zeroed(l)
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
         if registar() {
             ALLOCS.fetch_add(1, Ordering::SeqCst);
+            diagnosticar(n, l.align(), 3);
         }
         System.realloc(p, l, n)
     }
@@ -79,6 +144,8 @@ static ALLOC_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Marca a thread atual como a do teste e abre a janela.
 fn abrir_janela() {
     E_A_THREAD_DO_TESTE.with(|c| c.set(true));
+    DONO.store(id_desta_thread(), Ordering::SeqCst);
+    N_REG.store(0, Ordering::SeqCst);
     FORA_DA_THREAD.store(0, Ordering::SeqCst);
     MEDINDO.store(true, Ordering::SeqCst);
 }
@@ -210,9 +277,10 @@ fn zero_allocations_on_hot_path() {
     assert_eq!(
         before,
         after,
-        "hot path allocated {} time(s) over 10000 frames (other threads, ignored: {})",
+        "hot path allocated {} time(s) over 10000 frames (other threads, ignored: {}) — {}",
         after - before,
-        FORA_DA_THREAD.load(Ordering::SeqCst)
+        FORA_DA_THREAD.load(Ordering::SeqCst),
+        relatorio_diagnostico()
     );
 }
 
@@ -238,9 +306,10 @@ fn zero_allocations_on_hot_path_with_calibration() {
     assert_eq!(
         before,
         after,
-        "calibrated hot path allocated {} time(s) over 10000 frames (other threads, ignored: {})",
+        "calibrated hot path allocated {} time(s) over 10000 frames (other threads, ignored: {}) — {}",
         after - before,
-        FORA_DA_THREAD.load(Ordering::SeqCst)
+        FORA_DA_THREAD.load(Ordering::SeqCst),
+        relatorio_diagnostico()
     );
 }
 
