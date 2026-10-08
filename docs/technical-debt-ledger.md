@@ -1572,9 +1572,13 @@ review_by: 2026-10-12
 td_id:     TD-027
 title:     "As 3 construcoes `unsafe` do `audio-core` (ring buffer SPSC) nao estao sob Miri na CI; a unica via e um script opt-in fora do repositorio"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-10-05
+closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-08.md
+required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
-source_files: crates/audio-core/src/ring_buffer.rs
+source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml
 context: |
   crates/audio-core/src/ring_buffer.rs:24 (`unsafe impl Sync`), :55 e :75 (blocos `unsafe`).
   .github/workflows/ci.yml:202 — o job `miri` corre so `cargo +nightly-2026-06-02 miri test
@@ -1592,6 +1596,12 @@ required_fix: |
 falsification_required: |
   Com o gate ligado: violar a disciplina SPSC do ring buffer (mutacao) -> Miri reporta UB e
   o job reprova; revertida -> verde com N > 0.
+negative_control: |
+  PR #22 [NEG-CTL] (fechado sem merge), headSha a29451a: `self.write.load(Ordering::Acquire)` ->
+  `Ordering::Relaxed` em crates/audio-core/src/ring_buffer.rs. Run 37236379756, job 111536190663,
+  mesmo toolchain pinado (rustc 1.98.0-nightly 6bdf43094): o passo do audio-core reprovou com
+  «Undefined Behavior: Data race detected» em spsc_stress_no_loss_or_reorder_under_threads,
+  exit 1, 0 `error[E` (vermelho do Miri, nao de compilacao). Excerto no evidence_ref, sec. 2.
 review_by: 2026-10-12
 ```
 
