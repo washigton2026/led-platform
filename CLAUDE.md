@@ -147,6 +147,37 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
 
+### 2026-10-07 — TD-029 (parcial): sonda de rede FALHADA numa plataforma suportada passa a bloquear
+
+**Done.** `led-hal::NetworkPolicyError` ganha `ProbeFailed { probe, error }` (Display `CRITICAL`); os ramos
+Linux `/sys/class/net` e macOS `networksetup` que falham devolvem-na. `ProbeUnavailable` passa a significar
+**só** SO não suportado — os ADR-0005/0018 continuam literalmente verdadeiros, zero `docs/adr/`. O pré-voo
+bloqueia `ProbeFailed` (`network_probe_failed`); `led-daemon --assume-no-wifi` (só CLI, por execução, sem
+omissão nem ficheiro) deixa prosseguir e regista `network_assumed_by_operator` em **cada** pré-voo, incluindo
+cada `load` IPC; com a sonda OK regista `network_override_unused`. WiFi activo bloqueia sempre.
+**Achado:** o caminho IPC do `load` perdia **todas** as notices do pré-voo; passa a escrevê-las com o mesmo
+`notice_to_json`, sem campos novos. IPC/`PROTOCOL_V`, contratos canónicos e ADRs intocados.
+
+**Invariants verified.** `cargo test --workspace --locked` 1176 · 0 · 9, exit 0 (107 binários). Controlos
+negativos M1/M2/M3/MD4 e as 55 mutações que o falsificador deixou vivas em oito rondas (arranque sem a flag,
+WiFi + flag nos dois caminhos e no modo CLI, notices IPC incompletas/com campo/tipo novo, flag por ambiente
+ou por outra flag, aviso em stderr removido ou adiado, armar depois do arranque, a guarda permissiva no
+lugar da real, `play` depois de um `load` recusado, linhas JSONL de tipo novo) reprovam com `panicked`, nunca
+`error[E`.
+O modo CLI ganhou `run_com` (sondas injetadas), no molde do `run_with_control_com`.
+**R5.2 (fronteira nova, aprovada pelo operador):** toda a política de rede passou para a função pura
+`preflight::decidir_rede`, provada por uma tabela exaustiva (4 resultados × 2 flags, exaustividade forçada em
+compilação) e por um teste estrutural (um só ponto de chamada, uma só sonda, o enum só interpretado lá dentro). O
+aviso em stderr sai agora em CADA pré-voo que use o override (D2(a)). Ronda 10 (contra a fronteira): 12 sobreviventes
+fechados por classe — invariância ao payload, e2e por tabela (o efeito no CLI e no IPC = `decidir_rede(..).network_ok`),
+estrutural sem comentários/espaços/alias, e o aviso medido no stderr real por re-execução do binário de teste. O TD-022 foi re-verificado no commit do TD-029
+(c712e89; o seu ficheiro ganhou `assume_no_wifi: false`): C0 0, F1 101 ×3, C0 0.
+
+**Pending.** TD-029 continua **aberto**: operstate ilegível e `dormant`/`unknown` ainda contam como inactivos
+(pontos 1 e 2), fora do accept R5; os 4 sítios que passaram a `ProbeFailed` não têm teste (falta sonda
+injectável); e no macOS um `ifconfig` que falha conta a interface como inactiva. Tudo no ledger. Nada executado
+em Linux real nem no rig.
+
 ### 2026-10-06 — R4.1: o audit_gate julga o CONTEÚDO, e o required_test só conta numa região de prova (PR #26)
 
 **Done.** Substitui as regras de 2026-06-19 (*«`required_test:` named test must appear by name»* e

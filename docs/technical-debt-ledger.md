@@ -1277,7 +1277,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-09-26
 closed_by: "3c60ab8 (correcao do lado do teste) + sonda Linux run 36245228354: o writeln! interrompido devolve BrokenPipe (errno 32) em Linux, 3/3 — o mesmo que em macOS. Conjunto aceite NAO alargado."
-evidence_ref: docs/evidence/td-022-reverificacao-2026-09-28.md
+evidence_ref: docs/evidence/td-022-reverificacao-2026-10-07.md
 required_test: o_daemon_recusa_a_linha_longa_por_si_proprio
 source_files: crates/led-console-bin/tests/ipc_contra_o_daemon.rs
 negative_control: |
@@ -1682,19 +1682,107 @@ impact: |
   Um show em Linux pode arrancar sobre WiFi activo — o que o ADR-0005 proibe (jitter de 31 ms medido na bancada de
   2026-07-20) — com o journal a dizer que a rede foi verificada. Nao observado em Linux real.
 mitigation_now: |
-  Nenhuma automatica. Em macOS o pre-voo usa `probe_macos`; o ponto (3) aplica-se a qualquer plataforma.
+  Nenhuma automatica. Em macOS o pre-voo usa `probe_macos`. [2026-10-07] Desde o R4.T o ponto (3) so se aplica a
+  plataformas NAO suportadas (D1); os fail-open por interface (Linux operstate/flatten, macOS ifconfig) continuam.
 required_fix: |
   Decisao do operador (toca a politica do ADR-0005 e area protegida): fail-closed no PRE-VOO, nao so na sonda —
   `ProbeUnavailable` com alvo de rede → `network_ok: false` com mensagem explicita; override so por flag explicita,
-  registada no journal. Na sonda: operstate ilegivel → `ProbeUnavailable`; estados nao-`down` de uma interface sem
+  registada no journal. Na sonda: operstate ilegivel → `ProbeFailed` [2026-10-07: D1 — `ProbeUnavailable` passou a
+  significar SO nao suportado e NAO bloqueia; usa-lo aqui reabria o fail-open]; estados nao-`down` de uma interface sem
   fio (pelo menos `up`, `dormant`, `unknown`) → tratados como activos, a confirmar na doc do kernel. A decisao da sonda
   extraida para uma funcao pura sobre uma raiz injectavel (`probe_linux_em(raiz: &Path)`). O teste
   preflight.rs:462 tem de ser INVERTIDO (nao apagado) na mesma fatia, com o porque no commit. Accept aprovado antes.
 falsification_required: |
   Sonda, com sysfs falso em tempdir: wlan0 `up`, `dormant`, `unknown` → activo; `down` → inactivo; sem `wireless/` →
-  ignorada; operstate ilegivel → ProbeUnavailable (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
+  ignorada; operstate ilegivel → ProbeFailed [D1, 2026-10-07] (reprova com o codigo actual). Pre-voo, com alvo NAO-loopback e
   guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
   override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
+progress: |
+  2026-10-07 (fix/td-029-sonda-falhada-bloqueia, accept R5 aprovado — opcao B). FEITO: o ponto (3) para
+  plataformas SUPORTADAS (numa nao suportada continua nao-fatal, de proposito: D1) e o ramo
+  `/sys/class/net` ausente/`read_dir` falhado. Variante nova `ProbeFailed { probe, error }` (Display CRITICAL);
+  Linux :252/:260 e macOS :164/:170 (linhas em 2926a3a) devolvem-na; `ProbeUnavailable` fica SO para SO nao suportado (D1, zero
+  docs/adr/). Pre-voo: ProbeFailed → network_ok false + `network_probe_failed`; com `--assume-no-wifi` (so CLI,
+  por execucao) → true + `network_assumed_by_operator` em CADA pre-voo; flag com sonda OK → `network_override_unused`;
+  WifiActive bloqueia sempre. O teste preflight.rs:462 foi PRESERVADO para ProbeUnavailable e INVERTIDO para
+  ProbeFailed (`sonda_falhada_numa_plataforma_suportada_bloqueia`).
+  ACHADO D4 (observabilidade): o caminho IPC do `load` (run.rs, `apply_ipc`) PERDIA TODAS as notices do pre-voo —
+  nenhuma chegava ao journal, nao so as de rede. Passa a escreve-las com o mesmo `notice_to_json` do caminho CLI,
+  zero campos novos (e2e `dois_loads_ipc_com_override_deixam_dois_eventos_no_journal`).
+  POR FAZER (mantem o TD aberto): pontos (1) operstate ilegivel ignorado e (2) `dormant`/`unknown` como inactivos,
+  e a extraccao `probe_linux_em(raiz)` — fora do accept R5. Nao executado em Linux real.
+  RESIDUAIS medidos pelo falsificador (R4.T, ~/lumyx-evidence/2026-10-07/r4.T/falsifier.md):
+  (a) os 4 sitios D3 (macOS :164/:170, Linux :252/:260) devolvem ProbeFailed mas NENHUM teste o exercita — repor
+      `ProbeUnavailable` ou `Ok(())` ali deixa a suite verde (MA2/MA3). Fecha so com sondas injectaveis
+      (`probe_macos_com`/`probe_linux_em`) — alteracao do led-hal fora do accept.
+  (b) O equivalente macOS do ponto (1): se o `ifconfig <if>` falhar, `is_interface_active_macos` devolve `false` e a
+      interface Wi-Fi conta como INACTIVA; o pre-voo regista `network_checked`. Medido sem mutacao (FI_E). Fail-open.
+  (c) Observabilidade: no arranque com IPC (`run_with_control_com`) o Arm/Play do show inicial descarta os eventos
+      (`let _ = rt.apply(..)`): o journal nao mostra `transitioned` para ready/playing nesse caminho.
+  (d) [por leitura, nao executado] Linux: `entries.flatten()` ignora em silencio entradas de `/sys/class/net` com erro
+      de I/O. macOS: `networksetup` com exit 0 mas sem bloco Wi-Fi reconhecivel conta como «sem WiFi». Mesma classe do
+      ponto (1): fail-open dentro da sonda. O mesmo efeito por outra via (falsificador ronda 4, MR7): um embrulho no
+      led-daemon-bin que converta `ProbeFailed` em `ProbeUnavailable` antes do pre-voo — nenhum teste o ve, porque a
+      sonda real nunca falha nos testes. Escopo: apesar do titulo «Linux», (b) e (d) sao macOS.
+  (e) Limites dos testes (falsificador ronda 2): remover um #[test] so e apanhado pela contagem N (o cargo da exit 0);
+      o teste de ambiente procura padroes textuais so no src/ do led-daemon-bin (um meio que nao use `std::env`/`var(`,
+      ou uma leitura do ambiente noutro crate que alimente `Config`, escapa-lhe — MB1d, ronda 3); os oraculos temporais
+      observam uma janela finita (40 ticks) depois do arranque. O teste da guarda REAL no binario reconhece a
+      permissiva pelo NOME e, num runner sem WiFi, envia frames por software para 192.0.2.10 (TEST-NET); a sua
+      asserção «sem a flag nao ha override» (MR4/MR5) so discrimina onde a guarda real nao reprova por WiFi (CI sem
+      WiFi, ou com falha injectada) — numa maquina com WiFi activo e cega a esse mutante. No caminho IPC o fio e
+      medido (status `frames == 0` depois de um load recusado); no modo CLI nao (MCLI4, NOT_MEASURED: UDP para o IP
+      do proprio en0 e descartado nesta maquina, sem recetor que sirva de oraculo). A ORDEM das notices face aos
+      eventos no journal nao e afirmada (MC8b, ronda 8: o D4 fala de formato, nao de ordem). O `esc()` do journal nao
+      escapa `\n`: um erro de sonda com quebra de linha parte o JSONL nos dois caminhos (anterior ao TD-029).
+  (f) RESOLVIDO (R5.2, decisao do operador 2026-10-07): D2(a) = aviso em stderr E evento JSONL em CADA pre-voo que use
+      o override. O aviso sai no `preflight`, guardado por `DecisaoRede.override_usado`; cobertura ESTRUTURAL (capturar o
+      stderr real exigiria fazer a sonda falhar no binario, e hooks de injecao no binario estao proibidos).
+  FRONTEIRA (R5.2, aprovada pelo operador): toda a politica D1–D3 vive na funcao pura `preflight::decidir_rede`
+  (resultado da sonda × flag → network_ok, notices, override_usado). Prova: tabela EXAUSTIVA (4 resultados × 2 flags,
+  exaustividade forcada em compilacao) + teste ESTRUTURAL (1 so chamada de `decidir_rede`, 1 so `.check()` no src de
+  producao, `NetworkPolicyError` so interpretado dentro da funcao). Controlo negativo: WiFi+flag aceite, segundo
+  decisor no run.rs e aviso removido → os tres vermelhos.
+  RONDA 10 (falsificador, contra a fronteira): FALSE_GREEN com 12 sobreviventes DENTRO (tabela com 1 payload por variante;
+  estrutural textual contornavel por alias/espaco/comentario; aviso stderr so verificado como texto). Fechados por
+  CLASSE, sem hooks: (i) `decidir_rede_e_invariante_ao_payload` (varios payloads reais por variante; a decisao e a da
+  tabela e os detalhes nomeiam o que a sonda disse); (ii) `o_efeito_no_cli_e_no_ipc_e_o_que_decidir_rede_decide`
+  (e2e por tabela: 8 resultados × 2 flags, nos caminhos CLI e IPC, arma sse decidir_rede(..).network_ok — apanha um
+  2.o decisor seja qual for a grafia); (iii) o estrutural tira comentarios ANTES do corte, conta o identificador em
+  qualquer forma e sem espacos, e recusa alias do enum; (iv) `o_aviso_sai_em_stderr_em_cada_pre_voo_com_override`
+  re-executa o proprio binario de teste e conta o aviso no stderr real (2 pre-voos → 2 avisos). Os 12 reaplicados:
+  vermelhos. Ronda 11 NAO aberta (ordem do operador).
+  FORA da fronteira (ronda 9/10, declarado): MF9 (wrapper run_with_control a ligar o override sem show — so
+  discriminavel com injecao no binario, proibida; o e2e por tabela cobre run_com/run_with_control_com, nao os
+  wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9: subscritores em loads recusados, eventos depois
+  do show_loaded, campo novo na resposta com sonda OK, codigo de recusa novo, serializador sem escape de `\`).
+  RONDA 11 (2026-10-08, 060f232): FALSE_GREEN, 9 sobreviventes DENTRO (N1–N9: decisao pelo texto do erro, pelo nome
+  da guarda, por `wlx*`, pelo texto de «SO nao suportado»; 2.o decisor em preflight()/apply_ipc/UFCS; aviso no stdout).
+  R7.1 (decisao do operador: PROVA POR TIPOS, NAO POR TEXTO): `preflight::politica_rede` — entrada de `decidir_rede`
+  so `Sonda` (enum sem campos) × `wifi_ativo: bool` × `assume_no_wifi: bool`; `classificar` reduz o resultado da
+  guarda a isso descartando o payload; `DecisaoRede` com campos privados e sem construtor publico; os textos vao para
+  o journal por `notices_da_rede`, que so le a decisao; `Preflight` (modulo `relatorio`) com campos privados, o
+  `network_ok` com fio so vem de uma `DecisaoRede`. Testes: tabela exaustiva 3×2×2=12; payloads e nomes de guarda
+  REAIS (pre-voo 12×3×2 e e2e CLI+IPC 8×2, com o esperado escrito a mao); dois `load` no mesmo daemon com a guarda a
+  mudar entre eles (nas duas ordens); stderr e stdout em pipes separados. O estrutural fica como reforco.
+  LIMITE (stop condition do R7.1, reportado): o `network_ok` acaba em `led_daemon::PreflightReport` (campos `pub`,
+  `all_clear()` publico; congelado na GS1.6/ADR-0023) — quem tem um `PreflightReport` em maos pode altera-lo antes
+  do `Arm`. Fechar isso por tipos exige mudar a API do led-daemon: decisao do operador.
+  RONDA 12 (2026-10-08, 23eab37): N1–N9 todos mortos (N1T/N2T/N3T/N9T e N4T/N8T nao compilam). FALSE_GREEN com 6
+  sobreviventes DENTRO, nenhum via PreflightReport.
+  DECISAO DO OPERADOR (R8.2, 2026-10-08): o #32 entra como CORRECAO DE SEGURANCA (a main tem hoje o fail-open:
+  ProbeFailed prosseguia); o TD-029 CONTINUA OPEN. RESIDUAIS DECLARADOS:
+  - NV1: no ramo `supports_discovery:false`, `Preflight::sem_fio_a_proteger` (network_ok=true sem DecisaoRede)
+    substitui `com_rede` depois de uma decisao que bloqueou — a fechar no R8.5;
+  - NV2: `preflight()` ainda ve o texto do erro (`medido`) e pode decidir por ele — a fechar no R8.5;
+  - NV3: com >1 alvo (o rig real tem 5) + SondaFalhou, `sem_fio_a_proteger` — os testes usam 1 alvo — R8.5;
+  - NV4: `notices_da_rede` recebe o nome da guarda e pode omitir `network_override_unused` (o journal mente) — R8.5;
+  - NV7: o aviso em stderr pode sair vazio com >1 alvo (o estrutural aceita `eprintln!` vazio) — R8.5;
+  - NV10: `preflight_e_registar` pode refazer `preflight(.., assume_no_wifi=true)` sem a flag (override fabricado;
+    2 consultas a guarda que o contador textual nao ve) — R8.5;
+  - NV8 (e N7 na mesma classe): escrever `network_ok` num `PreflightReport` antes do `Arm` — ACEITE pelo operador
+    (ADR-0023 congelado; N7 apanhado por `cada_load_decide_com_o_resultado_da_sua_propria_sonda`);
+  - MF9 (wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9) — fora da fronteira, como nas rondas 9/10.
 review_by: 2026-10-31
 ```
 

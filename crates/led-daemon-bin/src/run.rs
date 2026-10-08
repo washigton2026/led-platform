@@ -37,6 +37,10 @@ pub struct Config {
     /// Nome do preset do `HardwareProfile`. **Obrigatório sempre que há `output`**: é dele que
     /// vêm protocolo, ordem de canais, universos, MTU e heartbeat.
     pub profile: Option<String>,
+    /// `--assume-no-wifi` (TD-029): o operador AFIRMA que não há WiFi ativo quando a sonda de
+    /// uma plataforma suportada **falhou**. Só pela CLI, por execução — nunca por omissão nem
+    /// por ficheiro. Nunca desbloqueia WiFi **ativo**; cada pré-voo que a use fica no journal.
+    pub assume_no_wifi: bool,
 }
 
 impl Default for Config {
@@ -49,6 +53,7 @@ impl Default for Config {
             integrity: Integrity::NotVerified,
             output: Vec::new(),
             profile: None,
+            assume_no_wifi: false,
         }
     }
 }
@@ -91,15 +96,21 @@ fn preflight_e_registar<P: Pacer, W: Write>(
     stage: Option<&Stage>,
     pacer: &P,
     journal: &mut Journal<W>,
+    guard: &dyn NetworkGuard,
     presence: &dyn DevicePresence,
 ) -> led_daemon::PreflightReport {
-    let guard = guarda_para(cfg);
-    let pf = preflight(cfg.integrity, stage.map(|s| s.output().config()), &*guard, presence);
+    let pf = preflight(
+        cfg.integrity,
+        stage.map(|s| s.output().config()),
+        guard,
+        presence,
+        cfg.assume_no_wifi,
+    );
     let t = pacer.now_ms();
-    for (chave, detalhe) in &pf.notices {
+    for (chave, detalhe) in pf.notices() {
         journal.line(&notice_to_json(t, chave, detalhe));
     }
-    pf.report
+    pf.report()
 }
 
 /// Abre o palco, se houver saída configurada. Falhar aqui é **não arrancar**: um show que não
@@ -213,6 +224,26 @@ pub fn run<P: Pacer, W: Write>(
     journal: &mut Journal<W>,
     shutdown: &AtomicBool,
 ) -> Outcome {
+    let guard = guarda_para(cfg);
+    run_com(rt, path, desc, cfg, pacer, journal, shutdown, &*guard, &ArtPollPresence)
+}
+
+/// O mesmo laço do [`run`], com as **sondas injetadas** — a disciplina do [`preflight`] e do
+/// `run_with_control_com`: é o que torna o pré-voo do modo CLI falsificável sem WiFi, sem rede
+/// e sem hardware (TD-029, falsificador R4.T ronda 2). Não é um segundo caminho: [`run`] é
+/// exatamente isto com a guarda e a sonda reais.
+#[allow(clippy::too_many_arguments)]
+pub fn run_com<P: Pacer, W: Write>(
+    rt: &mut ShowRuntime,
+    path: &str,
+    desc: ShowDescriptor,
+    cfg: &Config,
+    pacer: &mut P,
+    journal: &mut Journal<W>,
+    shutdown: &AtomicBool,
+    guard: &dyn NetworkGuard,
+    presence: &dyn DevicePresence,
+) -> Outcome {
     macro_rules! emit {
         ($evs:expr) => {{
             let t = pacer.now_ms();
@@ -247,8 +278,7 @@ pub fn run<P: Pacer, W: Write>(
                 "AFIRMADA pelo operador, NAO verificada — nenhum hash foi recomputado",
             ));
         }
-        let report =
-            preflight_e_registar(cfg, stage.as_ref(), pacer, journal, &ArtPollPresence);
+        let report = preflight_e_registar(cfg, stage.as_ref(), pacer, journal, guard, presence);
         match rt.apply(Command::Arm(report), pacer.now_ms()) {
             Ok(evs) => emit!(evs),
             Err(e) => {
@@ -351,13 +381,16 @@ pub type IpcOutcome = (IpcReply, Vec<led_daemon::Event>);
 
 /// Aplica um comando vindo do IPC. **Só o laço chama isto** — é o aplicador único.
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn apply_ipc(
     rt: &mut ShowRuntime,
     cmd: &crate::proto::Cmd,
     now: u64,
     cfg: &Config,
     stage: &mut Option<Stage>,
+    guard: &dyn NetworkGuard,
     presence: &dyn DevicePresence,
+    notices: &mut Vec<(&'static str, String)>,
 ) -> IpcOutcome {
     use crate::proto::Cmd;
     use crate::server::{load_error, runtime_result_to_reply};
@@ -387,14 +420,18 @@ fn apply_ipc(
             }
         }
         if *assume_integrity {
-            let guard = guarda_para(cfg);
-            let report = preflight(
+            let pf = preflight(
                 Integrity::AssumedByOperator,
                 stage.as_ref().map(|s| s.output().config()),
-                &*guard,
+                guard,
                 presence,
-            )
-            .report;
+                cfg.assume_no_wifi,
+            );
+            // D4 (TD-029): até aqui este caminho deitava fora TODAS as notices do pré-voo —
+            // incluindo o `network_unverified`. Passam ao laço, que as escreve no journal com o
+            // mesmo `notice_to_json` do arranque: nenhum tipo nem campo novo no JSONL.
+            let (report, das_sondas) = pf.em_partes();
+            notices.extend(das_sondas);
             match rt.apply(Command::Arm(report), now) {
                 Ok(evs) => eventos.extend(evs),
                 Err(rej) => {
@@ -445,11 +482,30 @@ pub fn run_with_control<P: Pacer, W: Write>(
     shutdown: &AtomicBool,
     cp: &crate::server::ControlPlane,
 ) -> Outcome {
+    let guard = guarda_para(cfg);
+    run_with_control_com(rt, inicial, cfg, pacer, journal, shutdown, cp, &*guard, &ArtPollPresence)
+}
+
+/// O mesmo laço, com as **sondas injetadas** — a disciplina do [`preflight`]: é o que torna o
+/// pré-voo do caminho IPC falsificável sem WiFi, sem rede e sem hardware. Não é um segundo
+/// caminho: [`run_with_control`] é exatamente isto com a guarda e a sonda reais.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_control_com<P: Pacer, W: Write>(
+    rt: &mut ShowRuntime,
+    inicial: Option<(String, ShowDescriptor)>,
+    cfg: &Config,
+    pacer: &mut P,
+    journal: &mut Journal<W>,
+    shutdown: &AtomicBool,
+    cp: &crate::server::ControlPlane,
+    guard: &dyn NetworkGuard,
+    presence: &dyn DevicePresence,
+) -> Outcome {
     use led_daemon::Command;
 
     journal.line(&notice_to_json(pacer.now_ms(), "mode", &modo(cfg, true)));
 
-    let presence = ArtPollPresence;
     let mut stage: Option<Stage> = None;
     let mut duration_ms = 0;
     if let Some((path, desc)) = inicial {
@@ -464,8 +520,7 @@ pub fn run_with_control<P: Pacer, W: Write>(
             Err(()) => return finish(rt, pacer, journal, 0, 0, ExitReason::NeverStarted),
         };
         if cfg.autoplay && cfg.integrity == Integrity::AssumedByOperator {
-            let report =
-                preflight_e_registar(cfg, stage.as_ref(), pacer, journal, &presence);
+            let report = preflight_e_registar(cfg, stage.as_ref(), pacer, journal, guard, presence);
             let _ = rt.apply(Command::Arm(report), pacer.now_ms());
             let _ = rt.apply(Command::Play, pacer.now_ms());
         }
@@ -490,7 +545,12 @@ pub fn run_with_control<P: Pacer, W: Write>(
         // ── Comandos do IPC, aplicados NO LIMITE DO TICK ─────────────────────
         for job in cp.drain_jobs() {
             let now = pacer.now_ms();
-            let (reply, eventos) = apply_ipc(rt, &job.cmd, now, cfg, &mut stage, &presence);
+            let mut notices = Vec::new();
+            let (reply, eventos) =
+                apply_ipc(rt, &job.cmd, now, cfg, &mut stage, guard, presence, &mut notices);
+            for (chave, detalhe) in &notices {
+                journal.line(&notice_to_json(now, chave, detalhe));
+            }
             for e in &eventos {
                 let linha = event_to_json(now, e);
                 journal.line(&linha);
@@ -558,6 +618,7 @@ mod tests {
             integrity: Integrity::AssumedByOperator,
             output: Vec::new(),
             profile: None,
+            assume_no_wifi: false,
         }
     }
 
