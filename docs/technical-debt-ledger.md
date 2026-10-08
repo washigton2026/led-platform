@@ -1733,5 +1733,13 @@ measured: |
   ubuntu-24.04 x86_64 0/500 (0 vacuas). Taxa isolada < ~0,6 % em todas — nao reproduz. A ocorrencia unica foi no
   workspace inteiro sob carga. Nao ha base para Critical nem para fechar; proposta: medicao com carga, ou D-REP
   (a 2.a ocorrencia em qualquer lado → STOP).
+  R6.2 (PR #40 [MEDICAO], fechado sem merge; run 37735914766, d9754d6, 2026-10-08): o teste N=500 por runner COM
+  binarios de teste do workspace a correr em paralelo, carga amostrada por iteracao: macos-26 arm64 0/500 (sob carga
+  498) · ubuntu-24.04-arm aarch64 0/500 (500) · ubuntu-24.04 x86_64 0/500 (499); 0 vacuas; carga viva no fim.
+  Limite: nenhuma volta completa da suite dentro da janela. (A 1.a tentativa, run 37735572443, 0/1500, nao conta:
+  carga sem prova.)
+  ESTADO: EM OBSERVACAO (operador, R7.3, 2026-10-08) — sem mais medicao as cegas. D-REP: a 2.a ocorrencia em
+  qualquer job → STOP com os valores que o diagnostico do PR #39 imprime na falha (beat, timestamp_ms, beat
+  esperado, ultimo publish concluido, iteracao do reader).
 review_by: 2026-10-21
 ```
