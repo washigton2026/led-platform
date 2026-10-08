@@ -105,7 +105,7 @@ cargo test --workspace                  # all suites (1135 tests)
 
 Miri clean (contagens = **testes**, não construções `unsafe`): `audio-core/ring_buffer` (5 testes), **`led-triple`** (7 testes, 0 UB — o crate que hoje detém o `unsafe` do triple buffer; 24 scheduler seeds numa sessão anterior), `led-bridge/adapter` (6 testes, 1M iter — **histórico**: o `led-bridge` já não tem `unsafe` em `src/`).
 Miri **corre na CI**: job `miri (led-triple)`, ubuntu-latest, `nightly-2026-06-02` pinado, **bloqueante** (promovido depois de observado a passar). Cobre as **5 construções `unsafe`** do `led-triple` (3 `unsafe impl` + 2 blocos `unsafe {}`). O step **exige `N > 0`** testes executados — `test result: ok` sozinho é satisfeito por `0 passed; N filtered out`, e sem essa exigência um filtro errado daria verde sem correr nada (KB-012). Execução observada **já com o job bloqueante** (run 35536724237, `2e603c9`): **7 passed · 0 failed · 0 ignored · 0 UB**, 203,77 s, com `miri: 7 testes executados, exit 0` no log. **O que NÃO está coberto** (medido em 2026-09-20 com `rg -n 'unsafe (impl|fn)|unsafe \{' crates/`, triado `src/` vs `tests/`): em produção havia **12 construções `unsafe`** no workspace e **há agora 8** — `led-triple` **5**, `audio-core` **3** (`ring_buffer.rs:24,55,75`). O `led-hal` tinha **4** (`metrics.rs:183,184` + `shared_clock.rs:117,118`, todas `unsafe impl Send/Sync`) e passou a **0**: eram redundantes (os campos já são `Send + Sync`, o compilador deriva-os) e tapavam o `assert_send_sync` dos próprios ficheiros. O mesmo `rg` ainda devolve 12 linhas, porque apanha 4 comentários do `led-hal` que citam o `unsafe impl` — a contagem de construções é 8. Destas, **só as 5 do `led-triple` têm gate de CI**. O `audio-core` corre apenas no `~/lumyx-e2e.sh --miri`, que é opt-in e **não versionado**. O `led-hal` deixou de ter `unsafe` próprio, logo não precisa de Miri por essa razão. `led-bridge` e `led-pixel-engine` **não têm `unsafe` em `src/`** (as suas construções vivem em `tests/no_alloc.rs` e são o alocador contador `GlobalAlloc`).
-Governance: `scripts/audit_gate.py` (KB-012) — 20 TD entries, all **11** closed TDs pass evidence gate. `tests/test_audit_gate.py` 10/10. `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) run on every CI pass.
+Governance: `scripts/audit_gate.py` (KB-012) — medido na `main` 24d5b91 (2026-10-07): **27 TD entries · 16 OK** (15 closed + TD-014 `pending-verification`) · 9 open · 2 wontfix, exit 0. `tests/test_audit_gate.py` **34/34**. Regras do gate: docstring de `scripts/audit_gate.py` (desde o R4.1, `watched:` por conteúdo + região de prova). `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) correm só quando o e2e é corrido à mão — **a CI não corre o e2e**.
 
 | Crate | Status |
 |---|---|
@@ -146,6 +146,26 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-10-06 — R4.1: o audit_gate julga o CONTEÚDO, e o required_test só conta numa região de prova (PR #26)
+
+**Done.** Substitui as regras de 2026-06-19 (*«`required_test:` named test must appear by name»* e
+*«`source_files:` + `git-hash` → stale»*), que deixaram de valer. (a) Cada `source_file` de um TD
+fechado é fixado na evidência por `watched: <path> sha256:<hex>` (só no início da linha); a
+evidência é stale sse o conteúdo atual tiver outro sha256 — **sem git**, por isso um clone raso
+dá o mesmo veredito (fecha o **TD-026**) e uma história sem mudança de conteúdo fica verde (fecha
+o **TD-028**). Ficheiro vigiado ilegível ou inexistente = Critical, nunca «inalterado»;
+`source_file` sem `watched:` = Critical. (b) O `required_test` só é provado dentro de UMA região
+`--- prova ---` … `--- fim da prova ---`: linha estruturada que passou, nenhum FAILED dele, e um
+resumo `N passed; 0 failed` com N>0. O mecanismo antigo do `git-hash:` está morto (a linha
+continua nas evidências como registo, sem efeito no veredito).
+
+**Limites declarados** (docstring do gate): prova que a evidência foi **regenerada**, não que o
+teste foi **re-corrido** — mudar só o sha passa; o gate vigia-se a si próprio; um TD fechado sem
+`source_files` não é vigiado.
+
+**Invariants verified.** `tests/test_audit_gate.py` 34/34 (o gate antigo reprova 19 deles);
+`tests/test_pre_commit_hook.sh` 4/4; CI do #26 lida job a job.
 
 ### 2026-09-19 — D4 Fatia 1(b): o triple buffer vira crate leaf, e dois gates de Miri deixam de ser encenação
 

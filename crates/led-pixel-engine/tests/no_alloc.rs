@@ -29,8 +29,6 @@ use led_pixel_engine::*;
 // **O instrumento não pode alocar**: só atómicos e um `thread_local` com init `const`.
 
 struct Counting;
-/// Alocações da thread do teste — é este o número da asserção.
-static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 /// A janela de medição está aberta?
 static MEDINDO: AtomicBool = AtomicBool::new(false);
 /// Alocações da janela vindas de OUTRAS threads. O contador global antigo somava-as.
@@ -39,6 +37,26 @@ static FORA_DA_THREAD: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
     /// Marca a thread que corre o corpo do teste. `const` para não alocar ao inicializar.
     static E_A_THREAD_DO_TESTE: Cell<bool> = const { Cell::new(false) };
+    /// Alocações contadas NESTA thread enquanto marcada — é este o número da asserção (TD-023,
+    /// R7.2). Nenhuma outra thread escreve aqui: a identidade é a do próprio `thread_local`.
+    static ALLOCS_DESTA_THREAD: Cell<usize> = const { Cell::new(0) };
+}
+
+// O contador era um `AtomicUsize` global que qualquer thread MARCADA incrementava, e a marca
+// nunca era desligada: uma thread de outro teste do mesmo binário, já fora da sua janela mas
+// ainda marcada, entrava na contagem da janela alheia. R6.1 (run 37735453730): 10/10 falhas em
+// macos-26 vieram de OUTRA thread marcada, nenhuma da thread dona. Agora cada thread conta só
+// para si, e quem lê é a própria thread do teste.
+
+/// Soma uma alocação ao contador desta thread. Sem alocar; `try_with` pela mesma razão que
+/// em `registar` (destruição de TLS).
+fn contar_nesta_thread() {
+    let _ = ALLOCS_DESTA_THREAD.try_with(|c| c.set(c.get() + 1));
+}
+
+/// Alocações contadas até agora na thread que chama.
+fn allocs_desta_thread() -> usize {
+    ALLOCS_DESTA_THREAD.with(|c| c.get())
 }
 
 /// Chamada de dentro do alocador: **sem alocar**. `true` se a alocação é da thread do teste.
@@ -55,7 +73,7 @@ fn registar() -> bool {
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         if registar() {
-            ALLOCS.fetch_add(1, Ordering::SeqCst);
+            contar_nesta_thread();
         }
         System.alloc(l)
     }
@@ -64,13 +82,13 @@ unsafe impl GlobalAlloc for Counting {
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         if registar() {
-            ALLOCS.fetch_add(1, Ordering::SeqCst);
+            contar_nesta_thread();
         }
         System.alloc_zeroed(l)
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
         if registar() {
-            ALLOCS.fetch_add(1, Ordering::SeqCst);
+            contar_nesta_thread();
         }
         System.realloc(p, l, n)
     }
@@ -91,6 +109,8 @@ fn abrir_janela() {
 
 fn fechar_janela() {
     MEDINDO.store(false, Ordering::SeqCst);
+    // Desmarcar: fora da janela esta thread deixa de ser «a do teste» (TD-023, R7.2).
+    E_A_THREAD_DO_TESTE.with(|c| c.set(false));
 }
 
 /// Quantas alocações a thread de fundo tem de fazer DENTRO da janela antes de ela fechar.
@@ -122,12 +142,12 @@ fn medir_com_ruido_de_fundo(corpo: impl FnOnce() -> usize) -> (usize, usize) {
 
     let prazo = Instant::now() + Duration::from_secs(60);
     abrir_janela();
-    let antes = ALLOCS.load(Ordering::SeqCst);
+    let antes = allocs_desta_thread();
     let iteracoes = corpo();
     while FORA_DA_THREAD.load(Ordering::SeqCst) < RUIDO_MINIMO && Instant::now() < prazo {
         std::thread::yield_now();
     }
-    let depois = ALLOCS.load(Ordering::SeqCst);
+    let depois = allocs_desta_thread();
     let fora = FORA_DA_THREAD.load(Ordering::SeqCst);
     fechar_janela();
 
@@ -157,9 +177,9 @@ fn exigir_ruido_ignorado(por_thread: usize, global: usize, o_que: &str) {
 fn exigir_que_ve_alocacao_plantada() {
     fn delta(o_que: &str, plantar: impl FnOnce() -> Vec<u8>) {
         abrir_janela();
-        let antes = ALLOCS.load(Ordering::SeqCst);
+        let antes = allocs_desta_thread();
         let plantada = plantar();
-        let depois = ALLOCS.load(Ordering::SeqCst);
+        let depois = allocs_desta_thread();
         fechar_janela();
         // Depois de fechar a janela, para o optimizador não apagar a alocação.
         std::hint::black_box(&plantada);
@@ -278,11 +298,11 @@ fn every_library_effect_renders_without_allocating() {
 
     for (name, fx) in &effects {
         abrir_janela();
-        let before = ALLOCS.load(Ordering::SeqCst);
+        let before = allocs_desta_thread();
         for t in 0..2_000u64 {
             fx.render(t * 7, &positions, &mut out);
         }
-        let after = ALLOCS.load(Ordering::SeqCst);
+        let after = allocs_desta_thread();
         fechar_janela();
         assert_eq!(
             before,
@@ -347,11 +367,11 @@ fn negative_control_an_allocating_effect_is_caught() {
     }
 
     abrir_janela();
-    let before = ALLOCS.load(Ordering::SeqCst);
+    let before = allocs_desta_thread();
     for t in 0..100u64 {
         fx.render(t, &positions, &mut out);
     }
-    let after = ALLOCS.load(Ordering::SeqCst);
+    let after = allocs_desta_thread();
     fechar_janela();
 
     assert!(
@@ -364,4 +384,56 @@ fn negative_control_an_allocating_effect_is_caught() {
 fn o_contador_ainda_ve_o_que_e_alocado_na_thread_do_teste() {
     let _gate = ALLOC_GATE.lock().unwrap_or_else(|e| e.into_inner());
     exigir_que_ve_alocacao_plantada();
+}
+
+/// TD-023 (R7.2) — o caso exato das falhas do R6.1: uma thread MARCADA que não é a do teste
+/// aloca DENTRO da janela. Com o contador global antigo, as alocações dela entravam na contagem
+/// desta thread; agora não podem. Determinístico: sincronização só por atómicos (um `Barrier`
+/// ou `Mutex` podia alocar na thread do teste e sujar a própria medição).
+#[test]
+fn outra_thread_marcada_nao_entra_na_contagem_desta() {
+    use std::sync::Arc;
+    let _gate = ALLOC_GATE.lock().unwrap_or_else(|e| e.into_inner());
+
+    const N: usize = 1_000;
+    let janela_aberta = Arc::new(AtomicBool::new(false));
+    let terminou = Arc::new(AtomicBool::new(false));
+    let outra = {
+        let (janela_aberta, terminou) = (Arc::clone(&janela_aberta), Arc::clone(&terminou));
+        std::thread::spawn(move || {
+            E_A_THREAD_DO_TESTE.with(|c| c.set(true));
+            while !janela_aberta.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            let antes = allocs_desta_thread();
+            for _ in 0..N {
+                std::hint::black_box(vec![0u8; 64]);
+            }
+            let vistas = allocs_desta_thread() - antes;
+            terminou.store(true, Ordering::SeqCst);
+            vistas
+        })
+    };
+
+    abrir_janela();
+    let antes = allocs_desta_thread();
+    janela_aberta.store(true, Ordering::SeqCst);
+    while !terminou.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+    let depois = allocs_desta_thread();
+    fechar_janela();
+
+    let vistas_na_outra = outra.join().unwrap();
+    // Premissa: a outra thread estava mesmo marcada e o instrumento contou-a — para ELA.
+    assert!(
+        vistas_na_outra >= N,
+        "premissa falhou: a thread marcada só contou {vistas_na_outra} de {N} alocações — controlo vacuoso"
+    );
+    assert_eq!(
+        depois - antes,
+        0,
+        "{} alocação(ões) de OUTRA thread marcada entraram na contagem desta thread (TD-023)",
+        depois - antes
+    );
 }

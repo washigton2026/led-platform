@@ -3,7 +3,7 @@
 Canonical source of truth for all tracked debt items. One entry per TD-ID.
 Updates: edit this file + commit. Session ledger (in-chat) must not diverge.
 
-Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
+Last updated: 2026-10-07 (schema alinhado com o audit_gate R4.1 — `watched:` e região de prova)
 
 ---
 
@@ -11,13 +11,19 @@ Last updated: 2026-06-26 (TD-004 closed — wgpu 22.1.0 + real GPU executor)
 - `open`                 — unfixed, work required
 - `diagnosed`            — root cause known, not yet fixed
 - `closed`               — permanently fixed; requires evidence_ref + negative_control (KB-012)
-- `pending-verification` — fix implemented; evidence gate not yet passed (blocks merge)
+- `pending-verification` — fix implemented; evidence gate not yet passed (OK dentro do `review_by`; Critical depois)
 - `wontfix`              — acknowledged, intentionally deferred
 
 ## Closure schema (enforced by scripts/audit_gate.py — KB-012)
 Every `closed` TD MUST have:
   evidence_ref:     path to committed artefact proving the fix (test output, grep, etc.)
   negative_control: description of the run that would FAIL if the fix were absent
+If it has `source_files:`, the evidence pins EACH of them by content, one line each, at the
+start of the line: `watched: <path> sha256:<hex>` (computed when the evidence is generated).
+If it has `required_test:`, the evidence declares ONE proof region (`--- prova ---` …
+`--- fim da prova ---`) with a structured result line for that test (`test [path::]<name> ... ok`
+or `<name>: N passed; 0 failed`, N>0), no FAILED for it, and an `N passed; 0 failed` summary.
+The authoritative rules are the docstring of scripts/audit_gate.py.
 
 ---
 
@@ -868,8 +874,10 @@ context: |
 
   PORQUE CONTINUA `open` E NAO `closed`: o `audit_gate.py` exige, para `closed`, um
   `evidence_ref` que aponte para um ficheiro EXISTENTE com `N passed; 0 failed` e `N > 0`
-  (`scripts/audit_gate.py:163-185`), mais um `git-hash:` de frescura (`:83`). Nao existe
-  `docs/evidence/td-019-*.txt` — a serie salta do `td-016` para nada. A correccao aterrou
+  (regras 2 e 6 do docstring de `scripts/audit_gate.py`), mais linhas `watched:` que fixam o
+  conteudo dos source_files (R4.1; o `git-hash:` deixou de servir de frescura).
+  [2026-10-07] Esta frase sobre a falta de artefacto e anterior a 2026-09-13: hoje existem
+  `docs/evidence/td-019-*.md` e o `evidence_ref` acima aponta para um deles. A correccao aterrou
   em codigo; a PROVA nunca foi capturada. Isto e o gate a funcionar, nao uma omissao:
   neste repositorio `closed` significa "provado fechado com artefacto", nao "acreditamos
   que esta corrigido".
@@ -1439,7 +1447,8 @@ falsification_required: |
   alloc_zeroed e realloc, uma assercao cada) — mutar para devolver sempre false -> vermelho.
   (3) Alocacao injetada no caminho quente -> vermelho.
   Ao fechar: o rename/remocao destes testes nao fica vermelho em nenhum gate (o e2e Inv3/C3 aceita
-  0 testes; required_test e substring e o audit_gate so o verifica com o TD `closed`) — fixar N
+  0 testes; required_test exige linha estruturada que passou desde o R4.1 (#26), mas o audit_gate
+  so o verifica com o TD `closed`) — fixar N
   por binario e os nomes completos na evidencia.
 review_by: 2026-10-12
 ```
@@ -1485,7 +1494,7 @@ severity:  High
 status:    closed
 closed_on: 2026-10-01
 closed_by: "eb791fe (correcao, PR #11) + 7ee2f89 (o teste passa a emitir «test_pre_commit_hook: N passed; M failed» dos contadores reais). Re-medido sobre 7ee2f89: 4 passed; 0 failed, exit 0."
-evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-01.md
+evidence_ref: docs/evidence/td-025-hook-julga-o-indice-2026-10-07.md
 required_test: test_pre_commit_hook
 origin:    "Descrito na mensagem de eb791fe: D1 — o gate lia o ledger do worktree (indice 19 TD / worktree 20 -> «20 OK»); D2 — o stale usava git log <hash>..HEAD, cego as alteracoes em stage (o commit C4, 320ff94, passou o hook)."
 source_files: scripts/pre-commit-hook.sh
@@ -1563,9 +1572,13 @@ review_by: 2026-10-12
 td_id:     TD-027
 title:     "As 3 construcoes `unsafe` do `audio-core` (ring buffer SPSC) nao estao sob Miri na CI; a unica via e um script opt-in fora do repositorio"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-10-05
+closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-08.md
+required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
-source_files: crates/audio-core/src/ring_buffer.rs
+source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml
 context: |
   crates/audio-core/src/ring_buffer.rs:24 (`unsafe impl Sync`), :55 e :75 (blocos `unsafe`).
   .github/workflows/ci.yml:202 — o job `miri` corre so `cargo +nightly-2026-06-02 miri test
@@ -1583,6 +1596,12 @@ required_fix: |
 falsification_required: |
   Com o gate ligado: violar a disciplina SPSC do ring buffer (mutacao) -> Miri reporta UB e
   o job reprova; revertida -> verde com N > 0.
+negative_control: |
+  PR #22 [NEG-CTL] (fechado sem merge), headSha a29451a: `self.write.load(Ordering::Acquire)` ->
+  `Ordering::Relaxed` em crates/audio-core/src/ring_buffer.rs. Run 37236379756, job 111536190663,
+  mesmo toolchain pinado (rustc 1.98.0-nightly 6bdf43094): o passo do audio-core reprovou com
+  «Undefined Behavior: Data race detected» em spsc_stress_no_loss_or_reorder_under_threads,
+  exit 1, 0 `error[E` (vermelho do Miri, nao de compilacao). Excerto no evidence_ref, sec. 2.
 review_by: 2026-10-12
 ```
 
@@ -1677,4 +1696,42 @@ falsification_required: |
   guarda injectada: ProbeUnavailable → network_ok false (reprova com o codigo actual, preflight.rs:156); com a flag de
   override → true e a linha no journal. Os dois a correr no job ubuntu, com N_executado == N_esperado.
 review_by: 2026-10-31
+```
+
+---
+
+## TD-030 — O detetor de coerência do TD-002 disparou em arm64 (macos-26): «coherence violated 1 times»
+
+```yaml
+td_id:     TD-030
+title:     "audioshare_scalars_beat_timestamp_coherent_under_concurrency (o detetor do TD-002, closed) reprovou uma vez no runner macos-26-arm64: uma snapshot de AudioShare::scalars() com beat e timestamp_ms incoerentes"
+severity:  High
+severity_note: "PROVISORIA (operador, 2026-10-07): passa a Critical se a reproducao confirmar incoerencia real — o render podia ver o beat de um publish e o timestamp de outro (BeatFlash errado)."
+status:    open
+origin:    "PR #30 (R4.6, so a etiqueta da imagem macOS mudou), run 37585504571, job 112674573237 `test (macos-26)`, Image macos-26-arm64 20260907.0351.1 (a mesma do macos-latest): `panicked at crates/led-pixel-engine/src/reactive.rs:474:9: coherence violated 1 times: beat/timestamp_ms from different publishes`. Nao repetido (STOP, 2026-10-07). Unica ocorrencia conhecida; o teste passou em todas as runs anteriores lidas."
+source_files: crates/led-pixel-engine/src/reactive.rs
+context: |
+  Leitura (R5.1 passo A, origin/main bc7991f) — NENHUMA das hipoteses de defeito no codigo se confirma:
+  H4 um so `load()` por `scalars()` (reactive.rs:101-103, `*self.scalars.load().as_ref()`);
+  H5 todos os escalares publicados numa so struct (`publish`, :81-91; o `spectrum` esta num RwLock a parte e nao entra
+     em `scalars()`);
+  H6 o reader do teste usa UMA snapshot por verificacao (:460-466);
+  H2 o estado inicial (ts=0, beat=false) esta excluido por `timestamp_ms > 0`.
+  O fecho do TD-002 (2026-06-19) foi verificado so em x86_64 (macOS Intel local); o Miri correu so o subset simples.
+  arc-swap 1.9.1 (Cargo.lock). Hipoteses abertas: ordenacao de memoria em arm64 (no arc-swap ou na leitura da struct
+  pelo Guard), ou um defeito do proprio teste que a leitura nao viu.
+impact: |
+  Se for real: em arm64 (Apple Silicon, Raspberry Pi 5, nos ARM) o render pode ler beat e timestamp de publishes
+  diferentes — o defeito exato que o TD-002 fechou em x86. O rig de producao e x86/Linux hoje; o macOS de autoria e arm64.
+required_fix: |
+  Medir primeiro (R5.1 passo B: o teste em ciclo, N=500, macos-26 arm64 · ubuntu-24.04 x86 · ubuntu-24.04-arm). Se a
+  taxa > 0 em arm64 e 0 em x86 → incoerencia real → accept da correcao (contrato canonico + hot-path = area protegida)
+  antes de tocar no codigo. Se 0 em todas → registar a taxa e decidir (flake raro vs defeito raro).
+measured: |
+  R5.1 passo B (PR #34 [MEDICAO], fechado sem merge; run 37679978773): o teste ISOLADO, binario compilado uma vez,
+  N=500 por runner, premissa 1 teste/iteracao: macos-26 arm64 0/500 · ubuntu-24.04-arm aarch64 0/500 ·
+  ubuntu-24.04 x86_64 0/500 (0 vacuas). Taxa isolada < ~0,6 % em todas — nao reproduz. A ocorrencia unica foi no
+  workspace inteiro sob carga. Nao ha base para Critical nem para fechar; proposta: medicao com carga, ou D-REP
+  (a 2.a ocorrencia em qualquer lado → STOP).
+review_by: 2026-10-21
 ```
