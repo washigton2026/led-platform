@@ -1,0 +1,55 @@
+# [MEDIÇÃO] TD-030 — NÃO MERGEAR. Ramo descartável measure/td-030-carga (ordem R6.2 b).
+# O detetor de coerência do TD-002, N=500, ENQUANTO a suite completa do workspace corre em ciclo
+# noutro processo (carga real), em arm64 (macos-26, ubuntu-24.04-arm) e x86_64 (ubuntu-24.04).
+# Exit por iteração sem pipe; premissa 1 teste/iteração; cada falha imprime o diagnóstico.
+name: measure-td030-carga
+
+on:
+  pull_request:
+
+jobs:
+  coerencia-carga:
+    name: td030 carga (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04-arm, ubuntu-24.04]
+    env:
+      N: 500
+      TESTE: reactive::adversarial_tests::audioshare_scalars_beat_timestamp_coherent_under_concurrency
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio no Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Compilar tudo (uma vez)
+        shell: bash {0}
+        run: |
+          uname -a; uname -m
+          cargo test --workspace --locked --no-run > build.log 2>&1 || { tail -30 build.log; exit 1; }
+          cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > b.json 2>/dev/null
+          BIN=$(grep -o '"executable":"[^"]*"' b.json | grep led_pixel_engine | head -1 | sed 's/"executable":"//; s/"$//')
+          echo "BIN=$BIN" >> "$GITHUB_ENV"; echo "binário: $BIN"
+      - name: Ciclo N=500 com a suite do workspace em paralelo
+        shell: bash {0}
+        run: |
+          ( while true; do cargo test --workspace --locked -q > /dev/null 2>&1; done ) &
+          CARGA=$!
+          falhas=0; vacuas=0
+          for i in $(seq 1 "$N"); do
+            "$BIN" --exact "$TESTE" > it.txt 2>&1
+            code=$?
+            n=$(sed -nE 's/^test result: [a-zA-Z]+\. ([0-9]+) passed; ([0-9]+) failed.*/\1+\2/p' it.txt | head -1)
+            [ "$(( ${n:-0} ))" -eq 1 ] || vacuas=$((vacuas+1))
+            if [ "$code" -ne 0 ]; then
+              falhas=$((falhas+1))
+              echo "::warning::iteração $i FALHOU (exit $code)"
+              grep -aE 'coherence violated|panicked' it.txt | head -3
+            fi
+          done
+          kill $CARGA 2>/dev/null; pkill -f 'cargo test' 2>/dev/null
+          echo "RESULTADO td030-carga os=${{ matrix.os }} arch=$(uname -m) N=$N falhas=$falhas vacuas=$vacuas"
+          [ "$vacuas" -eq 0 ] || { echo "premissa falhou"; exit 1; }
