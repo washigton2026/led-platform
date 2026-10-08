@@ -107,10 +107,10 @@ fn preflight_e_registar<P: Pacer, W: Write>(
         cfg.assume_no_wifi,
     );
     let t = pacer.now_ms();
-    for (chave, detalhe) in &pf.notices {
+    for (chave, detalhe) in pf.notices() {
         journal.line(&notice_to_json(t, chave, detalhe));
     }
-    pf.report
+    pf.report()
 }
 
 /// Abre o palco, se houver saída configurada. Falhar aqui é **não arrancar**: um show que não
@@ -430,8 +430,8 @@ fn apply_ipc(
             // D4 (TD-029): até aqui este caminho deitava fora TODAS as notices do pré-voo —
             // incluindo o `network_unverified`. Passam ao laço, que as escreve no journal com o
             // mesmo `notice_to_json` do arranque: nenhum tipo nem campo novo no JSONL.
-            notices.extend(pf.notices);
-            let report = pf.report;
+            let (report, das_sondas) = pf.em_partes();
+            notices.extend(das_sondas);
             match rt.apply(Command::Arm(report), now) {
                 Ok(evs) => eventos.extend(evs),
                 Err(rej) => {

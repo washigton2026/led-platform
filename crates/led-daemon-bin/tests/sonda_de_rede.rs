@@ -751,54 +751,117 @@ fn aviso_no_arranque(args: &[&str]) {
     assert!(a_tempo, "o aviso tem de sair no arranque, com o processo ainda a correr ({args:?})");
 }
 
-/// Guarda que devolve um resultado fixo (vários payloads por variante).
-struct GuardaFixa(Result<(), NetworkPolicyError>);
+/// Guarda que devolve um resultado fixo, com um nome à escolha (os REAIS incluídos — N2, N4).
+struct GuardaFixa(Result<(), NetworkPolicyError>, &'static str);
 impl NetworkGuard for GuardaFixa {
     fn check(&self) -> Result<(), NetworkPolicyError> {
         self.0.clone()
     }
     fn name(&self) -> &'static str {
-        "guarda-fixa"
+        self.1
     }
 }
 
-/// **Ronda 10 (B1/B2/B3/MP9): o EFEITO no binário é, caso a caso, o que `decidir_rede` decide.**
-/// Por tabela — cada variante com vários payloads × flag on/off — nos dois caminhos de produção que
-/// correm o pré-voo (modo CLI `run_com` e `load` por IPC): arma sse `decidir_rede(..).network_ok`.
-/// Um segundo decisor em qualquer sítio (reescrever `network_ok`, alias do enum, ponteiro de função)
-/// muda o efeito numa linha da tabela e reprova aqui, seja qual for a grafia.
+/// O que cada variante × flag TEM de fazer — escrito à mão (D1–D3, ADR-0005), não recalculado
+/// pelo decisor: comparar com `decidir_rede` era tautológico (ronda 11).
+fn arma_esperado(r: &Result<(), NetworkPolicyError>, flag: bool) -> bool {
+    match r {
+        Ok(()) => true,
+        Err(NetworkPolicyError::WifiActive { .. }) => false,
+        Err(NetworkPolicyError::ProbeUnavailable { .. }) => true,
+        Err(NetworkPolicyError::ProbeFailed { .. }) => flag,
+    }
+}
+
+/// **O EFEITO no binário, caso a caso, com os payloads e os nomes de guarda REAIS** (ronda 11:
+/// N1, N2, N3, N4, N5, N8, N9), nos dois caminhos de produção que correm o pré-voo — modo CLI
+/// (`run_com`) e `load` por IPC: arma sse a tabela escrita à mão o diz.
 #[test]
-fn o_efeito_no_cli_e_no_ipc_e_o_que_decidir_rede_decide() {
-    use led_daemon_bin::preflight::decidir_rede;
+fn o_efeito_no_cli_e_no_ipc_segue_a_tabela_com_textos_e_nomes_reais() {
     let mut resultados: Vec<Result<(), NetworkPolicyError>> = vec![Ok(())];
-    for i in [vec!["en0"], vec!["wlan0"], vec!["wlp2s0", "en0"]] {
+    for i in [vec!["en0"], vec!["wlan0"], vec!["wlx00c0ca123456"]] {
         resultados.push(Err(NetworkPolicyError::WifiActive { interfaces: i.iter().map(|s| s.to_string()).collect() }));
     }
-    for r in ["SO nao suportado", "freebsd"] {
-        resultados.push(Err(NetworkPolicyError::ProbeUnavailable { reason: r.into() }));
-    }
-    for (pr, er) in [("networksetup -listallhardwareports", "exit status 1"), ("sysfs /sys/class/net", "EACCES")] {
+    resultados.push(Err(NetworkPolicyError::ProbeUnavailable {
+        reason: "unsupported platform 'freebsd' — WiFi check not implemented".into(),
+    }));
+    for (pr, er) in [
+        ("networksetup -listallhardwareports", "exit status exit status: 1"),
+        ("sysfs /sys/class/net", "/sys/class/net not found"),
+        ("sysfs /sys/class/net", "read_dir: Permission denied (os error 13)"),
+    ] {
         resultados.push(Err(NetworkPolicyError::ProbeFailed { probe: pr, error: er.into() }));
     }
+    let nomes = ["WifiBlockGuard (WiFi-forbidden enforcement)", "guarda-fixa"];
     let show = escrever("td029-tabela.lumyx");
     let mut casos = 0;
     for (n, r) in resultados.into_iter().enumerate() {
         for flag in [false, true] {
-            let esperado = decidir_rede(&r, "guarda-fixa", flag).network_ok;
-            let guarda: &'static GuardaFixa = Box::leak(Box::new(GuardaFixa(r.clone())));
+            let esperado = arma_esperado(&r, flag);
+            let nome = nomes[(n + flag as usize) % 2];
+            let guarda: &'static GuardaFixa = Box::leak(Box::new(GuardaFixa(r.clone(), nome)));
             // Modo CLI.
             let (j, o) = correr_cli_com_outcome(&format!("td029-tab-{n}-{flag}.lumyx"), flag, guarda);
             let armou = o.reason != led_daemon_bin::ExitReason::NeverStarted;
-            assert_eq!(armou, esperado, "CLI: {r:?} flag={flag} → {o:?}\n{j}");
+            assert_eq!(armou, esperado, "CLI: {r:?} guarda={nome} flag={flag} → {o:?}\n{j}");
             // load por IPC.
             let d = Daemon::subir_com(&format!("tab-{n}-{flag}"), cfg(flag, false), None, guarda);
             let (mut s, mut rd) = d.cliente();
             pedir(&mut s, &mut rd, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
             let resp = pedir(&mut s, &mut rd, &load(&show, 2));
             let j = d.parar();
-            assert_eq!(resp.contains(r#""ok":true"#), esperado, "IPC: {r:?} flag={flag} → {resp}\n{j}");
+            assert_eq!(resp.contains(r#""ok":true"#), esperado, "IPC: {r:?} guarda={nome} flag={flag} → {resp}\n{j}");
             casos += 1;
         }
     }
     assert_eq!(casos, 16, "8 resultados × 2 flags");
+}
+
+/// Guarda cujo resultado MUDA a cada consulta, pela ordem dada (a última repete-se).
+struct GuardaEmSequencia {
+    resultados: Vec<Result<(), NetworkPolicyError>>,
+    consultas: std::sync::atomic::AtomicUsize,
+}
+impl NetworkGuard for GuardaEmSequencia {
+    fn check(&self) -> Result<(), NetworkPolicyError> {
+        let i = self.consultas.fetch_add(1, Ordering::SeqCst);
+        self.resultados[i.min(self.resultados.len() - 1)].clone()
+    }
+    fn name(&self) -> &'static str {
+        "guarda-em-sequencia"
+    }
+}
+
+/// **Uma decisão POR `load` (R7.1, N7):** dois `load` no MESMO daemon, com `unload` entre eles,
+/// e a guarda a mudar de resultado entre os dois — o 2.º load reflete o 2.º resultado, nas duas
+/// ordens. Uma memória «a rede já esteve OK nesta sessão» (ou «já falhou») reprova aqui.
+#[test]
+fn cada_load_decide_com_o_resultado_da_sua_propria_sonda() {
+    let falhou = || Err(NetworkPolicyError::ProbeFailed { probe: "sysfs /sys/class/net", error: "/sys/class/net not found".into() });
+    let show = escrever("td029-por-load.lumyx");
+    for (nome, primeiro, segundo, arma1, arma2) in [
+        ("ok-depois-falha", Ok(()), falhou(), true, false),
+        ("falha-depois-ok", falhou(), Ok(()), false, true),
+    ] {
+        let guarda: &'static GuardaEmSequencia = Box::leak(Box::new(GuardaEmSequencia {
+            resultados: vec![primeiro, segundo],
+            consultas: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let d = Daemon::subir_com(&format!("por-load-{nome}"), cfg(false, false), None, guarda);
+        let (mut s, mut r) = d.cliente();
+        pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+        let r1 = pedir(&mut s, &mut r, &load(&show, 2));
+        assert_eq!(r1.contains(r#""ok":true"#), arma1, "{nome}: 1.º load → {r1}");
+        let u = pedir(&mut s, &mut r, r#"{"v":1,"id":3,"cmd":"unload"}"#);
+        // Premissa: o 2.º load só é decidido pelo pré-voo se o 1.º show saiu (sem isto, o 2.º era
+        // recusado pela máquina de estados e o teste passava vacuamente — ronda 11, ORC N7).
+        assert!(u.contains(r#""ok":true"#), "{nome}: unload → {u}");
+        let r2 = pedir(&mut s, &mut r, &load(&show, 4));
+        let j = d.parar();
+        assert_eq!(guarda.consultas.load(Ordering::SeqCst), 2, "{nome}: uma consulta à guarda POR load:\n{j}");
+        assert_eq!(r2.contains(r#""ok":true"#), arma2, "{nome}: 2.º load → {r2}\n{j}");
+        let ultima = if arma2 { "network_checked" } else { "network_probe_failed" };
+        assert_eq!(j.lines().rfind(|l| l.contains("network_")).map(|l| l.contains(ultima)), Some(true),
+                   "{nome}: a última linha de rede do journal é a do 2.º load:\n{j}");
+    }
 }
