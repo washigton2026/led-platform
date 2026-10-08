@@ -1768,6 +1768,21 @@ progress: |
   LIMITE (stop condition do R7.1, reportado): o `network_ok` acaba em `led_daemon::PreflightReport` (campos `pub`,
   `all_clear()` publico; congelado na GS1.6/ADR-0023) — quem tem um `PreflightReport` em maos pode altera-lo antes
   do `Arm`. Fechar isso por tipos exige mudar a API do led-daemon: decisao do operador.
+  RONDA 12 (2026-10-08, 23eab37): N1–N9 todos mortos (N1T/N2T/N3T/N9T e N4T/N8T nao compilam). FALSE_GREEN com 6
+  sobreviventes DENTRO, nenhum via PreflightReport.
+  DECISAO DO OPERADOR (R8.2, 2026-10-08): o #32 entra como CORRECAO DE SEGURANCA (a main tem hoje o fail-open:
+  ProbeFailed prosseguia); o TD-029 CONTINUA OPEN. RESIDUAIS DECLARADOS:
+  - NV1: no ramo `supports_discovery:false`, `Preflight::sem_fio_a_proteger` (network_ok=true sem DecisaoRede)
+    substitui `com_rede` depois de uma decisao que bloqueou — a fechar no R8.5;
+  - NV2: `preflight()` ainda ve o texto do erro (`medido`) e pode decidir por ele — a fechar no R8.5;
+  - NV3: com >1 alvo (o rig real tem 5) + SondaFalhou, `sem_fio_a_proteger` — os testes usam 1 alvo — R8.5;
+  - NV4: `notices_da_rede` recebe o nome da guarda e pode omitir `network_override_unused` (o journal mente) — R8.5;
+  - NV7: o aviso em stderr pode sair vazio com >1 alvo (o estrutural aceita `eprintln!` vazio) — R8.5;
+  - NV10: `preflight_e_registar` pode refazer `preflight(.., assume_no_wifi=true)` sem a flag (override fabricado;
+    2 consultas a guarda que o contador textual nao ve) — R8.5;
+  - NV8 (e N7 na mesma classe): escrever `network_ok` num `PreflightReport` antes do `Arm` — ACEITE pelo operador
+    (ADR-0023 congelado; N7 apanhado por `cada_load_decide_com_o_resultado_da_sua_propria_sonda`);
+  - MF9 (wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9) — fora da fronteira, como nas rondas 9/10.
 review_by: 2026-10-31
 ```
 
