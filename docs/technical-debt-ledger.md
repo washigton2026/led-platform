@@ -1756,6 +1756,18 @@ progress: |
   discriminavel com injecao no binario, proibida; o e2e por tabela cobre run_com/run_with_control_com, nao os
   wrappers que escolhem a guarda real) e o fio IPC/D4 (MW9a–d, MC9: subscritores em loads recusados, eventos depois
   do show_loaded, campo novo na resposta com sonda OK, codigo de recusa novo, serializador sem escape de `\`).
+  RONDA 11 (2026-10-08, 060f232): FALSE_GREEN, 9 sobreviventes DENTRO (N1–N9: decisao pelo texto do erro, pelo nome
+  da guarda, por `wlx*`, pelo texto de «SO nao suportado»; 2.o decisor em preflight()/apply_ipc/UFCS; aviso no stdout).
+  R7.1 (decisao do operador: PROVA POR TIPOS, NAO POR TEXTO): `preflight::politica_rede` — entrada de `decidir_rede`
+  so `Sonda` (enum sem campos) × `wifi_ativo: bool` × `assume_no_wifi: bool`; `classificar` reduz o resultado da
+  guarda a isso descartando o payload; `DecisaoRede` com campos privados e sem construtor publico; os textos vao para
+  o journal por `notices_da_rede`, que so le a decisao; `Preflight` (modulo `relatorio`) com campos privados, o
+  `network_ok` com fio so vem de uma `DecisaoRede`. Testes: tabela exaustiva 3×2×2=12; payloads e nomes de guarda
+  REAIS (pre-voo 12×3×2 e e2e CLI+IPC 8×2, com o esperado escrito a mao); dois `load` no mesmo daemon com a guarda a
+  mudar entre eles (nas duas ordens); stderr e stdout em pipes separados. O estrutural fica como reforco.
+  LIMITE (stop condition do R7.1, reportado): o `network_ok` acaba em `led_daemon::PreflightReport` (campos `pub`,
+  `all_clear()` publico; congelado na GS1.6/ADR-0023) — quem tem um `PreflightReport` em maos pode altera-lo antes
+  do `Arm`. Fechar isso por tipos exige mudar a API do led-daemon: decisao do operador.
 review_by: 2026-10-31
 ```
 
