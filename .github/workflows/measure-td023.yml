@@ -1,0 +1,56 @@
+# [MEDIÇÃO] TD-023 — NÃO MERGEAR. Ramo descartável measure/td-023-recorrencia (ordem R6.1).
+#
+# Corre o binário `led-hal/tests/no_alloc` INTEIRO (os 4 testes, threads normais do libtest —
+# a hipótese H3 é interferência entre testes, por isso não se isola com --exact) N=500 vezes,
+# ENQUANTO a suite do workspace corre em ciclo noutro processo (carga real). Exit lido sem pipe;
+# cada falha imprime o diagnóstico do teste (tamanho, alinhamento, entrada, thread dona/outra).
+name: measure-td023
+
+on:
+  pull_request:
+
+jobs:
+  recorrencia:
+    name: td023 recorrencia (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04]
+    env:
+      N: 500
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio no Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Compilar tudo (uma vez)
+        shell: bash {0}
+        run: |
+          uname -a; uname -m
+          cargo test --workspace --locked --no-run > build.log 2>&1 || { tail -30 build.log; exit 1; }
+          cargo test -p led-hal --test no_alloc --locked --no-run --message-format=json > b.json 2>/dev/null
+          BIN=$(grep -o '"executable":"[^"]*no_alloc[^"]*"' b.json | head -1 | sed 's/"executable":"//; s/"$//')
+          echo "BIN=$BIN" >> "$GITHUB_ENV"; echo "binário: $BIN"
+      - name: Ciclo N=500 com carga
+        shell: bash {0}
+        run: |
+          ( while true; do cargo test --workspace --locked -q > /dev/null 2>&1; done ) &
+          CARGA=$!
+          falhas=0; vacuas=0
+          for i in $(seq 1 "$N"); do
+            "$BIN" > it.txt 2>&1
+            code=$?
+            n=$(sed -nE 's/^test result: [a-zA-Z]+\. ([0-9]+) passed; ([0-9]+) failed.*/\1+\2/p' it.txt | head -1)
+            [ "$(( ${n:-0} ))" -eq 4 ] || vacuas=$((vacuas+1))
+            if [ "$code" -ne 0 ]; then
+              falhas=$((falhas+1))
+              echo "::warning::iteração $i FALHOU (exit $code)"
+              grep -aE 'FAILED|allocated|diagnostico' it.txt | head -6
+            fi
+          done
+          kill $CARGA 2>/dev/null; pkill -f 'cargo test' 2>/dev/null
+          echo "RESULTADO td023 os=${{ matrix.os }} arch=$(uname -m) N=$N falhas=$falhas vacuas=$vacuas"
+          [ "$vacuas" -eq 0 ] || { echo "premissa falhou: iterações sem exatamente 4 testes"; exit 1; }
