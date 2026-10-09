@@ -38,9 +38,10 @@ pub struct Config {
     /// vêm protocolo, ordem de canais, universos, MTU e heartbeat.
     pub profile: Option<String>,
     /// `--assume-no-wifi` (TD-029): o operador AFIRMA que não há WiFi ativo quando a sonda de
-    /// uma plataforma suportada **falhou**. Só pela CLI, por execução — nunca por omissão nem
-    /// por ficheiro. Nunca desbloqueia WiFi **ativo**; cada pré-voo que a use fica no journal.
-    pub assume_no_wifi: bool,
+    /// uma plataforma suportada **falhou**. É um TOKEN que só o parser da CLI cria (R8.5, NV10):
+    /// nenhum código o fabrica nem o força. Nunca desbloqueia WiFi **ativo**; cada pré-voo que o
+    /// use fica no journal.
+    pub assume_no_wifi: Option<crate::preflight::AssumeNoWifi>,
 }
 
 impl Default for Config {
@@ -53,7 +54,7 @@ impl Default for Config {
             integrity: Integrity::NotVerified,
             output: Vec::new(),
             profile: None,
-            assume_no_wifi: false,
+            assume_no_wifi: None,
         }
     }
 }
@@ -104,7 +105,7 @@ fn preflight_e_registar<P: Pacer, W: Write>(
         stage.map(|s| s.output().config()),
         guard,
         presence,
-        cfg.assume_no_wifi,
+        cfg.assume_no_wifi.as_ref(),
     );
     let t = pacer.now_ms();
     for (chave, detalhe) in pf.notices() {
@@ -425,7 +426,7 @@ fn apply_ipc(
                 stage.as_ref().map(|s| s.output().config()),
                 guard,
                 presence,
-                cfg.assume_no_wifi,
+                cfg.assume_no_wifi.as_ref(),
             );
             // D4 (TD-029): até aqui este caminho deitava fora TODAS as notices do pré-voo —
             // incluindo o `network_unverified`. Passam ao laço, que as escreve no journal com o
@@ -618,7 +619,7 @@ mod tests {
             integrity: Integrity::AssumedByOperator,
             output: Vec::new(),
             profile: None,
-            assume_no_wifi: false,
+            assume_no_wifi: None,
         }
     }
 

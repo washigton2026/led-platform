@@ -35,7 +35,7 @@
 
 use crate::loader::Integrity;
 use crate::output::OutputConfig;
-use led_hal::{NetworkGuard, NetworkPolicyError};
+use led_hal::NetworkGuard;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -84,25 +84,63 @@ impl DevicePresence for ArtPollPresence {
     }
 }
 
-pub use politica_rede::{classificar, decidir_rede, DecisaoRede, Sonda, Veredito};
+pub use medicao::Detalhe;
+pub use override_da_cli::AssumeNoWifi;
+pub use politica_rede::{decidir_rede, DecisaoRede, Fio, Sonda, Veredito};
 pub use relatorio::Preflight;
 
-/// **A política de rede do pré-voo (D1–D3 do TD-029), provada por TIPOS (R7.1).**
+/// **O override do operador como TOKEN (TD-029, R8.5 — NV10).**
+///
+/// `--assume-no-wifi` deixa de ser um `bool` que qualquer código pode pôr a `true`: é um valor
+/// de um tipo sem campos públicos, e o seu ÚNICO construtor lê um argumento da linha de
+/// comando. O pré-voo recebe-o (`Option<&AssumeNoWifi>`) e não o pode fabricar nem forçar.
+pub mod override_da_cli {
+    /// O operador passou `--assume-no-wifi` NESTA execução.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct AssumeNoWifi {
+        _so_pela_cli: (),
+    }
+
+    impl AssumeNoWifi {
+        /// O único construtor. `Some` sse um dos argumentos é exatamente `--assume-no-wifi`.
+        /// Em produção é chamado só pelo parser da CLI (`main.rs`), com o argumento que leu.
+        pub fn da_linha_de_comando<S: AsRef<str>>(argv: &[S]) -> Option<Self> {
+            argv.iter()
+                .any(|a| a.as_ref() == "--assume-no-wifi")
+                .then_some(AssumeNoWifi { _so_pela_cli: () })
+        }
+    }
+}
+
+/// **A política de rede do pré-voo (D1–D3 do TD-029), provada por TIPOS (R7.1, R8.5).**
 ///
 /// Módulo próprio de propósito: a privacidade do Rust é por módulo, e é ela a prova.
-/// - A ENTRADA de [`decidir_rede`] são só enums sem campos e `bool`s: nenhuma `String`, nome de
-///   interface, nome de guarda ou texto de erro chega ao decisor, por isso nenhum deles pode
-///   mudar a decisão (ronda 11: N1, N2, N3, N9).
-/// - A SAÍDA, [`DecisaoRede`], tem campos privados e nenhum construtor público: fora deste
-///   módulo ninguém fabrica nem altera uma decisão (N4, N5, N8 escreviam `network_ok`).
-/// - Os textos (interfaces, razão, sonda, erro, nome da guarda) vão para o journal por um
-///   caminho SEPARADO, [`notices_da_rede`], que lê a decisão e nunca a escreve.
+/// - A ENTRADA de [`decidir_rede`] são só enums sem campos, um `bool` e o token do override:
+///   nenhum texto chega ao decisor (N1, N2, N3, N9).
+/// - «Sem fio a proteger» é uma ENTRADA ([`Fio`]), não um atalho: não há outro caminho para um
+///   `network_ok` (NV1, NV3).
+/// - A SAÍDA, [`DecisaoRede`], tem campos privados e nenhum construtor público.
+/// - As CHAVES do journal são função só do [`Veredito`] ([`Veredito::chaves`]); os textos vêm
+///   do [`Detalhe`] opaco, noutro módulo.
 pub mod politica_rede {
-    use led_hal::NetworkPolicyError;
+    use super::AssumeNoWifi;
+
+    /// Há fio a proteger?
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub enum Fio {
+        /// Sem `--output`: nenhum frame deixa o processo (vacuidade do GS2).
+        SemSaida,
+        /// Todos os alvos em loopback: nenhum datagrama atravessa interface.
+        SoLoopback,
+        /// Pelo menos um alvo de rede: o ADR-0005 aplica-se.
+        Rede,
+    }
 
     /// O que a sonda de WiFi conseguiu fazer — sem payload.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
     pub enum Sonda {
+        /// A guarda não foi consultada (sem fio a proteger).
+        NaoConsultada,
         /// Mediu (e diz se há WiFi ativo no `bool` ao lado).
         Mediu,
         /// Não há sonda para esta plataforma (D1, ADR-0005 «Consequências»).
@@ -111,21 +149,34 @@ pub mod politica_rede {
         Falhou,
     }
 
-    /// O que a política decidiu — sem payload. Escolhe as chaves do journal.
+    /// O que a política decidiu — sem payload.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Veredito {
-        /// `network_checked`.
+        SemSaida,
+        Loopback,
         Verificado,
-        /// `network_checked` + `network_override_unused` (D2(b)).
         VerificadoFlagSemEfeito,
-        /// `network_refused` (ADR-0005).
         WifiAtivo,
-        /// `network_unverified` (D1).
         NaoVerificado,
-        /// `network_probe_failed` (D3).
         SondaFalhou,
-        /// `network_assumed_by_operator` (D2).
         AfirmadoPeloOperador,
+    }
+
+    impl Veredito {
+        /// As chaves do journal deste veredito, por ordem. Só daqui — o caminho dos textos
+        /// escreve o detalhe de cada uma, mas não escolhe quais saem (NV4).
+        pub fn chaves(self) -> &'static [&'static str] {
+            match self {
+                Veredito::SemSaida => &["preflight_vacuous"],
+                Veredito::Loopback => &["network_local"],
+                Veredito::Verificado => &["network_checked"],
+                Veredito::VerificadoFlagSemEfeito => &["network_checked", "network_override_unused"],
+                Veredito::WifiAtivo => &["network_refused"],
+                Veredito::NaoVerificado => &["network_unverified"],
+                Veredito::SondaFalhou => &["network_probe_failed"],
+                Veredito::AfirmadoPeloOperador => &["network_assumed_by_operator"],
+            }
+        }
     }
 
     /// A decisão. Campos privados, sem construtor público: só [`decidir_rede`] a cria.
@@ -150,96 +201,128 @@ pub mod politica_rede {
         }
     }
 
-    /// **O único decisor.** Função pura e total sobre `Sonda × wifi_ativo × assume_no_wifi`.
+    /// **O único decisor.** Função pura e total sobre `Fio × Sonda × wifi_ativo × override`.
     ///
-    /// - WiFi ativo → bloqueia SEMPRE, com ou sem flag (ADR-0005).
-    /// - Mediu sem WiFi → verificado; com a flag, `network_override_unused` (D2(b)).
-    /// - Não suportada → prossegue com aviso, igual com ou sem flag (D1).
-    /// - Falhou → bloqueia; com a flag, prossegue e o override fica usado (D2, D3).
-    pub fn decidir_rede(sonda: Sonda, wifi_ativo: bool, assume_no_wifi: bool) -> DecisaoRede {
+    /// - WiFi ativo → bloqueia SEMPRE, com ou sem override (ADR-0005).
+    /// - Sem saída / só loopback → `network_ok` vacuoso, verdadeiro e dito como tal.
+    /// - Rede: mediu sem WiFi → verificado (com o override: `network_override_unused`, D2(b));
+    ///   não suportada → prossegue com aviso (D1); falhou → bloqueia, salvo override (D2, D3);
+    ///   não consultada com fio → bloqueia sempre (não há medição que o override possa suprir).
+    pub fn decidir_rede(
+        fio: Fio,
+        sonda: Sonda,
+        wifi_ativo: bool,
+        override_da_cli: Option<&AssumeNoWifi>,
+    ) -> DecisaoRede {
         use Veredito::*;
-        let (network_ok, override_usado, veredito) = match (sonda, wifi_ativo, assume_no_wifi) {
-            (_, true, _) => (false, false, WifiAtivo),
-            (Sonda::Mediu, false, false) => (true, false, Verificado),
-            (Sonda::Mediu, false, true) => (true, false, VerificadoFlagSemEfeito),
-            (Sonda::NaoSuportada, false, _) => (true, false, NaoVerificado),
-            (Sonda::Falhou, false, false) => (false, false, SondaFalhou),
-            (Sonda::Falhou, false, true) => (true, true, AfirmadoPeloOperador),
+        let afirma = override_da_cli.is_some();
+        let (network_ok, override_usado, veredito) = match (fio, sonda, wifi_ativo, afirma) {
+            (_, _, true, _) => (false, false, WifiAtivo),
+            (Fio::SemSaida, _, false, _) => (true, false, SemSaida),
+            (Fio::SoLoopback, _, false, _) => (true, false, Loopback),
+            (Fio::Rede, Sonda::Mediu, false, false) => (true, false, Verificado),
+            (Fio::Rede, Sonda::Mediu, false, true) => (true, false, VerificadoFlagSemEfeito),
+            (Fio::Rede, Sonda::NaoSuportada, false, _) => (true, false, NaoVerificado),
+            (Fio::Rede, Sonda::NaoConsultada, false, _) => (false, false, SondaFalhou),
+            (Fio::Rede, Sonda::Falhou, false, false) => (false, false, SondaFalhou),
+            (Fio::Rede, Sonda::Falhou, false, true) => (true, true, AfirmadoPeloOperador),
         };
         DecisaoRede { network_ok, override_usado, veredito }
     }
+}
 
-    /// Reduz o que a guarda devolveu à entrada do decisor, **descartando o payload**: os
-    /// padrões só olham para a variante (`{ .. }`), e o teste estrutural exige-o.
-    pub fn classificar(medido: &Result<(), NetworkPolicyError>) -> (Sonda, bool) {
-        match medido {
+/// **A medição e os TEXTOS, separados da decisão (R8.5 — NV2, NV4).**
+///
+/// [`medir`] consulta a guarda e devolve a entrada do decisor (sem payload) e um [`Detalhe`]
+/// OPACO: o texto do erro, as interfaces e o nome da guarda ficam em campos privados, e só
+/// [`Detalhe::notices`] os lê — para o journal. O pré-voo não vê o texto do erro.
+pub mod medicao {
+    use super::politica_rede::{DecisaoRede, Sonda};
+    use led_hal::{NetworkGuard, NetworkPolicyError};
+
+    /// O que a guarda disse (ou porque não foi consultada), opaco fora deste módulo.
+    pub struct Detalhe {
+        medido: Option<Result<(), NetworkPolicyError>>,
+        nome_guarda: &'static str,
+        loopback: Vec<String>,
+    }
+
+    /// Consulta a guarda UMA vez e reduz o resultado à entrada do decisor, **descartando o
+    /// payload**: os padrões só olham para a variante (`{ .. }`).
+    pub fn medir(guard: &dyn NetworkGuard) -> (Sonda, bool, Detalhe) {
+        let medido = guard.check();
+        let (sonda, wifi_ativo) = match &medido {
             Ok(()) => (Sonda::Mediu, false),
             Err(NetworkPolicyError::WifiActive { .. }) => (Sonda::Mediu, true),
             Err(NetworkPolicyError::ProbeUnavailable { .. }) => (Sonda::NaoSuportada, false),
             Err(NetworkPolicyError::ProbeFailed { .. }) => (Sonda::Falhou, false),
+        };
+        (sonda, wifi_ativo, Detalhe { medido: Some(medido), nome_guarda: guard.name(), loopback: Vec::new() })
+    }
+
+    impl Detalhe {
+        /// Sem consulta à guarda: sem saída, ou só loopback (os endereços vão para o journal).
+        pub(crate) fn sem_consulta(loopback: Vec<String>) -> Self {
+            Detalhe { medido: None, nome_guarda: "", loopback }
+        }
+
+        /// As linhas do journal: as CHAVES são as do veredito, por ordem
+        /// ([`super::Veredito::chaves`]); daqui só sai o detalhe de cada uma.
+        pub fn notices(&self, decisao: &DecisaoRede) -> Vec<(&'static str, String)> {
+            let interfaces = match &self.medido {
+                Some(Err(NetworkPolicyError::WifiActive { interfaces })) => interfaces.join(", "),
+                _ => "(interface nao reportada)".into(),
+            };
+            let razao = match &self.medido {
+                Some(Err(NetworkPolicyError::ProbeUnavailable { reason })) => reason.clone(),
+                _ => "(razao nao reportada)".into(),
+            };
+            let (probe, error) = match &self.medido {
+                Some(Err(NetworkPolicyError::ProbeFailed { probe, error })) => (*probe, error.clone()),
+                None => ("(guarda nao consultada)", "(sem medicao)".into()),
+                _ => ("(sonda nao reportada)", "(erro nao reportado)".into()),
+            };
+            let nome = self.nome_guarda;
+            let loopback = self.loopback.join(", ");
+            decisao
+                .veredito()
+                .chaves()
+                .iter()
+                .map(|&chave| {
+                    let detalhe = match chave {
+                        "preflight_vacuous" => "sem --output: network_ok e devices_present sao VACUOSOS, nao ha \
+                                                saida a proteger"
+                            .to_string(),
+                        "network_local" => {
+                            format!("{loopback} e loopback: nao atravessa interface, ADR-0005 nao se aplica")
+                        }
+                        "network_checked" => format!("{nome}: sem WiFi ativo"),
+                        "network_override_unused" => {
+                            "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".to_string()
+                        }
+                        "network_refused" => format!("WiFi ATIVO em {interfaces} — ADR-0005 proibe show ao vivo"),
+                        "network_unverified" => {
+                            format!("NAO foi possivel verificar a rede ({razao}) — prosseguindo com aviso")
+                        }
+                        "network_assumed_by_operator" => format!(
+                            "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao ha \
+                             WiFi ativo — NAO verificado"
+                        ),
+                        "network_probe_failed" => format!(
+                            "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, \
+                             --assume-no-wifi permite ao operador afirma-lo"
+                        ),
+                        outra => format!("(sem texto para {outra})"),
+                    };
+                    (chave, detalhe)
+                })
+                .collect()
         }
     }
 }
 
-/// **O caminho dos TEXTOS, separado da decisão (R7.1).** Lê a decisão (só leitura) e o que a
-/// guarda disse, e escreve as linhas do journal. Não devolve nada que volte a [`decidir_rede`].
-pub fn notices_da_rede(
-    decisao: &DecisaoRede,
-    medido: &Result<(), NetworkPolicyError>,
-    nome_guarda: &str,
-) -> Vec<(&'static str, String)> {
-    // A causa, como a guarda a disse. Fora da variante esperada não há texto a inventar.
-    let interfaces = match medido {
-        Err(NetworkPolicyError::WifiActive { interfaces }) => interfaces.join(", "),
-        _ => "(interface nao reportada)".into(),
-    };
-    let razao = match medido {
-        Err(NetworkPolicyError::ProbeUnavailable { reason }) => reason.clone(),
-        _ => "(razao nao reportada)".into(),
-    };
-    let (probe, error) = match medido {
-        Err(NetworkPolicyError::ProbeFailed { probe, error }) => (*probe, error.clone()),
-        _ => ("(sonda nao reportada)", "(erro nao reportado)".into()),
-    };
-    let verificado = || ("network_checked", format!("{nome_guarda}: sem WiFi ativo"));
-    match decisao.veredito() {
-        Veredito::Verificado => vec![verificado()],
-        Veredito::VerificadoFlagSemEfeito => vec![
-            verificado(),
-            // D2(b): a flag foi dada e a sonda mediu — não houve nada a afirmar.
-            (
-                "network_override_unused",
-                "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".into(),
-            ),
-        ],
-        Veredito::WifiAtivo => vec![(
-            "network_refused",
-            format!("WiFi ATIVO em {interfaces} — ADR-0005 proibe show ao vivo"),
-        )],
-        Veredito::NaoVerificado => vec![(
-            "network_unverified",
-            format!("NAO foi possivel verificar a rede ({razao}) — prosseguindo com aviso"),
-        )],
-        Veredito::AfirmadoPeloOperador => vec![(
-            "network_assumed_by_operator",
-            format!(
-                "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao \
-                 ha WiFi ativo — NAO verificado"
-            ),
-        )],
-        Veredito::SondaFalhou => vec![(
-            "network_probe_failed",
-            format!(
-                "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, \
-                 --assume-no-wifi permite ao operador afirma-lo"
-            ),
-        )],
-    }
-}
-
-/// O resultado do pré-voo, em módulo próprio pela mesma razão que a política: os campos são
-/// privados, e o `network_ok` de um pré-voo com fio a proteger só pode vir de uma
-/// [`DecisaoRede`] (R7.1: N8 escrevia `pf.report.network_ok`).
+/// O resultado do pré-voo, em módulo próprio: campos privados e UM só construtor, que exige uma
+/// [`DecisaoRede`] (R7.1; R8.5 — NV1, NV3: já não há `sem_fio_a_proteger`).
 pub mod relatorio {
     use super::DecisaoRede;
     use led_daemon::PreflightReport;
@@ -252,17 +335,9 @@ pub mod relatorio {
     }
 
     impl Preflight {
-        /// Sem fio a proteger (sem `--output`, ou só loopback): rede e controladores VACUOSOS.
-        pub(crate) fn sem_fio_a_proteger(
-            integrity_verified: bool,
-            notices: Vec<(&'static str, String)>,
-        ) -> Self {
-            let report = PreflightReport { integrity_verified, network_ok: true, devices_present: true };
-            Preflight { report, notices }
-        }
-
-        /// Com fio: o `network_ok` é o da decisão, e não há outra forma de o dar.
-        pub(crate) fn com_rede(
+        /// O ÚNICO construtor — e o único `PreflightReport { .. }` do crate (NV8: o teste
+        /// estrutural conta-o). O `network_ok` é sempre o da decisão.
+        pub(crate) fn novo(
             integrity_verified: bool,
             decisao: &DecisaoRede,
             devices_present: bool,
@@ -292,59 +367,39 @@ pub mod relatorio {
 
 /// Corre o pré-voo.
 ///
-/// Com `output == None` os dois campos de rede continuam **vacuosos** — e continua a ser
-/// verdade: sem fio, não há fio a proteger. A diferença é que agora isso é o caso
-/// excecional, e está dito como tal.
+/// Sem fio a proteger (sem `--output`, ou só loopback) a rede e os controladores são
+/// **vacuosos** — e continua a ser verdade. A diferença é que agora isso é uma entrada do
+/// decisor ([`Fio`]), e está dito como tal no journal.
 pub fn preflight(
     integrity: Integrity,
     output: Option<&OutputConfig>,
     guard: &dyn NetworkGuard,
     presence: &dyn DevicePresence,
-    assume_no_wifi: bool,
+    override_da_cli: Option<&AssumeNoWifi>,
 ) -> Preflight {
     let mut notices = Vec::new();
     let integrity_verified = integrity.satisfies_preflight();
-
-    let Some(cfg) = output else {
-        notices.push((
-            "preflight_vacuous",
-            "sem --output: network_ok e devices_present sao VACUOSOS, nao ha saida a proteger"
-                .to_string(),
-        ));
-        return Preflight::sem_fio_a_proteger(integrity_verified, notices);
-    };
 
     // ── Rede (ADR-0005: WiFi é proibido ao vivo) ─────────────────────────────
     //
     // Um alvo de **loopback** não atravessa interface nenhuma: o datagrama nasce e morre
     // dentro da máquina. O gate do ADR-0005 protege o *fio*, e aqui não há fio para o WiFi
-    // corromper — é o mesmo raciocínio da vacuidade do GS2, aplicado a um caso concreto e
-    // não à ausência de saída. **Não é um bypass**: um show apontado ao loopback não chega a
-    // rig nenhum, e por isso não há nada que a regra pudesse salvar.
-    // `todos_loopback`, nunca `any`: basta UM alvo de rede para haver fio a proteger, e um
-    // `any` desligaria o gate do ADR-0005 para o rig inteiro por causa dos nos que nao contam
-    // (ADR-0029 §6).
-    if cfg.todos_loopback() {
-        let quais: Vec<String> = cfg.alvos.iter().map(|a| a.addr.ip().to_string()).collect();
-        notices.push((
-            "network_local",
-            format!(
-                "{} e loopback: nao atravessa interface, ADR-0005 nao se aplica",
-                quais.join(", ")
-            ),
-        ));
-        notices.push((
-            "devices_unverified",
-            "alvo de loopback: NAO ha controladores a descobrir — prosseguindo com aviso".into(),
-        ));
-        return Preflight::sem_fio_a_proteger(integrity_verified, notices);
-    }
-
-    // TD-029 (R7.1): a guarda só MEDE; `classificar` reduz o que mediu a enums sem payload;
-    // `decidir_rede` decide só sobre isso; os textos vão para o journal por `notices_da_rede`.
-    let medido = guard.check();
-    let (sonda, wifi_ativo) = classificar(&medido);
-    let decisao = decidir_rede(sonda, wifi_ativo, assume_no_wifi);
+    // corromper. **Não é um bypass**: um show apontado ao loopback não chega a rig nenhum.
+    // `todos_loopback`, nunca `any`: basta UM alvo de rede para haver fio a proteger (ADR-0029 §6).
+    // TD-029 (R8.5): só a guarda MEDE (e só com fio); o texto fica no `Detalhe` opaco; o decisor
+    // recebe o fio, a sonda sem payload e o token do override, e é o ÚNICO a produzir network_ok.
+    let (fio, sonda, wifi_ativo, detalhe) = match output {
+        None => (Fio::SemSaida, Sonda::NaoConsultada, false, Detalhe::sem_consulta(Vec::new())),
+        Some(cfg) if cfg.todos_loopback() => {
+            let quais = cfg.alvos.iter().map(|a| a.addr.ip().to_string()).collect();
+            (Fio::SoLoopback, Sonda::NaoConsultada, false, Detalhe::sem_consulta(quais))
+        }
+        Some(_) => {
+            let (sonda, wifi_ativo, detalhe) = medicao::medir(guard);
+            (Fio::Rede, sonda, wifi_ativo, detalhe)
+        }
+    };
+    let decisao = decidir_rede(fio, sonda, wifi_ativo, override_da_cli);
     if decisao.override_usado() {
         // D2(a): o aviso VISÍVEL sai em CADA pré-voo que use o override (não 1× por processo).
         eprintln!(
@@ -352,31 +407,48 @@ pub fn preflight(
              AFIRMA que não há WiFi ativo (NAO verificado)."
         );
     }
-    notices.extend(notices_da_rede(&decisao, &medido, guard.name()));
+    notices.extend(detalhe.notices(&decisao));
 
     // ── Controladores (RT-003: palco escuro sem erro) ────────────────────────
-    //
-    // **Um nó que declara não responder a descoberta não pode ser reprovado por não
-    // responder.** Dois presets do catálogo declaram `supports_discovery: false`; sondá-los
-    // produziria `devices_missing` e o daemon recusaria tocar — o oposto exato do que a
-    // descoberta existe para evitar (RT-003 protege contra palco escuro, não contra shows
-    // que não arrancam). O profile declara a capacidade; aqui ela é honrada.
-    if !cfg.supports_discovery {
-        notices.push((
-            "devices_unverified",
-            "o no declara supports_discovery:false — NAO foi sondado, e a sua ausencia              nao seria detetavel por ArtPoll"
-                .to_string(),
-        ));
-        return Preflight::com_rede(integrity_verified, &decisao, true, notices);
-    }
-    // Sondar TODOS os alvos: sondar so o primeiro deixaria os outros por verificar, e o
-    // RT-003 existe contra o palco escuro por controlador ausente. A resposta de um no nunca
-    // mascara o silencio de outro (ADR-0029 §6).
+    let devices_present = match output {
+        // Sem saída: vacuoso, e o `preflight_vacuous` acima já o diz para os dois campos.
+        None => true,
+        Some(cfg) if cfg.todos_loopback() => {
+            notices.push((
+                "devices_unverified",
+                "alvo de loopback: NAO ha controladores a descobrir — prosseguindo com aviso".into(),
+            ));
+            true
+        }
+        // **Um nó que declara não responder a descoberta não pode ser reprovado por não
+        // responder** (dois presets do catálogo declaram `supports_discovery: false`).
+        Some(cfg) if !cfg.supports_discovery => {
+            notices.push((
+                "devices_unverified",
+                "o no declara supports_discovery:false — NAO foi sondado, e a sua ausencia nao seria \
+                 detetavel por ArtPoll"
+                    .to_string(),
+            ));
+            true
+        }
+        Some(cfg) => presenca_de_todos(cfg, presence, &mut notices),
+    };
+
+    Preflight::novo(integrity_verified, &decisao, devices_present, notices)
+}
+
+/// Sonda TODOS os alvos: sondar só o primeiro deixaria os outros por verificar, e o RT-003
+/// existe contra o palco escuro por controlador ausente (ADR-0029 §6). **Ausente vence
+/// indeterminado, que vence presente** — a hierarquia do `Veredito` do `lumyx-hwcheck`.
+fn presenca_de_todos(
+    cfg: &OutputConfig,
+    presence: &dyn DevicePresence,
+    notices: &mut Vec<(&'static str, String)>,
+) -> bool {
     let mut ausentes_totais: Vec<String> = Vec::new();
     let mut respondeu: Vec<String> = Vec::new();
-    // `Unavailable` de QUALQUER alvo torna o conjunto indeterminado: "nao consegui sondar
-    // um" nao pode ser arredondado para "os outros responderam". E a mesma regra das tres
-    // categorias do `Inventory` — presente, ausente e NAO SONDADO nunca colapsam em duas.
+    // `Unavailable` de QUALQUER alvo torna o conjunto indeterminado: presente, ausente e NAO
+    // SONDADO nunca colapsam em duas categorias.
     let mut indeterminado: Option<String> = None;
     for alvo in &cfg.alvos {
         match presence.probe(alvo.addr.ip()) {
@@ -387,15 +459,12 @@ pub fn preflight(
             }
         }
     }
-    // A ordem é deliberada: **ausente vence indeterminado, que vence presente**. Um nó
-    // calado é facto sobre o rig; não conseguir sondar outro não o apaga. É a mesma
-    // hierarquia do `Veredito` do `lumyx-hwcheck` — reprovar > não medir > aprovar.
     let agregado = match (ausentes_totais.is_empty(), indeterminado) {
         (false, _) => Presence::Missing(ausentes_totais),
         (true, Some(porque)) => Presence::Unavailable(porque),
         (true, None) => Presence::AllPresent,
     };
-    let devices_present = match agregado {
+    match agregado {
         Presence::AllPresent => {
             notices.push(("devices_checked", format!("{} respondeu", respondeu.join(", "))));
             true
@@ -414,15 +483,18 @@ pub fn preflight(
             ));
             true
         }
-    };
-
-    Preflight::com_rede(integrity_verified, &decisao, devices_present, notices)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use led_hal::PermissiveGuard;
+    use led_hal::{NetworkPolicyError, PermissiveGuard};
+
+    /// O token do override como o parser da CLI o cria (o único construtor).
+    fn token(flag: bool) -> Option<AssumeNoWifi> {
+        if flag { AssumeNoWifi::da_linha_de_comando(&["--assume-no-wifi"]) } else { None }
+    }
 
     struct GuardaFalsa(Result<(), NetworkPolicyError>);
     impl NetworkGuard for GuardaFalsa {
@@ -482,7 +554,7 @@ mod tests {
             Some(&saida()),
             &GuardaFalsa(g),
             &SondaFalsa(p),
-            false,
+            None,
         )
     }
     fn tem(pf: &Preflight, n: &str) -> bool {
@@ -526,7 +598,7 @@ mod tests {
             Some(&cfg),
             &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
             &SondaFalsa(Presence::AllPresent),
-            false,
+            None,
         );
 
         assert!(
@@ -570,7 +642,7 @@ mod tests {
             Some(&cfg),
             &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
             &SondaFalsa(Presence::AllPresent),
-            false,
+            None,
         );
         assert!(pf.report().network_ok, "nenhum datagrama atravessa interface: a excecao vale");
         assert!(tem(&pf, "network_local"));
@@ -609,7 +681,7 @@ mod tests {
             sondados: std::cell::RefCell::new(Vec::new()),
         };
         let pf =
-            preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaFalsa(Ok(())), &sonda, false);
+            preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaFalsa(Ok(())), &sonda, None);
 
         assert_eq!(
             sonda.sondados.borrow().len(),
@@ -678,7 +750,7 @@ mod tests {
             Some(&saida()),
             &GuardaFalsa(g),
             &SondaFalsa(Presence::AllPresent),
-            assume_no_wifi,
+            token(assume_no_wifi).as_ref(),
         )
     }
     fn detalhe<'a>(pf: &'a Preflight, n: &str) -> &'a str {
@@ -771,7 +843,7 @@ mod tests {
             None,
             &PermissiveGuard,
             &SondaFalsa(Presence::AllPresent),
-            false,
+            None,
         );
         assert!(pf.report().network_ok && pf.report().devices_present);
         assert!(tem(&pf, "preflight_vacuous"));
@@ -786,7 +858,7 @@ mod tests {
                 saida_cfg,
                 &PermissiveGuard,
                 &SondaFalsa(Presence::AllPresent),
-                false,
+                None,
             );
             assert!(!pf.report().integrity_verified, "sem afirmação do operador, reprova");
         }
@@ -808,7 +880,7 @@ mod tests {
             // Uma guarda que reprovaria SEMPRE: se fosse consultada, o teste falhava.
             &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
             &SondaFalsa(Presence::AllPresent),
-            false,
+            None,
         );
         assert!(pf.report().network_ok, "loopback não atravessa interface");
         assert!(tem(&pf, "network_local"));
@@ -843,7 +915,7 @@ mod tests {
             Some(&cfg),
             &GuardaFalsa(Ok(())),
             &SondaFalsa(Presence::Missing(vec!["192.168.2.156".into()])),
-            false,
+            None,
         );
         assert!(pf.report().devices_present, "declarar que nao responde nao e estar ausente");
         assert!(tem(&pf, "devices_unverified"), "e o journal tem de dizer que NAO sondou");
@@ -867,30 +939,42 @@ mod tests {
         assert!(matches!(r, Presence::Unavailable(_)), "loopback não é um controlador: {r:?}");
     }
 
-    // ── R7.1: a política provada por TIPOS, e a tabela sobre o domínio novo ─────────
+    // ── R8.5: a política sobre Fio × Sonda × wifi × override, e o rig REAL ────────────
     use led_hal::NetworkPolicyError as E;
 
-    /// Força a exaustividade em COMPILAÇÃO: uma `Sonda` nova deixa de compilar aqui, e a tabela
-    /// abaixo tem de ganhar as suas linhas.
-    fn todas_as_sondas() -> [Sonda; 3] {
-        let v = [Sonda::Mediu, Sonda::NaoSuportada, Sonda::Falhou];
+    /// Exaustividade em COMPILAÇÃO: uma variante nova de `Fio`/`Sonda` deixa de compilar aqui.
+    fn todos_os_fios() -> [Fio; 3] {
+        let v = [Fio::SemSaida, Fio::SoLoopback, Fio::Rede];
+        for f in v {
+            match f {
+                Fio::SemSaida | Fio::SoLoopback | Fio::Rede => {}
+            }
+        }
+        v
+    }
+    fn todas_as_sondas() -> [Sonda; 4] {
+        let v = [Sonda::NaoConsultada, Sonda::Mediu, Sonda::NaoSuportada, Sonda::Falhou];
         for s in v {
             match s {
-                Sonda::Mediu | Sonda::NaoSuportada | Sonda::Falhou => {}
+                Sonda::NaoConsultada | Sonda::Mediu | Sonda::NaoSuportada | Sonda::Falhou => {}
             }
         }
         v
     }
 
-    /// **Tabela exaustiva sobre o domínio da decisão: `Sonda` (3) × `wifi_ativo` × flag = 12
-    /// linhas**, sem omissões nem repetições, cada uma com `network_ok`, `override_usado` e o
-    /// veredito. A entrada do decisor não tem mais nada: não há payload que possa variar.
+    /// **Tabela exaustiva: `Fio` (3) × `Sonda` (4) × `wifi_ativo` × override = 48 linhas.**
+    /// As 16 com fio de rede estão escritas à mão, uma a uma; nas 32 sem fio a proteger o
+    /// WiFi ativo continua a bloquear e o resto é vacuoso e dito como tal.
     #[test]
     fn decidir_rede_tabela_exaustiva() {
         use Sonda::*;
         use Veredito::*;
-        // (sonda, wifi_ativo, flag, network_ok, override_usado, veredito)
-        let tabela = [
+        // (sonda, wifi_ativo, override, network_ok, override_usado, veredito) — com Fio::Rede
+        let rede = [
+            (NaoConsultada, false, false, false, false, SondaFalhou),
+            (NaoConsultada, false, true, false, false, SondaFalhou),
+            (NaoConsultada, true, false, false, false, WifiAtivo),
+            (NaoConsultada, true, true, false, false, WifiAtivo),
             (Mediu, false, false, true, false, Verificado),
             (Mediu, false, true, true, false, VerificadoFlagSemEfeito),
             (Mediu, true, false, false, false, WifiAtivo),
@@ -905,49 +989,99 @@ mod tests {
             (Falhou, true, true, false, false, WifiAtivo),
         ];
         let mut vistas = std::collections::BTreeSet::new();
-        for (s, w, f, ..) in &tabela {
-            assert!(vistas.insert((*s, *w, *f)), "linha duplicada: {s:?} wifi={w} flag={f}");
+        for (s, w, o, ok, ov, v) in rede {
+            assert!(vistas.insert((s, w, o)), "linha duplicada");
+            let d = decidir_rede(Fio::Rede, s, w, token(o).as_ref());
+            assert_eq!((d.network_ok(), d.override_usado(), d.veredito()), (ok, ov, v), "Rede {s:?} wifi={w} ov={o}");
         }
-        let dominio: Vec<_> = todas_as_sondas()
-            .into_iter()
-            .flat_map(|s| [false, true].into_iter().flat_map(move |w| [false, true].map(|f| (s, w, f))))
-            .collect();
-        assert_eq!(dominio.len(), 12);
-        for x in &dominio {
-            assert!(vistas.contains(x), "linha em falta: {x:?}");
+        let mut linhas = vistas.len();
+        for fio in todos_os_fios() {
+            for s in todas_as_sondas() {
+                for w in [false, true] {
+                    for o in [false, true] {
+                        if fio == Fio::Rede {
+                            assert!(vistas.contains(&(s, w, o)), "linha em falta: {s:?} {w} {o}");
+                            continue;
+                        }
+                        let d = decidir_rede(fio, s, w, token(o).as_ref());
+                        let esperado = match (fio, w) {
+                            (_, true) => (false, false, WifiAtivo),
+                            (Fio::SemSaida, false) => (true, false, SemSaida),
+                            (Fio::SoLoopback, false) => (true, false, Loopback),
+                            (Fio::Rede, _) => unreachable!(),
+                        };
+                        assert_eq!((d.network_ok(), d.override_usado(), d.veredito()), esperado, "{fio:?} {s:?} {w} {o}");
+                        linhas += 1;
+                    }
+                }
+            }
         }
-        for (s, w, f, ok, ov, v) in tabela {
-            let d = decidir_rede(s, w, f);
-            assert_eq!((d.network_ok(), d.override_usado(), d.veredito()), (ok, ov, v), "{s:?} wifi={w} flag={f}");
+        assert_eq!(linhas, 48, "3 × 4 × 2 × 2");
+    }
+
+    /// As chaves do journal de cada veredito — a tabela que o caminho dos textos tem de seguir.
+    #[test]
+    fn as_chaves_de_cada_veredito() {
+        use Veredito::*;
+        let t: [(Veredito, &[&str]); 8] = [
+            (SemSaida, &["preflight_vacuous"]),
+            (Loopback, &["network_local"]),
+            (Verificado, &["network_checked"]),
+            (VerificadoFlagSemEfeito, &["network_checked", "network_override_unused"]),
+            (WifiAtivo, &["network_refused"]),
+            (NaoVerificado, &["network_unverified"]),
+            (SondaFalhou, &["network_probe_failed"]),
+            (AfirmadoPeloOperador, &["network_assumed_by_operator"]),
+        ];
+        for (v, chaves) in t {
+            assert_eq!(v.chaves(), chaves, "{v:?}");
         }
     }
 
-    /// Os payloads REAIS que as guardas do `led-hal` produzem (network_guard.rs), mais as
-    /// interfaces que a ronda 11 usou (`wlx…`, adaptadores USB em Linux — N3).
-    fn resultados_reais() -> Vec<(Result<(), E>, Sonda, bool)> {
-        let mut v: Vec<(Result<(), E>, Sonda, bool)> = vec![(Ok(()), Sonda::Mediu, false)];
+    /// **O token só nasce de `--assume-no-wifi` exato** (NV10).
+    #[test]
+    fn o_token_do_override_so_nasce_do_argumento_exato() {
+        assert!(AssumeNoWifi::da_linha_de_comando(&["--assume-no-wifi"]).is_some());
+        for nao in [&[][..], &["--assume-no-wifi=1"], &["--assume-integrity"], &["assume-no-wifi"], &["--ASSUME-NO-WIFI"]] {
+            assert!(AssumeNoWifi::da_linha_de_comando(nao).is_none(), "{nao:?}");
+        }
+    }
+
+    /// Os payloads REAIS das guardas do `led-hal` (network_guard.rs) e o resultado que a
+    /// política tem de dar: (resultado, arma sem override, arma com override, chaves de rede
+    /// sem override, chaves com override).
+    type Real = (Result<(), E>, bool, bool, &'static [&'static str], &'static [&'static str]);
+    fn resultados_reais() -> Vec<Real> {
+        let mut v: Vec<Real> = vec![(Ok(()), true, true, &["network_checked"], &["network_checked", "network_override_unused"])];
         for i in [vec!["en0"], vec!["wlan0"], vec!["wlx00c0ca123456"], vec!["wlp2s0", "en0"]] {
             let interfaces = i.iter().map(|s| s.to_string()).collect();
-            v.push((Err(E::WifiActive { interfaces }), Sonda::Mediu, true));
+            v.push((Err(E::WifiActive { interfaces }), false, false, &["network_refused"], &["network_refused"]));
         }
         // network_guard.rs:149 — o texto real de «SO não suportado» (N9).
         for os in ["windows", "freebsd", "haiku"] {
             let reason = format!("unsupported platform '{os}' — WiFi check not implemented");
-            v.push((Err(E::ProbeUnavailable { reason }), Sonda::NaoSuportada, false));
+            v.push((Err(E::ProbeUnavailable { reason }), true, true, &["network_unverified"], &["network_unverified"]));
         }
-        // network_guard.rs:167/173/255/263 — os textos reais do D3 (N1, N5, N8).
+        // network_guard.rs:167/173/255/263 — os textos reais do D3 (N1, N5, N8, NV2 «os error 35»).
         for (probe, error) in [
-            ("networksetup -listallhardwareports", "No such file or directory (os error 2)".to_string()),
-            ("networksetup -listallhardwareports", "exit status exit status: 1".to_string()),
-            ("sysfs /sys/class/net", "/sys/class/net not found".to_string()),
-            ("sysfs /sys/class/net", "read_dir: Permission denied (os error 13)".to_string()),
+            ("networksetup -listallhardwareports", "No such file or directory (os error 2)"),
+            ("networksetup -listallhardwareports", "Resource temporarily unavailable (os error 35)"),
+            ("networksetup -listallhardwareports", "exit status exit status: 1"),
+            ("sysfs /sys/class/net", "/sys/class/net not found"),
+            ("sysfs /sys/class/net", "read_dir: Permission denied (os error 13)"),
         ] {
-            v.push((Err(E::ProbeFailed { probe, error }), Sonda::Falhou, false));
+            v.push((
+                Err(E::ProbeFailed { probe, error: error.into() }),
+                false,
+                true,
+                &["network_probe_failed"],
+                &["network_assumed_by_operator"],
+            ));
         }
         v
     }
 
-    /// Os nomes REAIS das guardas (`led-hal`) e um de teste (N2, N4).
+    /// Os nomes REAIS das guardas (`led-hal`) e um de teste (N2, N4, NV4).
     const NOMES_DE_GUARDA: [&str; 3] =
         ["WifiBlockGuard (WiFi-forbidden enforcement)", "PermissiveGuard (no enforcement)", "guarda-teste"];
 
@@ -961,72 +1095,147 @@ mod tests {
         }
     }
 
-    /// **`classificar` descarta o payload**: com os textos reais, a entrada do decisor é só a
-    /// da variante.
-    #[test]
-    fn classificar_ve_so_a_variante_com_os_textos_reais() {
-        for (r, sonda, wifi) in resultados_reais() {
-            assert_eq!(classificar(&r), (sonda, wifi), "{r:?}");
+    /// Os 5 nós do rig real (ADR-0029: um show repartido por 5 controladores), em rede.
+    const RIG: [&str; 5] = ["192.168.2.161", "192.168.2.162", "192.168.2.163", "192.168.2.164", "192.168.2.165"];
+    fn rig_real(discovery: bool) -> OutputConfig {
+        let mut cfg = saida();
+        cfg.alvos = RIG
+            .iter()
+            .enumerate()
+            .map(|(i, ip)| crate::output::Alvo {
+                addr: format!("{ip}:4048").parse().unwrap(),
+                first_universe: 1,
+                pixel_offset: i as u32 * 144,
+                pixel_count: 144,
+                escapa_blackout: false,
+            })
+            .collect();
+        cfg.pixel_count = 720;
+        cfg.supports_discovery = discovery;
+        cfg
+    }
+
+    /// Presença por endereço: uns calados, uns que não se conseguem sondar, os outros respondem.
+    struct PresencaMista {
+        calados: &'static [&'static str],
+        indisponiveis: &'static [&'static str],
+    }
+    impl DevicePresence for PresencaMista {
+        fn probe(&self, ip: IpAddr) -> Presence {
+            let s = ip.to_string();
+            if self.calados.contains(&s.as_str()) {
+                Presence::Missing(vec![s])
+            } else if self.indisponiveis.contains(&s.as_str()) {
+                Presence::Unavailable(format!("{s}: sem rota"))
+            } else {
+                Presence::AllPresent
+            }
+        }
+        fn name(&self) -> &'static str {
+            "mista"
         }
     }
 
-    /// **O pré-voo inteiro, com os payloads e os nomes de guarda REAIS × flag:** o `network_ok`
-    /// do relatório é o da tabela (escrito à mão, não recalculado por `decidir_rede`), e as
-    /// notices nomeiam o que a guarda disse. Um segundo decisor em `preflight` — pelo nome da
-    /// guarda, pelo texto do erro — reprova aqui (N4, N5).
+    /// **O rig REAL, linha a linha (R8.5 — NV1, NV3, NV4):** 5 alvos de rede, discovery ligado
+    /// e desligado, presença toda / um calado / um impossível de sondar, os 13 payloads reais das
+    /// guardas × os nomes reais × override sim/não. Em CADA pré-voo: as chaves do journal, por
+    /// ordem, são EXATAMENTE as esperadas (incluindo «flag sem efeito»); `network_ok` e
+    /// `devices_present` são os da tabela escrita à mão; os detalhes nomeiam o que a guarda disse.
     #[test]
-    fn o_pre_voo_com_textos_e_nomes_reais_decide_pela_variante() {
+    fn o_rig_real_de_5_alvos_journal_linha_a_linha() {
+        let presencas: [(PresencaMista, &[&str], bool); 3] = [
+            (PresencaMista { calados: &[], indisponiveis: &[] }, &["devices_checked"], true),
+            (PresencaMista { calados: &["192.168.2.164"], indisponiveis: &[] }, &["devices_missing"], false),
+            (PresencaMista { calados: &[], indisponiveis: &["192.168.2.163"] }, &["devices_unverified"], true),
+        ];
         let mut casos = 0;
-        for (r, sonda, wifi) in resultados_reais() {
+        for (r, arma_sem, arma_com, chaves_sem, chaves_com) in resultados_reais() {
             for nome in NOMES_DE_GUARDA {
-                for flag in [false, true] {
-                    let pf = preflight(
-                        Integrity::AssumedByOperator,
-                        Some(&saida()),
-                        &GuardaNomeada(r.clone(), nome),
-                        &SondaFalsa(Presence::AllPresent),
-                        flag,
-                    );
-                    let esperado = match (sonda, wifi, flag) {
-                        (_, true, _) => false,
-                        (Sonda::Mediu, false, _) | (Sonda::NaoSuportada, false, _) => true,
-                        (Sonda::Falhou, false, f) => f,
-                    };
-                    assert_eq!(pf.report().network_ok, esperado, "{r:?} guarda={nome} flag={flag}");
-                    let texto: String = pf.notices().iter().map(|(k, d)| format!("{k}: {d} | ")).collect();
-                    match &r {
-                        Ok(()) => assert!(texto.contains(nome), "network_checked nomeia a guarda: {texto}"),
-                        Err(E::WifiActive { interfaces }) => {
-                            for i in interfaces {
-                                assert!(texto.contains(i.as_str()), "a interface {i} tem de constar: {texto}");
+                for ov in [false, true] {
+                    for discovery in [true, false] {
+                        for (presenca, chaves_dev, dev_presente) in &presencas {
+                            let cfg = rig_real(discovery);
+                            let pf = preflight(
+                                Integrity::AssumedByOperator,
+                                Some(&cfg),
+                                &GuardaNomeada(r.clone(), nome),
+                                presenca,
+                                token(ov).as_ref(),
+                            );
+                            let caso = format!("{r:?} guarda={nome} ov={ov} discovery={discovery} {chaves_dev:?}");
+                            let mut esperadas: Vec<&str> = if ov { chaves_com.to_vec() } else { chaves_sem.to_vec() };
+                            let (dev_chaves, dev_ok): (&[&str], bool) =
+                                if discovery { (chaves_dev, *dev_presente) } else { (&["devices_unverified"], true) };
+                            esperadas.extend_from_slice(dev_chaves);
+                            let obtidas: Vec<&str> = pf.notices().iter().map(|(k, _)| *k).collect();
+                            assert_eq!(obtidas, esperadas, "journal linha a linha: {caso}");
+                            assert_eq!(pf.report().network_ok, if ov { arma_com } else { arma_sem }, "{caso}");
+                            assert_eq!(pf.report().devices_present, dev_ok, "{caso}");
+                            let texto: String = pf.notices().iter().map(|(k, d)| format!("{k}: {d} | ")).collect();
+                            match &r {
+                                Ok(()) => assert!(texto.contains(nome), "network_checked nomeia a guarda: {texto}"),
+                                Err(E::WifiActive { interfaces }) => {
+                                    for i in interfaces {
+                                        assert!(texto.contains(i.as_str()), "{i}: {texto}");
+                                    }
+                                }
+                                Err(E::ProbeUnavailable { reason }) => assert!(texto.contains(reason.as_str()), "{texto}"),
+                                Err(E::ProbeFailed { probe, error }) => {
+                                    assert!(texto.contains(probe) && texto.contains(error.as_str()), "{texto}");
+                                    if ov {
+                                        assert!(texto.contains("NAO verificado"), "{texto}");
+                                    }
+                                }
                             }
-                        }
-                        Err(E::ProbeUnavailable { reason }) => assert!(texto.contains(reason.as_str()), "{texto}"),
-                        Err(E::ProbeFailed { probe, error }) => {
-                            assert!(texto.contains(probe) && texto.contains(error.as_str()), "{texto}");
-                            let chave = if flag { "network_assumed_by_operator" } else { "network_probe_failed" };
-                            assert!(texto.starts_with(chave), "{texto}");
-                            if flag {
-                                assert!(texto.contains("NAO verificado"), "{texto}");
+                            if discovery && !*dev_presente {
+                                assert!(texto.contains("192.168.2.164"), "o nó calado é nomeado: {texto}");
                             }
+                            casos += 1;
                         }
                     }
-                    casos += 1;
                 }
             }
         }
-        assert_eq!(casos, 12 * 3 * 2, "12 resultados reais × 3 guardas × 2 flags");
+        assert_eq!(casos, 13 * 3 * 2 * 2 * 3, "13 resultados × 3 guardas × override × discovery × 3 presenças");
     }
 
-    /// **Estrutural (reforço — a prova é a dos tipos):** a guarda é consultada num só sítio, e o
-    /// módulo da política não toca em texto. Comentários fora antes de cortar no `mod tests`.
+    /// Sem fio a proteger, também linha a linha: sem saída e só loopback (5 nós locais).
     #[test]
-    fn a_politica_nao_ve_texto_e_a_guarda_e_consultada_uma_vez() {
+    fn sem_fio_a_proteger_e_uma_entrada_do_decisor_e_fica_no_journal() {
+        for ov in [false, true] {
+            let pf = preflight(Integrity::AssumedByOperator, None, &GuardaNomeada(Err(E::WifiActive { interfaces: vec!["en0".into()] }), "g"), &SondaFalsa(Presence::AllPresent), token(ov).as_ref());
+            let k: Vec<&str> = pf.notices().iter().map(|(k, _)| *k).collect();
+            assert_eq!(k, ["preflight_vacuous"], "a guarda nem é consultada sem saída");
+            assert!(pf.report().network_ok && pf.report().devices_present);
+            let mut cfg = rig_real(true);
+            for (i, a) in cfg.alvos.iter_mut().enumerate() {
+                a.addr = format!("127.0.0.{}:4048", i + 1).parse().unwrap();
+            }
+            let pf = preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaNomeada(Err(E::ProbeFailed { probe: "p", error: "e".into() }), "g"), &SondaFalsa(Presence::Missing(vec!["x".into()])), token(ov).as_ref());
+            let k: Vec<&str> = pf.notices().iter().map(|(k, _)| *k).collect();
+            assert_eq!(k, ["network_local", "devices_unverified"]);
+            assert!(pf.notices()[0].1.contains("127.0.0.5"), "os 5 endereços locais nomeados");
+            assert!(pf.report().network_ok && pf.report().devices_present);
+        }
+    }
+
+    /// **Estrutural (REFORÇO — a prova é a dos tipos):** no código de produção do crate (cada
+    /// ficheiro de `src/` sem comentários, cortado no `mod tests`):
+    /// - a guarda é consultada num só sítio (`medicao::medir`);
+    /// - `decidir_rede` tem um só ponto de chamada;
+    /// - o `PreflightReport` é construído por UMA só função (NV8): um literal, zero `all_clear`,
+    ///   zero escritas em `.network_ok`;
+    /// - o token do override só é criado pelo parser da CLI (`main.rs`) — NV10;
+    /// - a política não toca em texto; `medir` só olha para a variante;
+    /// - o aviso D2(a) está guardado pela decisão e tem o texto completo (NV7).
+    #[test]
+    fn estrutural_uma_consulta_um_decisor_um_relatorio_um_token() {
         let sem_comentarios = |t: &str| -> String {
             t.lines().map(|l| match l.find("//") { Some(i) => &l[..i], None => l }).collect::<Vec<_>>().join("\n")
         };
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let (mut sondas, mut ficheiros) = (0, 0);
+        let (mut ficheiros, mut sondas, mut decisor, mut literais, mut all_clear, mut escritas, mut token_prod, mut token_main) =
+            (0, 0, 0, 0, 0, 0, 0, 0);
         for e in std::fs::read_dir(&dir).unwrap() {
             let p = e.unwrap().path();
             if p.extension().and_then(|x| x.to_str()) != Some("rs") {
@@ -1035,41 +1244,60 @@ mod tests {
             ficheiros += 1;
             let texto = sem_comentarios(&std::fs::read_to_string(&p).unwrap());
             let prod = texto.split("mod tests {").next().unwrap();
-            let codigo: String = prod.chars().filter(|c| !c.is_whitespace()).collect();
-            sondas += codigo.matches(".check(").count() + codigo.matches("NetworkGuard::check").count();
+            let c: String = prod.chars().filter(|c| !c.is_whitespace()).collect();
+            sondas += c.matches(".check(").count() + c.matches("NetworkGuard>::check").count() + c.matches("NetworkGuard::check").count();
+            decisor += c.matches("decidir_rede(").count();
+            // Literais, não tipos de retorno: recua sobre o caminho (`led_daemon::`) e vê se vem de `->`.
+            for (i, _) in c.match_indices("PreflightReport{") {
+                let antes = c[..i].trim_end_matches(|ch: char| ch.is_alphanumeric() || ch == '_' || ch == ':');
+                if !antes.ends_with("->") {
+                    literais += 1;
+                }
+            }
+            all_clear += c.matches("all_clear").count();
+            escritas += c.matches(".network_ok=").count();
+            token_prod += c.matches("da_linha_de_comando").count();
+            if p.file_name().unwrap() == "main.rs" {
+                token_main += c.matches("da_linha_de_comando").count();
+            }
         }
         assert!(ficheiros >= 5, "premissa: leu o src ({ficheiros})");
-        assert_eq!(sondas, 1, "a guarda só é consultada num sítio (o preflight)");
+        assert_eq!(sondas, 1, "a guarda só é consultada em medicao::medir");
+        assert_eq!(decisor, 2, "decidir_rede: 1 definição + 1 chamada (o preflight)");
+        assert_eq!((literais, all_clear, escritas), (1, 0, 0), "o PreflightReport só nasce em Preflight::novo (NV8)");
+        assert_eq!((token_prod, token_main), (2, 1), "o token: 1 definição + 1 criação, no parser da CLI (NV10)");
 
         let fonte = sem_comentarios(include_str!("preflight.rs"));
-        let politica = &fonte[fonte.find("pub mod politica_rede {").unwrap()..fonte.find("pub fn notices_da_rede(").unwrap()];
-        for proibido in ["String", "&str", "format!", "interfaces", "reason", "error", "name("] {
-            assert!(!politica.contains(proibido), "a política não pode ver texto: `{proibido}`");
+        let politica = &fonte[fonte.find("pub mod politica_rede {").unwrap()..fonte.find("pub mod medicao {").unwrap()];
+        for proibido in ["String", "&str", "format!", "interfaces", "reason", "error", "name(", "NetworkPolicyError"] {
+            assert!(!politica.contains(proibido), "a política não pode ver texto nem o erro: `{proibido}`");
         }
-        let compacto: String = politica.chars().filter(|c| !c.is_whitespace()).collect();
-        let padroes = compacto.matches("NetworkPolicyError::").count();
-        let sem_campos = compacto.matches("{..})").count();
-        assert_eq!((padroes, sem_campos), (3, 3), "classificar só olha para a variante (`{{ .. }}`)");
-        // D2(a): o aviso em stderr está guardado pela decisão.
+        let medir = &fonte[fonte.find("pub fn medir(").unwrap()..fonte.find("impl Detalhe {").unwrap()];
+        let m: String = medir.chars().filter(|c| !c.is_whitespace()).collect();
+        assert_eq!((m.matches("NetworkPolicyError::").count(), m.matches("{..})").count()), (3, 3), "medir só olha para a variante");
         let depois = &fonte[fonte.find("let decisao = decidir_rede(").expect("a chamada")..];
         let guarda = depois.find("if decisao.override_usado() {").expect("o aviso está guardado pela decisão");
-        assert!(depois[guarda..].trim_start_matches("if decisao.override_usado() {").trim_start().starts_with("eprintln!"));
+        let ramo = depois[guarda..].trim_start_matches("if decisao.override_usado() {").trim_start();
+        assert!(ramo.starts_with("eprintln!(") && ramo[..ramo.find(");").unwrap()].contains("AVISO: --assume-no-wifi USADO"),
+                "o ramo do override escreve o aviso COMPLETO em stderr");
     }
 
-    /// Filho do teste seguinte: dois pré-voos com a sonda falhada e a flag, e um com a sonda OK.
-    /// Corre também no conjunto normal (escreve dois avisos em stderr, sem afirmar nada).
+    /// Filho do teste seguinte: com o rig REAL de 5 alvos e a sonda falhada + override, dois
+    /// pré-voos (discovery ligado e desligado); e um com a sonda OK (sem aviso de USO).
     #[test]
     fn filho_dois_pre_voos_com_override() {
-        let falhou = || Err(NetworkPolicyError::ProbeFailed { probe: "sonda-x", error: "erro-y".into() });
-        let _ = corre_com(falhou(), true);
-        let _ = corre_com(falhou(), true);
-        let _ = corre_com(Ok(()), true); // sonda OK + flag: sem aviso de USO
+        let falhou = || GuardaNomeada(Err(E::ProbeFailed { probe: "sysfs /sys/class/net", error: "/sys/class/net not found".into() }), "WifiBlockGuard (WiFi-forbidden enforcement)");
+        let ok = GuardaNomeada(Ok(()), "WifiBlockGuard (WiFi-forbidden enforcement)");
+        let t = token(true);
+        let presenca = PresencaMista { calados: &[], indisponiveis: &["192.168.2.163"] };
+        let _ = preflight(Integrity::AssumedByOperator, Some(&rig_real(true)), &falhou(), &presenca, t.as_ref());
+        let _ = preflight(Integrity::AssumedByOperator, Some(&rig_real(false)), &falhou(), &presenca, t.as_ref());
+        let _ = preflight(Integrity::AssumedByOperator, Some(&rig_real(true)), &ok, &presenca, t.as_ref());
     }
 
-    /// **D2(a) medido, com stdout e stderr SEPARADOS (R7.1, N6):** re-executa o PRÓPRIO binário
-    /// de teste só com o filho acima, com pipes distintos. Dois pré-voos com override → dois
-    /// avisos no **stderr** e **nenhum** no stdout — no binário real o stdout é o journal JSONL,
-    /// e um aviso lá dentro seria uma linha não-JSON no journal e nada no terminal.
+    /// **D2(a) com stdout e stderr SEPARADOS e o rig de 5 alvos (R7.1 N6, R8.5 NV7):** dois
+    /// pré-voos com override → o aviso COMPLETO duas vezes no **stderr**, nada no stdout (no
+    /// binário real o stdout é o journal JSONL).
     #[test]
     fn o_aviso_sai_em_stderr_em_cada_pre_voo_com_override() {
         let o = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1081,7 +1309,8 @@ mod tests {
             .unwrap();
         let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
         assert!(o.status.success() && out.contains("1 passed"), "premissa: o filho correu:\n{out}\n{err}");
-        assert_eq!(err.matches("AVISO: --assume-no-wifi USADO").count(), 2, "um aviso POR pré-voo, em stderr:\n{err}");
+        let aviso = "AVISO: --assume-no-wifi USADO neste pré-voo — a sonda de rede falhou e o operador AFIRMA que não há WiFi ativo (NAO verificado).";
+        assert_eq!(err.matches(aviso).count(), 2, "o aviso COMPLETO, um POR pré-voo, em stderr:\n{err}");
         assert_eq!(out.matches("--assume-no-wifi").count(), 0, "nada do aviso no stdout (o journal):\n{out}");
     }
 }

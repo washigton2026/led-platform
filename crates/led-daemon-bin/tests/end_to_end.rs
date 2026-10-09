@@ -69,7 +69,7 @@ fn do_ficheiro_ao_fim_do_show() {
         integrity: Integrity::AssumedByOperator,
         output: Vec::new(),
         profile: None,
-        assume_no_wifi: false,
+        assume_no_wifi: None,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0, sleeps: 0 };
