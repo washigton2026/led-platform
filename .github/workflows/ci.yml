@@ -173,6 +173,7 @@ jobs:
     env:
       N_GATE: 34
       N_HOOK: 4
+      N_PG: 31
     steps:
       - uses: actions/checkout@v7
         with:
@@ -201,6 +202,19 @@ jobs:
           f=$(echo "$linha" | sed -E 's/^test_pre_commit_hook: ([0-9]+) passed; ([0-9]+) failed$/\2/')
           echo "hook-suite: exit ${code} · ${p:-?} passed · ${f:-?} failed · esperados ${N_HOOK}"
           [ "$code" -eq 0 ] && [ "${p:-x}" = "$N_HOOK" ] && [ "${f:-x}" = "0" ] || exit 1
+      # Parallel Gauntlet V1 (F1b, operador 2026-10-09): as ferramentas scripts/pg/ e os seus controlos
+      # negativos. N fixado como os outros dois: um teste que desaparece reprova aqui (KB-012).
+      - name: tests/test_pg_check.py
+        shell: bash {0}
+        run: |
+          python3 tests/test_pg_check.py > pg-suite.txt 2>&1
+          code=$?
+          cat pg-suite.txt
+          linha=$(grep -aE '^test_pg_check: [0-9]+ passed; [0-9]+ failed$' pg-suite.txt)
+          p=$(echo "$linha" | sed -E 's/^test_pg_check: ([0-9]+) passed; ([0-9]+) failed$/\1/')
+          f=$(echo "$linha" | sed -E 's/^test_pg_check: ([0-9]+) passed; ([0-9]+) failed$/\2/')
+          echo "pg-suite: exit ${code} · ${p:-?} passed · ${f:-?} failed · esperados ${N_PG}"
+          [ "$code" -eq 0 ] && [ "${p:-x}" = "$N_PG" ] && [ "${f:-x}" = "0" ] || exit 1
 
   # ── Bloqueante: as construções `unsafe` do triple buffer, sob Miri ───────────
   #
