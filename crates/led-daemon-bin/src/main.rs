@@ -361,4 +361,25 @@ mod tests {
         assert_eq!(args(&["--help"]).unwrap_err(), "");
         assert_eq!(args(&["-h"]).unwrap_err(), "");
     }
+
+    /// **X6 (TD-029 R8.5b): só o argumento EXATO `--assume-no-wifi` liga o override.** Cada variante tem de
+    /// ser recusada pelo parser ou ignorada — nunca pode deixar `assume_no_wifi` ligado.
+    #[test]
+    fn variantes_da_flag_nunca_ligam_o_override() {
+        for v in ["--assume-no-wifi=0", "--assume-no-wifi=1", "--assume-no-wifi=true", "--assume-no-wif",
+                  "--assume-no-wifi-x", "--assume-no-wifix", "--ASSUME-NO-WIFI", "--Assume-No-Wifi", "-assume-no-wifi",
+                  "--assume-no-wifi ", " --assume-no-wifi", "—assume-no-wifi", "--assume_no_wifi", "assume-no-wifi"] {
+            match args(&["s.lumyx", v]) {
+                Err(_) => {}
+                Ok(a) => panic!("variante {v:?} aceite pelo parser (assume_no_wifi={:?})", a.cfg.assume_no_wifi),
+            }
+        }
+        // O argumento exato, sozinho ou repetido, liga-o — e só ele.
+        assert!(args(&["s.lumyx", "--assume-no-wifi"]).unwrap().cfg.assume_no_wifi.is_some());
+        assert!(args(&["s.lumyx", "--assume-no-wifi", "--assume-no-wifi"]).unwrap().cfg.assume_no_wifi.is_some());
+        // Como VALOR de outra opção não é a flag.
+        let a = args(&["s.lumyx", "--log", "--assume-no-wifi"]).unwrap();
+        assert!(a.cfg.assume_no_wifi.is_none(), "valor de --log não é a flag");
+    }
+
 }
