@@ -120,7 +120,7 @@ fn cfg(assume_no_wifi: bool, autoplay: bool) -> Config {
         integrity: Integrity::AssumedByOperator,
         output: vec![ALVO.to_string()],
         profile: Some(PRESET.to_string()),
-        assume_no_wifi,
+        assume_no_wifi: led_daemon_bin::preflight::AssumeNoWifi::da_linha_de_comando(if assume_no_wifi { &["--assume-no-wifi"][..] } else { &[][..] }),
     }
 }
 
@@ -148,6 +148,16 @@ impl Daemon {
         inicial: Option<String>,
         guarda: &'static (dyn NetworkGuard + Sync),
     ) -> Self {
+        Self::subir_com_presenca(nome, c, inicial, guarda, &Presente)
+    }
+
+    fn subir_com_presenca(
+        nome: &str,
+        c: Config,
+        inicial: Option<String>,
+        guarda: &'static (dyn NetworkGuard + Sync),
+        presenca: &'static (dyn DevicePresence + Sync),
+    ) -> Self {
         let sock = std::env::temp_dir().join(format!("lumyx-td029-{nome}-{}.sock", std::process::id()));
         let flag = Arc::new(AtomicBool::new(false));
         let cp = ControlPlane::new(Arc::clone(&flag));
@@ -162,7 +172,7 @@ impl Daemon {
             });
             let mut pacer = SystemPacer::new();
             let mut jn = Journal::new(j);
-            run_with_control_com(&mut rt, inicial, &c, &mut pacer, &mut jn, &f, &cp, guarda, &Presente);
+            run_with_control_com(&mut rt, inicial, &c, &mut pacer, &mut jn, &f, &cp, guarda, presenca);
         });
         Daemon { sock, flag, journal, laco: Some(laco) }
     }
@@ -865,3 +875,112 @@ fn cada_load_decide_com_o_resultado_da_sua_propria_sonda() {
                    "{nome}: a última linha de rede do journal é a do 2.º load:\n{j}");
     }
 }
+
+// ── R8.5: o rig REAL de 5 alvos, pelos dois caminhos de produção ────────────────────────────
+
+/// Uma presença que nunca se consegue sondar → `devices_unverified` (o cenário do NV10).
+struct Indisponivel;
+impl DevicePresence for Indisponivel {
+    fn probe(&self, ip: IpAddr) -> Presence {
+        Presence::Unavailable(format!("{ip}: sem rota"))
+    }
+    fn name(&self) -> &'static str {
+        "indisponivel"
+    }
+}
+static INDISPONIVEL: Indisponivel = Indisponivel;
+static PRESENTE: Presente = Presente;
+
+/// A guarda com o nome e o texto REAIS do D3 em Linux (network_guard.rs:255).
+struct SondaFalhadaReal;
+impl NetworkGuard for SondaFalhadaReal {
+    fn check(&self) -> Result<(), NetworkPolicyError> {
+        Err(NetworkPolicyError::ProbeFailed { probe: "sysfs /sys/class/net", error: "/sys/class/net not found".into() })
+    }
+    fn name(&self) -> &'static str {
+        "WifiBlockGuard (WiFi-forbidden enforcement)"
+    }
+}
+static FALHADA_REAL: SondaFalhadaReal = SondaFalhadaReal;
+
+/// 5 nós em TEST-NET-1 (RFC 5737): rede, não loopback, nunca um rig real.
+const RIG_E2E: [&str; 5] = ["192.0.2.11", "192.0.2.12", "192.0.2.13", "192.0.2.14", "192.0.2.15"];
+
+/// 6 200 px — o tamanho do rig real (5 robôs): com 1 500 px por nó (ESP32-POE), os 5 nós têm fatia.
+fn escrever_rig(nome: &str) -> String {
+    let path = std::env::temp_dir().join(format!("{}-{nome}", std::process::id()));
+    let mut w = ShowWriter::new(std::fs::File::create(&path).unwrap(), 6_200).unwrap();
+    for i in 0..4u64 {
+        w.write_frame(&ShowRecord {
+            timestamp_ms: i * 25,
+            pixels: vec![PixelColor { r: 1, g: 2, b: 3 }; 6_200],
+            audio: None,
+        })
+        .unwrap();
+    }
+    w.flush().unwrap();
+    path.to_str().unwrap().to_string()
+}
+
+fn cfg_rig(ov: bool, autoplay: bool) -> Config {
+    let mut c = cfg(ov, autoplay);
+    c.output = RIG_E2E.iter().map(|s| s.to_string()).collect();
+    c
+}
+
+/// As linhas de pré-voo do journal, por ordem (só as chaves).
+fn chaves_de_pre_voo(j: &str) -> Vec<String> {
+    j.lines()
+        .filter_map(|l| {
+            let i = l.find(r#""notice":""#)? + 10;
+            let k = &l[i..i + l[i..].find('"')?];
+            (k.starts_with("network_") || k.starts_with("devices_") || k == "preflight_vacuous").then(|| k.to_string())
+        })
+        .collect()
+}
+
+/// **R8.5 (NV1, NV3, NV4, NV10), pelo LAÇO REAL:** o rig de 5 alvos, a guarda com o nome e o
+/// texto REAIS do D3, presença que responde ou que não se consegue sondar, override sim/não —
+/// no modo CLI (`run_com`) e num `load` por IPC. Em cada um: arma SSE o override foi dado pela
+/// CLI; o journal de pré-voo é EXATAMENTE o esperado, linha a linha; e sem a flag NUNCA aparece
+/// `network_assumed_by_operator` (um override fabricado no laço — NV10 — reprova aqui).
+#[test]
+fn o_rig_de_5_alvos_pelo_cli_e_pelo_ipc() {
+    let presencas: [(&'static (dyn DevicePresence + Sync), &str); 2] =
+        [(&PRESENTE, "devices_checked"), (&INDISPONIVEL, "devices_unverified")];
+    for ov in [false, true] {
+        for (n, (presenca, chave_dev)) in presencas.iter().enumerate() {
+            let rede = if ov { "network_assumed_by_operator" } else { "network_probe_failed" };
+            let esperado = vec![rede.to_string(), chave_dev.to_string()];
+            // Modo CLI.
+            let show = escrever_rig(&format!("td029-rig-{ov}-{n}.lumyx"));
+            let d = descriptor_from_path(&show, led_daemon::ShowId(1)).expect("show");
+            let mut c = cfg_rig(ov, true);
+            c.max_ticks = Some(3);
+            let buf = Buf::default();
+            let mut jn = Journal::new(buf.clone());
+            let mut rt = ShowRuntime::new();
+            let mut pacer = SystemPacer::new();
+            let parar = AtomicBool::new(false);
+            let o = run_com(&mut rt, &show, d, &c, &mut pacer, &mut jn, &parar, &FALHADA_REAL, *presenca);
+            let j = buf.texto();
+            assert_eq!(chaves_de_pre_voo(&j), esperado, "CLI ov={ov} {chave_dev}:\n{j}");
+            assert_eq!(o.reason != led_daemon_bin::ExitReason::NeverStarted, ov, "CLI arma sse o override: {o:?}\n{j}");
+            if !ov {
+                assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "override fabricado (NV10):\n{j}");
+            }
+            // load por IPC.
+            let d = Daemon::subir_com_presenca(&format!("rig-{ov}-{n}"), cfg_rig(ov, false), None, &FALHADA_REAL, *presenca);
+            let (mut s, mut r) = d.cliente();
+            pedir(&mut s, &mut r, r#"{"v":1,"id":1,"cmd":"hello","client":"teste"}"#);
+            let resp = pedir(&mut s, &mut r, &load(&show, 2));
+            let j = d.parar();
+            assert_eq!(chaves_de_pre_voo(&j), esperado, "IPC ov={ov} {chave_dev}:\n{j}");
+            assert_eq!(resp.contains(r#""ok":true"#), ov, "IPC arma sse o override: {resp}\n{j}");
+            if !ov {
+                assert_eq!(contar(&j, "network_assumed_by_operator"), 0, "override fabricado (NV10):\n{j}");
+            }
+        }
+    }
+}
+

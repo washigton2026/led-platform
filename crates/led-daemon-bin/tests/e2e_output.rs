@@ -89,7 +89,7 @@ fn cfg(output: Option<&str>, profile: Option<&str>) -> Config {
         // continua a exprimir um só — as asserções deste ficheiro não mudaram.
         output: output.map(String::from).into_iter().collect(),
         profile: profile.map(String::from),
-        assume_no_wifi: false,
+        assume_no_wifi: None,
     }
 }
 

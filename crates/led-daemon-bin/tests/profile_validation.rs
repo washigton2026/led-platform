@@ -212,7 +212,7 @@ fn um_preset_que_nao_resolve_nunca_chega_a_ready() {
         // O `custom` é o único preset que o operador edita — aqui é usado como veículo de um
         // erro. O erro em si vem da schema desconhecida, injetada abaixo pelo `--profile`.
         profile: Some("preset-que-nao-existe".to_string()),
-        assume_no_wifi: false,
+        assume_no_wifi: None,
     };
     let mut rt = ShowRuntime::new();
     let mut p = VPacer { now: 0 };
