@@ -1,0 +1,41 @@
+# [MEDIÇÃO] TD-029 ronda 14 (Linux) — NÃO MERGEAR. Ramo descartável measure/td029-r14-linux sobre 8b99cef (#47).
+#
+# Por job (um mutante): aplica o mutante; corre o GATE real (workspace + clippy) SEM os oráculos; depois cola os
+# oráculos do falsificador no fim de network_guard.rs e corre-os. Sobrevivente = gate verde + oráculo vermelho.
+# C0 = sem mutante: o gate e os oráculos têm de passar (os oráculos imprimem o inventário de /sys/class/net).
+name: measure-td029-r14
+
+on:
+  pull_request:
+
+jobs:
+  mutante:
+    name: r14 linux (${{ matrix.m }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        m: [C0, L1, L2, L3, L4, L5, L6]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Deps de áudio
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Mutante, gate, oráculos
+        shell: bash {0}
+        run: |
+          M=${{ matrix.m }}
+          if [ "$M" != C0 ]; then python3 -I .github/measure-r14/mutantes.py aplica "$M" . || exit 1; fi
+          git diff --stat
+          cargo test --workspace --locked --no-fail-fast > gate.txt 2>&1; gate=$?
+          tr=$(grep -aE '^test result:' gate.txt | awk '{c++; p+=$4; f+=$6; ig+=$8} END{print "bins="c" "p"/"f"/"ig}')
+          grep -aE '^test .* FAILED$' gate.txt | sort -u
+          cargo clippy --workspace --all-targets --locked -- -D warnings > clippy.txt 2>&1; clippy=$?
+          grep -aE '^(error|warning)' clippy.txt | head -5
+          cat .github/measure-r14/oraculos.rs >> crates/led-hal/src/network_guard.rs
+          cargo test -p led-hal --locked --lib oraculo_linux_r14 -- --nocapture > oraculo.txt 2>&1; ora=$?
+          cat oraculo.txt | grep -aE 'INVENTARIO|dir=|^test |panicked|test result' | head -40
+          echo "RESULTADO r14-linux m=$M gate_exit=$gate gate=[$tr] clippy_exit=$clippy oraculo_exit=$ora oraculo_falhados=[$(grep -aE '^test .* FAILED$' oraculo.txt | awk '{print $2}' | tr '\n' ' ')]"
