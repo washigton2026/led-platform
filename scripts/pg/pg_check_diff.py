@@ -5,12 +5,14 @@ pg_check_diff.py — o diff de uma tarefa do Parallel Gauntlet V1 ficou dentro d
 Uso:
   python3 scripts/pg/pg_check_diff.py <base> <ramo> <card.md> [--repo <repo>]
 
-Lê `owns:` e `forbids:` do front-matter do card (entre as duas linhas `---`), lista os ficheiros
-alterados por `git diff --name-only <base>...<ramo>` (desde o merge-base: só o que o ramo trouxe) e
-exige:
-  - todo o ficheiro alterado casa com algum `owns`;
-  - nenhum ficheiro alterado casa com algum `forbids`.
-Exit 0 = dentro da área. Exit 1 = viola (lista cada ficheiro e porquê). Exit 2 = card ou git ilegível.
+Lê `owns:` e `forbids:` do front-matter do card (entre as duas linhas `---`) e lista os caminhos tocados
+por `git diff --name-only --no-renames -z <base>...<ramo>`. É o que o ramo trouxe desde o merge-base, e um
+rename aparece com os DOIS lados (o antigo como apagado, o novo como acrescentado), qualquer que seja o
+`diff.renames` da máquina. Uma remoção também conta como caminho tocado. Exige:
+  - cada `owns` e `forbids` decidível (a mesma gramática da R8 do pg_check_plan); senão → violação;
+  - todo o caminho tocado casa com algum `owns` (os dois lados de um rename incluídos);
+  - nenhum caminho tocado casa com algum `forbids`.
+Exit 0 = dentro da área. Exit 1 = viola (cada caminho e porquê). Exit 2 = card ou git ilegível.
 
 Uma tarefa READ tem `owns: []`: qualquer ficheiro alterado é violação — é o ponto.
 """
@@ -22,7 +24,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pg_check_plan import casa  # noqa: E402  (uma regra de glob, uma implementação)
+from pg_check_plan import casa, motivo_indecidivel  # noqa: E402  (uma gramática, uma implementação)
 
 
 class CardIlegivel(Exception):
@@ -65,15 +67,22 @@ def ler_card(texto: str) -> dict[str, list[str]]:
 
 
 def ficheiros_alterados(repo: Path, base: str, ramo: str) -> list[str]:
-    r = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", f"{base}...{ramo}"],
-                       capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", "--no-renames", "-z", f"{base}...{ramo}"],
+                       capture_output=True)
     if r.returncode != 0:
-        raise CardIlegivel(f"git diff {base}...{ramo} falhou: {r.stderr.strip()}")
-    return [l for l in r.stdout.splitlines() if l]
+        raise CardIlegivel(f"git diff {base}...{ramo} falhou: {r.stderr.decode(errors='replace').strip()}")
+    return [c for c in r.stdout.decode("utf-8", errors="surrogateescape").split("\0") if c]
 
 
 def verificar(alterados: list[str], owns: list[str], forbids: list[str]) -> list[str]:
     viol = []
+    for campo, padroes in (("owns", owns), ("forbids", forbids)):
+        for p in padroes:
+            m = motivo_indecidivel(p)
+            if m:
+                viol.append(f"INDECIDÍVEL: {campo} {p!r} ({m})")
+    owns = [p for p in owns if motivo_indecidivel(p) is None]
+    forbids = [p for p in forbids if motivo_indecidivel(p) is None]
     for f in alterados:
         proibidos = [p for p in forbids if casa(f, p)]
         if proibidos:
