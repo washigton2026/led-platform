@@ -1889,3 +1889,32 @@ falsification_required: |
   Hoje falha em 7 ficheiros.
 review_by: 2026-11-30
 ```
+
+---
+
+## TD-032 — A precedência «ausente vence indeterminado» da presença (RT-003) não tem teste: invertê-la passa verde
+
+```yaml
+td_id:     TD-032
+title:     "Nenhum teste combina um controlador CALADO com um que NÃO se consegue sondar: inverter a precedência da presença (indeterminado vence ausente) deixa o gate verde e o show arma com um nó em falta"
+severity:  Medium
+status:    open
+origin:    "Falsificador ronda 13 do TD-029 (2026-10-08, X7, FORA do TD-029): a mutação «indeterminado vence ausente» em `presenca_de_todos` deixou o workspace 107/1186/0/9 e clippy 0; o oráculo do falsificador (um nó calado + um não sondável) reprovou. Registado por decisão do operador (R8.5b, item 4)."
+source_files: crates/led-daemon-bin/src/preflight.rs
+context: |
+  O código ATUAL está certo: `presenca_de_todos` (preflight.rs, `let agregado = match (ausentes_totais.is_empty(), indeterminado)`)
+  faz o ausente vencer o indeterminado — a hierarquia do `Veredito` do lumyx-hwcheck. O que falta é o TESTE: os casos
+  de presença do rig real (o_rig_real_de_5_alvos_journal_linha_a_linha) têm «todos», «um calado» e «um não sondável»
+  separados, nunca juntos. É a combinação que decide a precedência.
+impact: |
+  Sem consequência hoje. Uma regressão nesta linha passaria a CI e, com um nó calado e outro sem rota, o pré-voo daria
+  devices_present=true com `devices_unverified` — o show arma e um nó fica escuro (exatamente o RT-003, palco escuro).
+  Medium e não High: exige uma regressão; não é um defeito ativo.
+required_fix: |
+  Teste de tabela em preflight.rs com combinações de 5 alvos: {calado, não sondável, presente} em todas as
+  composições de pelo menos um calado e um não sondável → `devices_missing` e devices_present=false; o nó calado é
+  nomeado. Só teste; nenhuma mudança de produção.
+falsification_required: |
+  A mutação X7 (trocar `(false, _) => Missing` pela precedência inversa) tem de ficar vermelha.
+review_by: 2026-11-30
+```
