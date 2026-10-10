@@ -1859,3 +1859,62 @@ measured: |
   esperado, ultimo publish concluido, iteracao do reader).
 review_by: 2026-10-21
 ```
+
+---
+
+## TD-031 — Os testes constroem `Config` do led-daemon-bin campo a campo: um campo novo toca 7 ficheiros de teste em 2 crates
+
+```yaml
+td_id:     TD-031
+title:     "Os testes constroem `led_daemon_bin::Config` com literal campo a campo; um campo novo obriga a editar 7 ficheiros de teste em 2 crates"
+severity:  Low
+status:    open
+origin:    "R8.5 (#44, 2026-10-08): `assume_no_wifi: bool` → `Option<AssumeNoWifi>` tocou run.rs + 5 ficheiros de teste em led-daemon-bin (e2e_output, end_to_end, refresh_rate, profile_validation, sonda_de_rede) e 2 em led-console-bin (http_server, ipc_contra_o_daemon). O ipc_contra_o_daemon.rs é vigiado pelo TD-022 → a evidência do TD-022 ficou stale e teve de ser regenerada (c883875, e367b90). Registado por decisão do operador (F1b, 2026-10-09), a partir do TD-DRAFT do F1."
+source_files: crates/led-daemon-bin/src/run.rs
+context: |
+  `Config` é `pub`, com campos `pub` e `impl Default` (run.rs). Os testes repetem o literal inteiro em vez de
+  `Config { campo_relevante, ..Default::default() }`. No F0 isto apareceu como acoplamento: run.rs entrou na
+  lista de ficheiros QUENTES (D1) por causa disto, e um campo novo propaga-se a ficheiros vigiados por evidência.
+impact: |
+  Só custo de mudança e risco de evidência stale; nenhum comportamento errado.
+mitigation_now: |
+  Nenhuma. run.rs está na lista quente do Parallel Gauntlet (um só escritor).
+required_fix: |
+  Nos testes, usar `..Default::default()` (ou um builder de teste) e escrever só os campos que o teste exercita.
+  PROIBIDO: mudar o `Default` de produção para acomodar testes (o Default é contrato: integridade NotVerified,
+  override None, sem saída). Tocar em ipc_contra_o_daemon.rs volta a deixar o TD-022 stale: regenerar a
+  evidência no mesmo PR.
+falsification_required: |
+  Acrescentar a `Config` um campo novo com Default → `cargo test --workspace` compila sem editar nenhum teste.
+  Hoje falha em 7 ficheiros.
+review_by: 2026-11-30
+```
+
+---
+
+## TD-032 — A precedência «ausente vence indeterminado» da presença (RT-003) não tem teste: invertê-la passa verde
+
+```yaml
+td_id:     TD-032
+title:     "Nenhum teste combina um controlador CALADO com um que NÃO se consegue sondar: inverter a precedência da presença (indeterminado vence ausente) deixa o gate verde e o show arma com um nó em falta"
+severity:  Medium
+status:    open
+origin:    "Falsificador ronda 13 do TD-029 (2026-10-08, X7, FORA do TD-029): a mutação «indeterminado vence ausente» em `presenca_de_todos` deixou o workspace 107/1186/0/9 e clippy 0; o oráculo do falsificador (um nó calado + um não sondável) reprovou. Registado por decisão do operador (R8.5b, item 4)."
+source_files: crates/led-daemon-bin/src/preflight.rs
+context: |
+  O código ATUAL está certo: `presenca_de_todos` (preflight.rs, `let agregado = match (ausentes_totais.is_empty(), indeterminado)`)
+  faz o ausente vencer o indeterminado — a hierarquia do `Veredito` do lumyx-hwcheck. O que falta é o TESTE: os casos
+  de presença do rig real (o_rig_real_de_5_alvos_journal_linha_a_linha) têm «todos», «um calado» e «um não sondável»
+  separados, nunca juntos. É a combinação que decide a precedência.
+impact: |
+  Sem consequência hoje. Uma regressão nesta linha passaria a CI e, com um nó calado e outro sem rota, o pré-voo daria
+  devices_present=true com `devices_unverified` — o show arma e um nó fica escuro (exatamente o RT-003, palco escuro).
+  Medium e não High: exige uma regressão; não é um defeito ativo.
+required_fix: |
+  Teste de tabela em preflight.rs com combinações de 5 alvos: {calado, não sondável, presente} em todas as
+  composições de pelo menos um calado e um não sondável → `devices_missing` e devices_present=false; o nó calado é
+  nomeado. Só teste; nenhuma mudança de produção.
+falsification_required: |
+  A mutação X7 (trocar `(false, _) => Missing` pela precedência inversa) tem de ficar vermelha.
+review_by: 2026-11-30
+```
