@@ -42,3 +42,17 @@ jobs:
           echo "== diagnóstico: linhas TD030DIAG com violação"; grep -ahE 'TD030DIAG' out-diag/it-*.out | grep -vE 'beat_errado=0 rasgado=0 futuro=0' | head -30
           echo "== diagnóstico: totais"; grep -ahE '^TD030DIAG' out-diag/it-*.out | awk '{for(i=2;i<=5;i++){split($i,a,"="); s[a[1]]+=a[2]}} END{for(k in s) print k"="s[k]}'
           echo "RESULTADO td030 os=${{ matrix.os }} arch=$(uname -m) orig=[$(cat out-orig/RESUMO.txt)] diag=[$(cat out-diag/RESUMO.txt)]"
+      - name: Suite COMPLETA do binário (todos os testes do led-pixel-engine em paralelo), N=300
+        shell: bash {0}
+        run: |
+          mkdir -p out-suite; f=0; t030=0; diag=0
+          for i in $(seq 1 300); do
+            "$BIN" > out-suite/it-$i.out 2>&1; rc=$?
+            echo "$i $rc" >> out-suite/exits.txt
+            if [ $rc -ne 0 ]; then f=$((f+1)); fi
+            grep -q 'audioshare_scalars_beat_timestamp_coherent_under_concurrency ... FAILED' out-suite/it-$i.out && t030=$((t030+1))
+            grep -q 'td030_diag_origem_dos_campos ... FAILED' out-suite/it-$i.out && diag=$((diag+1))
+          done
+          echo "== falhas (primeiras 20 linhas de pânico)"; grep -ahE 'panicked at|coherence violated|TD030DIAG' out-suite/it-*.out | head -20
+          echo "== testes que falharam"; grep -ahE '^test .* FAILED$' out-suite/it-*.out | sort | uniq -c
+          echo "RESULTADO-SUITE td030 os=${{ matrix.os }} arch=$(uname -m) N=300 execucoes_falhadas=$f falhas_original=$t030 falhas_diag=$diag"
