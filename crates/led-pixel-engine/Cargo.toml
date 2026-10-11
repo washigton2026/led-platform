@@ -11,11 +11,9 @@ led-core = { path = "../led-core" }
 # sob Miri isoladas do resto do crate. Aqui é RE-EXPORTADO como `triple`, por isso
 # `crate::triple::…` continua a resolver e nenhum consumidor muda.
 led-triple = { path = "../led-triple" }
-# RT-LOCK-RENDER-001 (TD-002): scalars() on the render hot-path needs lock-free
-# reads AND a coherent snapshot of AudioScalars (all fields from the same publish).
-# arc-swap provides ArcSwap<T> — store() is one atomic pointer swap; load() is
-# one atomic load, no lock, no blocking. No unsafe in user code.
-arc-swap = "1"
+# RT-LOCK-RENDER-001 (TD-002) e TD-030: scalars() é servido por um latch de sequência
+# próprio (src/seqlock.rs, sem unsafe). O arc-swap saiu: o TD-030 mediu-o a devolver um
+# snapshot de OUTRA instância (arc-swap 1.9.1).
 
 # GPU executor — hardware-gated; only activates when `--features gpu` is passed.
 # Requires a physical GPU + wgpu-compatible driver. CI runs without this feature.
@@ -40,3 +38,10 @@ optional = true
 [dev-dependencies]
 led-hal = { path = "../led-hal" }
 led-audio = { path = "../led-audio" }
+
+# loom (TD-030): só com RUSTFLAGS="--cfg loom"; modela o latch de src/seqlock.rs.
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

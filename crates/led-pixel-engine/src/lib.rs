@@ -26,6 +26,8 @@ pub mod library;
 pub mod noise;
 pub mod pipeline;
 pub mod reactive;
+/// Latch de sequência sem `unsafe` que guarda os escalares do `AudioShare` (TD-030).
+mod seqlock;
 /// Re-export do crate leaf [`led_triple`] sob o nome `triple`, para `crate::triple::…`
 /// continuar a resolver. O módulo mudou de crate; a superfície não mudou.
 pub use led_triple as triple;
