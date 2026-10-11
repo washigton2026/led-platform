@@ -975,38 +975,72 @@ Ethernet Address: aa:bb:cc:dd:ee:ff
         }));
     }
 
-    /// No /sys REAL do runner (CI ubuntu-24.04): a classificação de cada entrada presente é coerente, e o
-    /// `probe_linux()` real é o veredito dessas classificações. NÃO assume que não há WiFi.
+    /// No /sys REAL do runner (CI ubuntu-24.04), com ORÁCULO INDEPENDENTE: a classificação esperada de cada entrada é
+    /// calculada só com `std::fs` e uma tabela escrita à mão (nenhuma função do produto), e o `probe_linux()` real tem de
+    /// dar o veredito que esse oráculo calcula. NÃO assume que não há WiFi.
     #[cfg(target_os = "linux")]
     #[test]
     fn r85c_sys_real_classificacao_coerente() {
-        let raiz = std::path::Path::new(RAIZ_SYSFS);
-        let mut lidas = Vec::new();
+        #[derive(Debug, PartialEq)]
+        enum Esperado { NaoInterface, Cabo, WifiAtiva, WifiDesligada, Indeterminada }
+        let raiz = std::path::Path::new("/sys/class/net");
+        let mut nomes = Vec::new();
+        let mut ativas: Vec<String> = Vec::new();
+        let mut indeterminadas = 0usize;
         for e in std::fs::read_dir(raiz).expect("/sys/class/net no runner") {
             let e = e.expect("entrada legível no runner");
-            let p = e.path();
             let nome = e.file_name().to_string_lossy().to_string();
-            let entrada = ler_entrada(&p, nome.clone());
-            let e_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
-            eprintln!("INVENTARIO {nome}: dir={e_dir} {entrada:?}");
-            match &entrada {
-                EntradaSysfs::NaoDiretorio => assert!(!e_dir, "{nome}"),
-                EntradaSysfs::Interface { wireless, phy80211, uevent, .. } => {
-                    assert!(e_dir, "{nome}");
-                    let sinais = *wireless || *phy80211 || nome.starts_with("wl")
-                        || uevent.as_deref().is_some_and(|u| u.lines().any(|l| l.trim() == "DEVTYPE=wlan"));
-                    assert_eq!(e_wifi_linux(&nome, *wireless, *phy80211, uevent.as_deref()).unwrap_or(true), sinais || uevent.is_none(), "{nome}");
-                    if nome == "lo" {
-                        assert!(!sinais, "lo nunca é WiFi");
+            let p = e.path();
+            let esperado = match std::fs::metadata(&p) {
+                Err(_) => Esperado::Indeterminada,
+                Ok(m) if !m.is_dir() => Esperado::NaoInterface,
+                Ok(_) => {
+                    let uevent = std::fs::read_to_string(p.join("uevent"));
+                    let devtype_wlan = uevent.as_ref().map(|u| u.lines().any(|l| l.trim() == "DEVTYPE=wlan")).unwrap_or(false);
+                    let wifi = p.join("wireless").is_dir() || p.join("phy80211").exists() || nome.starts_with("wl") || devtype_wlan;
+                    if !wifi && uevent.is_err() {
+                        Esperado::Indeterminada
+                    } else if !wifi {
+                        Esperado::Cabo
+                    } else {
+                        match std::fs::read_to_string(p.join("operstate")).map(|o| o.trim().to_string()).as_deref() {
+                            Ok("up") => Esperado::WifiAtiva,
+                            Ok("down") | Ok("lowerlayerdown") | Ok("notpresent") => Esperado::WifiDesligada,
+                            _ => Esperado::Indeterminada,
+                        }
                     }
                 }
-                EntradaSysfs::Ilegivel { .. } => {}
+            };
+            eprintln!("INVENTARIO {nome}: {esperado:?}");
+            match esperado {
+                Esperado::WifiAtiva => ativas.push(nome.clone()),
+                Esperado::Indeterminada => indeterminadas += 1,
+                _ => {}
             }
-            lidas.push(Ok(entrada));
+            if nome == "lo" {
+                assert_eq!(esperado, Esperado::Cabo, "lo existe, é diretório e não é WiFi");
+                let lo_type = std::fs::read_to_string(p.join("type")).unwrap_or_default();
+                assert_eq!(lo_type.trim(), "772", "lo é ARPHRD_LOOPBACK (772)");
+            }
+            if nome == "bonding_masters" {
+                assert_eq!(esperado, Esperado::NaoInterface, "bonding_masters é ficheiro, não interface");
+            }
+            nomes.push(nome);
         }
-        assert!(!lidas.is_empty(), "o runner tem de ter pelo menos `lo`");
-        assert_eq!(probe_linux(), classificar_entradas("sysfs /sys/class/net", lidas.into_iter()),
-            "probe_linux real ≠ veredito das classificações do mesmo /sys");
+        assert!(nomes.iter().any(|n| n == "lo"), "o runner tem de ter `lo`: {nomes:?}");
+        let real = probe_linux();
+        match real {
+            Err(NetworkPolicyError::WifiActive { mut interfaces }) => {
+                interfaces.sort();
+                ativas.sort();
+                assert_eq!(interfaces, ativas, "WifiActive com as interfaces que o oráculo vê ativas");
+            }
+            Err(NetworkPolicyError::ProbeFailed { .. }) => {
+                assert!(ativas.is_empty() && indeterminadas > 0, "ProbeFailed sem indeterminada no oráculo: {real:?}");
+            }
+            Ok(()) => assert!(ativas.is_empty() && indeterminadas == 0, "Ok com o oráculo a ver WiFi ou dúvida"),
+            Err(NetworkPolicyError::ProbeUnavailable { .. }) => panic!("Linux é suportado: {real:?}"),
+        }
     }
 
     /// A API pública do led-hal neste ficheiro continua a ser exatamente a de 8b99cef (4 itens).
