@@ -116,14 +116,16 @@ impl NetworkGuard for PermissiveGuard {
 /// ## Platform support
 /// | Platform | Probe method |
 /// |---|---|
-/// | macOS | `networksetup -listallhardwareports` + `ifconfig <iface>` status |
-/// | Linux | `/sys/class/net/wl*/operstate` |
+/// | macOS | `networksetup -listallhardwareports` + `ifconfig <iface>` `status:` of each Wi-Fi port |
+/// | Linux | `/sys/class/net/*`: a directory is Wi-Fi if it has `wireless/`, `phy80211/`, `DEVTYPE=wlan` in `uevent`, or a `wl*` name; its state comes from `operstate` |
 /// | Other | `ProbeUnavailable` warning (allows show to proceed) |
 ///
-/// On macOS and Linux a probe that **fails to run** (`networksetup`, `/sys/class/net`) returns
-/// `ProbeFailed` (TD-029). NOT yet the per-interface reads: an `ifconfig` that fails, an unreadable
-/// `operstate` or an I/O error inside the `read_dir` still count the interface as INACTIVE —
-/// fail-open, open in TD-029 (residuals (b) and (d)).
+/// Fail-closed on macOS and Linux (TD-029, R8.5b/R8.5c): only an interface PROVEN active is `WifiActive`
+/// (never unblocked by the override); anything that cannot be read or recognised — a probe that fails to
+/// run, an `ifconfig` that fails or has no `status:`, an unreadable or unknown `operstate`, an unreadable
+/// `read_dir` entry or `metadata` — is INDETERMINATE and returns `ProbeFailed` (blocks; the operator may
+/// assert with `--assume-no-wifi`). Entries of `/sys/class/net` that are not directories (e.g.
+/// `bonding_masters`) are not interfaces. Not covered: a radio that shows none of the four signals.
 pub struct WifiBlockGuard;
 
 impl NetworkGuard for WifiBlockGuard {

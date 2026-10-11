@@ -30,8 +30,8 @@
 //!
 //! O que este módulo garante é que a diferença fica **escrita no journal**: "verificado",
 //! "não foi possível verificar" e "afirmado pelo operador" nunca aparecem com a mesma frase —
-//! DADO o que a guarda devolve. Uma sonda por interface que falha em silêncio (TD-029, residuais
-//! (b)/(d)) chega aqui como `Ok` e é registada como `network_checked`.
+//! DADO o que a guarda devolve. Desde o R8.5b/R8.5c a guarda do led-hal é fail-closed por interface:
+//! o que não se consegue ler chega aqui como `ProbeFailed` (`network_probe_failed`), nunca como `Ok`.
 
 use crate::loader::Integrity;
 use crate::output::OutputConfig;

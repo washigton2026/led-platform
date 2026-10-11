@@ -1811,6 +1811,15 @@ progress: |
   Fixtures = o rig real: 5 alvos de rede, discovery ligado/desligado, presenca toda/um calado/um nao sondavel,
   13 payloads reais × 3 nomes de guarda × override → journal verificado linha a linha em 468 pre-voos; e2e com
   5 alvos (6200 px) nos caminhos CLI e IPC. Tabela exaustiva 3×4×2×2 = 48.
+  R8.5b (#47, 8b99cef; decisões (a)/(b) do operador): por interface, Ativa/Desligada/Indeterminada; indeterminado =
+  sonda falhada (bloqueia; o override permite; nunca desbloqueia WiFi ativo); WiFi = QUALQUER de wireless/, phy80211/,
+  DEVTYPE=wlan, prefixo wl. Ronda 14: FALSE_GREEN — 9 DENTRO, todos lacunas de TESTE (P2, L2–L6, H13, H14b, H11; Linux
+  medido na CI ubuntu-24.04 pelo #48, fechado sem merge).
+  R8.5c (#47; accept v2 aprovado pelo operador, sha 527329b8…67ee): um teste nomeado por sobrevivente (veredito no
+  led-hal + frase do journal pela tabela FRASES no led-daemon-bin); sondas por parâmetro (probe_macos_com,
+  classificar_entradas); estruturais de probe_linux/probe_wifi/RAIZ_SYSFS; teste no /sys real do runner Linux; só
+  diretórios são interfaces (`bonding_masters`). Residual declarado: rádio sem nenhum dos 4 sinais (TD-DRAFT
+  2026-10-09, item da checklist de certificação física). Fecho SÓ com a ronda do falsificador limpa e por ordem.
 review_by: 2026-10-31
 ```
 
