@@ -1,0 +1,44 @@
+# [MEDIÇÃO] TD-030 — NÃO MERGEAR. Ramo descartável measure/td030-diag sobre origin/main + um teste de DIAGNÓSTICO
+# (td030_diag_origem_dos_campos: cada publish i marca i em timestamp_ms, sample_rate, rms e bass).
+# Por arquitetura: N execuções isoladas (--exact) do teste ORIGINAL e N do de DIAGNÓSTICO, saída por iteração.
+name: measure-td030
+
+on:
+  pull_request:
+
+jobs:
+  td030:
+    name: td030 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build do binário de teste
+        shell: bash {0}
+        run: |
+          cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > build.json 2> build.err; echo "build_exit=$?"
+          BIN=$(python3 -c 'import json,sys
+          for l in open("build.json"):
+              try: m=json.loads(l)
+              except: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="led_pixel_engine" and m["profile"]["test"]: print(m["executable"])' | head -1)
+          echo "BIN=$BIN" >> $GITHUB_ENV; echo "BIN=$BIN"
+      - name: N execuções — original e diagnóstico
+        shell: bash {0}
+        run: |
+          uname -m; sysctl -n machdep.cpu.brand_string 2>/dev/null || grep -m1 'model name' /proc/cpuinfo || true
+          nproc 2>/dev/null || sysctl -n hw.ncpu
+          bash .github/measure-td030/corre_n.sh "$BIN" 500 out-orig
+          bash .github/measure-td030/corre_n.sh "$BIN" 500 out-diag reactive::adversarial_tests::td030_diag_origem_dos_campos
+          echo "== falhas do original"; for f in $(awk '$2!=0{print $1}' out-orig/exits.txt | head -20); do grep -aE 'panicked|coherence' out-orig/it-$f.out | head -2; done
+          echo "== diagnóstico: linhas TD030DIAG com violação"; grep -ahE 'TD030DIAG' out-diag/it-*.out | grep -vE 'beat_errado=0 rasgado=0 futuro=0' | head -30
+          echo "== diagnóstico: totais"; grep -ahE '^TD030DIAG' out-diag/it-*.out | awk '{for(i=2;i<=5;i++){split($i,a,"="); s[a[1]]+=a[2]}} END{for(k in s) print k"="s[k]}'
+          echo "RESULTADO td030 os=${{ matrix.os }} arch=$(uname -m) orig=[$(cat out-orig/RESUMO.txt)] diag=[$(cat out-diag/RESUMO.txt)]"

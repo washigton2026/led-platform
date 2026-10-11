@@ -427,6 +427,52 @@ mod adversarial_tests {
         assert!(out.b <= base.b, "b overflow: {} > {}", out.b, base.b);
     }
 
+    // ── [CÓPIA DE DIAGNÓSTICO TD-030 — NÃO É O COMMIT] cada publish i marca i em 4 campos ─────────
+    #[test]
+    fn td030_diag_origem_dos_campos() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::thread;
+        let share = Arc::new(AudioShare::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let publicado = Arc::new(AtomicU64::new(u64::MAX));
+        let (ws, wp) = (share.clone(), publicado.clone());
+        let writer = thread::spawn(move || {
+            for i in 1u64..=10_000 {
+                let mut f = af(i % 2 == 1, i, i as f32, i as f32);
+                f.sample_rate = i as u32;
+                ws.publish(&f);
+                wp.store(i, Ordering::SeqCst);
+            }
+        });
+        let (rs, st, rp) = (share.clone(), stop.clone(), publicado.clone());
+        let reader = thread::spawn(move || {
+            let (mut n, mut beat_errado, mut rasgado, mut futuro) = (0u64, 0u64, 0u64, 0u64);
+            let mut amostras: Vec<String> = Vec::new();
+            while !st.load(Ordering::Relaxed) {
+                n += 1;
+                let sc = rs.scalars();
+                if sc.timestamp_ms == 0 { continue; }
+                let (t, sr, r, b) = (sc.timestamp_ms, sc.sample_rate as u64, sc.rms as u64, sc.bass as u64);
+                let um_so_publish = t == sr && t == r && t == b;
+                let beat_ok = sc.beat == (t % 2 == 1);
+                let publ = rp.load(Ordering::SeqCst);
+                let do_futuro = publ != u64::MAX && t > publ + 1;
+                if !um_so_publish { rasgado += 1; }
+                if !beat_ok { beat_errado += 1; }
+                if do_futuro { futuro += 1; }
+                if (!um_so_publish || !beat_ok || do_futuro) && amostras.len() < 5 {
+                    amostras.push(format!("[it={n} ts={t} sr={sr} rms={r} bass={b} beat={} publicado={publ}]", sc.beat));
+                }
+            }
+            (n, beat_errado, rasgado, futuro, amostras)
+        });
+        writer.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        let (n, beat_errado, rasgado, futuro, amostras) = reader.join().unwrap();
+        eprintln!("TD030DIAG leituras={n} beat_errado={beat_errado} rasgado={rasgado} futuro={futuro} amostras={}", amostras.join(" "));
+        assert!(beat_errado == 0 && rasgado == 0 && futuro == 0, "TD030DIAG violação: beat_errado={beat_errado} rasgado={rasgado} futuro={futuro} {}", amostras.join(" "));
+    }
+
     // ── COHERENCE: scalars() must return beat+timestamp_ms from the SAME publish ─
     // This is the property that per-field atomics violated (TD-002).
     // A concurrent writer publishes frames with strictly increasing (beat, timestamp_ms)
