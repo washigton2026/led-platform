@@ -1,0 +1,46 @@
+# [MEDIÇÃO] TD-030 — NÃO MERGEAR. Ramo descartável measure/td030-repro-arcswap sobre origin/main 2cbbc8d.
+# R = reprodução mínima SÓ com arc-swap 1.9.1 (.github/measure-td030-repro, sem código LUMYX);
+# A = led-pixel-engine de produção, filtro reactive::adversarial_tests (controlo positivo).
+# N=1000 execuções INTERCALADAS (R, A, R, A…) por arquitetura, saída por iteração.
+name: measure-td030-repro
+
+on:
+  pull_request:
+
+jobs:
+  repro:
+    name: repro (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build dos dois binários de teste
+        shell: bash {0}
+        run: |
+          pick() { python3 -c 'import json,sys
+          for l in open(sys.argv[1]):
+              try: m=json.loads(l)
+              except: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]==sys.argv[2] and m["profile"]["test"]: print(m["executable"])' "$1" "$2" | head -1; }
+          cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > build-a.json 2> build-a.err; echo "build_a_exit=$?"
+          cargo test --manifest-path .github/measure-td030-repro/Cargo.toml --locked --no-run --message-format=json > build-r.json 2> build-r.err; echo "build_r_exit=$?"
+          grep -h 'arc-swap' build-r.err build-a.err | head -4
+          A=$(pick build-a.json led_pixel_engine); R=$(pick build-r.json arcswap_cross_instance_repro)
+          echo "A=$A" >> $GITHUB_ENV; echo "R=$R" >> $GITHUB_ENV; echo "A=$A R=$R"
+      - name: N=1000 intercalado
+        shell: bash {0}
+        run: |
+          uname -m; sysctl -n machdep.cpu.brand_string 2>/dev/null || grep -m1 'model name' /proc/cpuinfo || true
+          nproc 2>/dev/null || sysctl -n hw.ncpu
+          bash .github/measure-td030-repro/intercalado-repro.sh "$R" "$A" 1000 out
+          echo "== R: violações (primeiras 30)"; grep -ah 'REPRO_VIOLATION' out/R/it-*.out | head -30
+          echo "== A: pânicos de coerência (primeiros 10)"; grep -ah 'coherence violated' out/A/it-*.out | head -10
+          echo "RESULTADO td030-repro os=${{ matrix.os }} arch=$(uname -m) $(tr '\n' ' ' < out/RESUMO.txt)"
