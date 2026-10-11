@@ -1,0 +1,48 @@
+# [MEDIÇÃO] TD-029 R8.5c (Linux) — NÃO MERGEAR. Ramo descartável measure/td029-r85c-linux sobre 8f8f90d (#47).
+#
+# Por job (um mutante da ronda 14): aplica-o e corre o GATE real (workspace + clippy). Esperado: gate VERMELHO com o
+# teste r85c_* nomeado em `panicked at` (o gate do R8.5c mata o mutante em Linux, com o código cfg(linux) compilado).
+# C0 = sem mutante: gate e clippy verdes, e o teste do /sys real imprime o inventário do runner.
+name: measure-td029-r85c
+
+on:
+  pull_request:
+
+jobs:
+  mutante:
+    name: r85c linux (${{ matrix.m }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        m: [C0, L1, L2, L3, L4, L5, L6]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Deps de áudio
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Mutante e gate
+        shell: bash {0}
+        run: |
+          M=${{ matrix.m }}
+          if [ "$M" != C0 ]; then python3 -I .github/measure-r85c/mutantes.py aplica "$M" . || exit 1; fi
+          git diff --stat
+          cargo test --workspace --locked --no-fail-fast > gate.txt 2>&1; gate=$?
+          tr=$(grep -aE '^test result:' gate.txt | awk '{c++; p+=$4; f+=$6; ig+=$8} END{print "bins="c" "p"/"f"/"ig}')
+          falhados=$(grep -aE '^test .* FAILED$' gate.txt | awk '{print $2}' | sort -u | tr '\n' ' ')
+          panicos=$(grep -acE 'panicked at' gate.txt)
+          erros_compilacao=$(grep -acE '^error\[E' gate.txt)
+          cargo clippy --workspace --all-targets --locked -- -D warnings > clippy.txt 2>&1; clippy=$?
+          grep -aE '^(error|warning)' clippy.txt | head -5
+          if [ "$M" = C0 ]; then
+            cargo test -p led-hal --locked --lib network_guard::tests::r85c_sys_real_classificacao_coerente -- --exact --nocapture > sysreal.txt 2>&1; sys=$?
+            grep -aE 'INVENTARIO|^test |test result|panicked' sysreal.txt
+          else
+            sys=NA
+            esperado=$(python3 -I .github/measure-r85c/mutantes.py teste "$M")
+            echo "ESPERADO vermelho: $esperado"
+          fi
+          echo "RESULTADO r85c-linux m=$M gate_exit=$gate gate=[$tr] falhados=[$falhados] panicked=$panicos error_E=$erros_compilacao clippy_exit=$clippy sysreal_exit=$sys"
