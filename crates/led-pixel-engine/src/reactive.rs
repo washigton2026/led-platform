@@ -515,4 +515,79 @@ mod adversarial_tests {
         let elapsed = t0.elapsed();
         assert!(elapsed.as_millis() < 5, "1000-pixel render took {}ms", elapsed.as_millis());
     }
+
+    // ── ISOLATION (TD-030): scalars() never returns a value published into ANOTHER AudioShare ─
+    // TD-030 measured `scalars()` handing out a snapshot that only another, independent
+    // `AudioShare` instance had published (ArcSwap 1.9.1, tests running in parallel). Here K
+    // instances live at once, each with its own writer and reader. Instance `id` publishes
+    // `sample_rate = id` and marks `timestamp_ms = rms = bass = i`, `beat = i odd`. Every
+    // snapshot a reader sees must be the default or carry ITS id with coherent marks.
+    #[test]
+    fn audioshare_isolamento_entre_instancias() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        use std::thread;
+        let (instancias, publicacoes) = if cfg!(miri) { (2u32, 40u64) } else { (8u32, 10_000u64) };
+
+        let parar = Arc::new(AtomicBool::new(false));
+        let mut escritores = Vec::new();
+        let mut leitores = Vec::new();
+        for id in 1..=instancias {
+            let share = Arc::new(AudioShare::new());
+            let ws = share.clone();
+            escritores.push(thread::spawn(move || {
+                for i in 1..=publicacoes {
+                    ws.publish(&AudioFeatures {
+                        sample_rate: id,
+                        timestamp_ms: i,
+                        rms: i as f32,
+                        beat: i % 2 == 1,
+                        bass: i as f32,
+                        mid: 0.3,
+                        high: 0.1,
+                        spectrum: vec![0.0; 8],
+                        musical_section: None,
+                        instrument_class: None,
+                    });
+                }
+            }));
+            let rs = share.clone();
+            let st = parar.clone();
+            let violacoes = Arc::new(AtomicU32::new(0));
+            let rv = violacoes.clone();
+            leitores.push((id, violacoes, thread::spawn(move || {
+                let mut primeira: Option<AudioScalars> = None;
+                let mut leituras = 0u64;
+                while !st.load(Ordering::Relaxed) {
+                    leituras += 1;
+                    let sc = rs.scalars();
+                    if sc == AudioScalars::default() {
+                        continue;
+                    }
+                    let marca = sc.timestamp_ms as f32;
+                    let coerente = sc.sample_rate == id
+                        && sc.rms == marca
+                        && sc.bass == marca
+                        && sc.beat == (sc.timestamp_ms % 2 == 1);
+                    if !coerente {
+                        rv.fetch_add(1, Ordering::Relaxed);
+                        primeira.get_or_insert(sc);
+                    }
+                }
+                (primeira, leituras)
+            })));
+        }
+        for e in escritores {
+            e.join().unwrap();
+        }
+        parar.store(true, Ordering::Relaxed);
+        let mut falhas = Vec::new();
+        for (id, violacoes, leitor) in leitores {
+            let (primeira, leituras) = leitor.join().unwrap();
+            let v = violacoes.load(Ordering::Relaxed);
+            if v > 0 {
+                falhas.push(format!("instancia {id}: {v} snapshots alheias/incoerentes em {leituras} leituras; primeira={primeira:?}"));
+            }
+        }
+        assert!(falhas.is_empty(), "TD-030 isolamento violado: {}", falhas.join(" | "));
+    }
 }
