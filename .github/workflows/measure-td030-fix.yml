@@ -37,7 +37,7 @@ jobs:
           (cd ../pre && CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../t-pre cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > $GITHUB_WORKSPACE/build-c.json 2> $GITHUB_WORKSPACE/build-c.err); echo "build_c_exit=$?"
           F=$(pick build-f.json); C=$(pick build-c.json)
           echo "F=$F" >> $GITHUB_ENV; echo "C=$C" >> $GITHUB_ENV; echo "F=$F C=$C"
-          grep -c arc_swap build-c.json; grep -c arc_swap build-f.json
+          echo "arc_swap em C: $(grep -c arc_swap build-c.json || true) · em F: $(grep -c arc_swap build-f.json || true)"
       - name: N=1000 intercalado
         shell: bash {0}
         run: |
