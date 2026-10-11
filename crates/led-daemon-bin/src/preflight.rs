@@ -1526,8 +1526,8 @@ mod tests {
             ("H14b", falhou("ifconfig", "estado WiFi indeterminado: en0=sem linha status: reconhecida"), "network_probe_failed"),
             ("H11", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: ?=entrada de read_dir ilegivel"), "network_probe_failed"),
             ("L2", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=dormant"), "network_probe_failed"),
-            ("L3", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=dormant"), "network_probe_failed"),
-            ("L4", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=dormant"), "network_probe_failed"),
+            ("L3", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=unknown"), "network_probe_failed"),
+            ("L4", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan1=operstate ilegivel"), "network_probe_failed"),
             ("L5", NetworkPolicyError::WifiActive { interfaces: vec!["wlan0".into()] }, "network_refused"),
             ("L6", NetworkPolicyError::WifiActive { interfaces: vec!["wlp2s0".into()] }, "network_refused"),
         ]
@@ -1558,10 +1558,18 @@ mod tests {
     #[test]
     fn r85c_valores_do_journal_existem_no_led_hal() {
         let hal = include_str!("../../led-hal/src/network_guard.rs");
+        assert!(hal.contains("fn r85c_"), "os testes r85c_ do led-hal existem");
         for (id, erro, _) in sobreviventes() {
-            if let NetworkPolicyError::ProbeFailed { error, .. } = erro {
-                let resto = error.trim_start_matches("estado WiFi indeterminado: ");
-                assert!(hal.contains(resto) && hal.contains("r85c_"), "{id}: {resto:?} não está no led-hal");
+            match erro {
+                NetworkPolicyError::ProbeFailed { error, .. } => {
+                    assert!(hal.contains(&format!("\"{error}\"")), "{id}: {error:?} não está, literal, no led-hal");
+                }
+                NetworkPolicyError::WifiActive { interfaces } => {
+                    for i in interfaces {
+                        assert!(hal.contains(&format!("Some(&[\"{i}\"])")), "{id}: {i:?} não é afirmado como ativo no led-hal");
+                    }
+                }
+                NetworkPolicyError::ProbeUnavailable { .. } => panic!("{id}"),
             }
         }
     }

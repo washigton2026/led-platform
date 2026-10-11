@@ -873,11 +873,33 @@ Ethernet Address: aa:bb:cc:dd:ee:ff
         assert_eq!(esperado.to_string(), "[LUMYX CRITICAL] WiFi probe `sysfs /sys/class/net` failed (estado WiFi indeterminado: wlan0=dormant). The WiFi-forbidden rule could not be verified on a supported platform.");
     }
 
+    /// O veredito que o `probe_sysfs` (a função que o `probe_linux` chama, fixado acima) dá para uma raiz de teste.
+    fn veredito_sysfs(ifaces: &[Iface], erro: Option<&str>, ativas: Option<&[&str]>) {
+        let sys = Sysfs::novo(ifaces);
+        let r = probe_sysfs(&sys.0);
+        match (erro, ativas) {
+            (Some(erro), None) => {
+                let e = NetworkPolicyError::ProbeFailed { probe: "sysfs /sys/class/net", error: erro.into() };
+                assert_eq!(r, Err(e.clone()));
+                assert_eq!(e.to_string(), format!("[LUMYX CRITICAL] WiFi probe `sysfs /sys/class/net` failed ({erro}). The WiFi-forbidden rule could not be verified on a supported platform."));
+            }
+            (None, Some(ativas)) => {
+                let e = NetworkPolicyError::WifiActive { interfaces: ativas.iter().map(|s| s.to_string()).collect() };
+                assert_eq!(r, Err(e.clone()));
+                assert_eq!(e.to_string(), format!("[LUMYX CRITICAL] WiFi active on interface(s): {}. Disable WiFi before starting a live show (Hardware Rule).", ativas.join(", ")));
+            }
+            _ => unreachable!(),
+        }
+    }
+
     #[test]
     fn r85c_l3_probe_failed_nao_vira_ok() {
         let corpo = item(&producao_normalizada(), "#[cfg(target_os=\"linux\")]fnprobe_linux()");
         assert!(!corpo.contains("Ok(") && !corpo.contains("match"), "probe_linux reinterpreta o resultado: {corpo}");
         assert_eq!(corpo, normaliza(PROBE_LINUX));
+        // o veredito que o probe_linux tem de devolver sem reinterpretar: operstate `unknown` → ProbeFailed
+        veredito_sysfs(&[("wlan0", true, false, Some("DEVTYPE=wlan\n"), Some("unknown\n"))],
+            Some("estado WiFi indeterminado: wlan0=unknown"), None);
     }
 
     const PROBE_WIFI: &str = r#"
@@ -903,6 +925,9 @@ Ethernet Address: aa:bb:cc:dd:ee:ff
         let linux = &corpo[corpo.find("#[cfg(target_os=\"linux\")]").unwrap()..corpo.find("#[cfg(not(").unwrap()];
         assert_eq!(linux, "#[cfg(target_os=\"linux\")]returnprobe_linux();", "o ramo Linux devolve a sonda sem a tocar");
         assert_eq!(corpo, normaliza(PROBE_WIFI));
+        // o veredito é ProbeFailed (bloqueia), nunca ProbeUnavailable (prosseguiria com aviso): operstate ilegível
+        veredito_sysfs(&[("wlan1", false, true, Some("DEVTYPE=wlan\n"), None)],
+            Some("estado WiFi indeterminado: wlan1=operstate ilegivel"), None);
     }
 
     #[test]
@@ -911,6 +936,9 @@ Ethernet Address: aa:bb:cc:dd:ee:ff
         assert!(corpo.contains("returnprobe_linux();") && corpo.contains("returnprobe_macos();"));
         assert!(!corpo.contains("let_=") && !corpo.contains("Ok(())"), "o resultado da sonda é descartado: {corpo}");
         assert_eq!(corpo, normaliza(PROBE_WIFI));
+        // o veredito que não pode ser descartado: WiFi ATIVO → WifiActive
+        veredito_sysfs(&[("eth0", false, false, Some("INTERFACE=eth0\n"), Some("up\n")),
+                         ("wlan0", true, false, Some("DEVTYPE=wlan\n"), Some("up\n"))], None, Some(&["wlan0"]));
         assert_eq!(item(&producao_normalizada(), "#[cfg(target_os=\"macos\")]fnprobe_macos()"),
             "#[cfg(target_os=\"macos\")]fnprobe_macos()->Result<(),NetworkPolicyError>{probe_macos_com(networksetup_real,ifconfig_real)}");
     }
@@ -924,6 +952,8 @@ Ethernet Address: aa:bb:cc:dd:ee:ff
         let corpo = item(&f, "#[cfg(target_os=\"linux\")]fnprobe_linux()");
         let corpo = &corpo[corpo.find('{').unwrap()..];
         assert!(corpo.contains("RAIZ_SYSFS") && !corpo.contains('"'), "probe_linux usa RAIZ_SYSFS e nenhum literal: {corpo}");
+        // um rádio PCI (só phy80211/, nome wlp*) ativo é visto pela regra: WifiActive
+        veredito_sysfs(&[("wlp2s0", false, true, Some("INTERFACE=wlp2s0\n"), Some("up\n"))], None, Some(&["wlp2s0"]));
     }
 
     #[test]
