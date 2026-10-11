@@ -1478,4 +1478,92 @@ mod tests {
         assert_eq!(da_tabela, todas);
     }
 
+    // ── TD-029 R8.5c: P2 e a frase do journal por sobrevivente da ronda 14 ───────────────────────
+
+    /// A frase do journal pela ENTRADA DA TABELA `FRASES` (não por um literal), com as marcas trocadas pelos valores.
+    fn frase_da_tabela(chave: &str, valores: &[(&str, &str)]) -> String {
+        let modelo = medicao::FRASES.iter().find(|(k, _)| *k == chave).map(|(_, f)| *f)
+            .unwrap_or_else(|| panic!("{chave} não está em FRASES"));
+        valores.iter().fold(modelo.to_string(), |t, (marca, v)| t.replace(marca, v))
+    }
+
+    /// **P2 — broadcast é REDE.** Um alvo em broadcast atravessa as interfaces; contá-lo como loopback desligava o
+    /// gate do ADR-0005 com WiFi ativo.
+    #[test]
+    fn r85c_p2_broadcast_e_rede_com_wifi_ativo_reprova() {
+        let tabela: [(&str, Fio); 6] = [
+            ("255.255.255.255", Fio::Rede),
+            ("2.255.255.255", Fio::Rede),
+            ("0.0.0.0", Fio::Rede),
+            ("::", Fio::Rede),
+            ("127.0.0.1", Fio::SoLoopback),
+            ("::1", Fio::SoLoopback),
+        ];
+        for (ip, esperado) in tabela {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert_eq!(fio_de(Some(&[ip])), esperado, "{ip}");
+        }
+        let misto: [IpAddr; 2] = ["127.0.0.1".parse().unwrap(), "255.255.255.255".parse().unwrap()];
+        assert_eq!(fio_de(Some(&misto)), Fio::Rede, "loopback + broadcast continua a ser rede");
+        let mut cfg = saida();
+        for a in cfg.alvos.iter_mut() {
+            a.addr = "255.255.255.255:4048".parse().unwrap();
+        }
+        let pf = preflight(Integrity::AssumedByOperator, Some(&cfg),
+            &GuardaFalsa(Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] })),
+            &SondaFalsa(Presence::AllPresent), None);
+        assert!(!pf.report().network_ok, "broadcast com WiFi ativo tem de bloquear");
+        assert!(!tem(&pf, "network_local"));
+        assert_eq!(detalhe(&pf, "network_refused"), frase_da_tabela("network_refused", &[("{interfaces}", "en0")]));
+    }
+
+    /// Os valores que a guarda devolve em cada sobrevivente (os MESMOS que os testes `r85c_*` do led-hal afirmam).
+    fn sobreviventes() -> Vec<(&'static str, NetworkPolicyError, &'static str)> {
+        let falhou = |probe: &'static str, error: &str| NetworkPolicyError::ProbeFailed { probe, error: error.into() };
+        vec![
+            ("H13", falhou("ifconfig", "estado WiFi indeterminado: en0=ifconfig nao correu"), "network_probe_failed"),
+            ("H14b", falhou("ifconfig", "estado WiFi indeterminado: en0=ifconfig com exit != 0"), "network_probe_failed"),
+            ("H14b", falhou("ifconfig", "estado WiFi indeterminado: en0=sem linha status: reconhecida"), "network_probe_failed"),
+            ("H11", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: ?=entrada de read_dir ilegivel"), "network_probe_failed"),
+            ("L2", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=dormant"), "network_probe_failed"),
+            ("L3", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=dormant"), "network_probe_failed"),
+            ("L4", falhou("sysfs /sys/class/net", "estado WiFi indeterminado: wlan0=dormant"), "network_probe_failed"),
+            ("L5", NetworkPolicyError::WifiActive { interfaces: vec!["wlan0".into()] }, "network_refused"),
+            ("L6", NetworkPolicyError::WifiActive { interfaces: vec!["wlp2s0".into()] }, "network_refused"),
+        ]
+    }
+
+    /// **A frase do journal de cada sobrevivente**, pela entrada da tabela: com o valor que a sonda CORRETA devolve,
+    /// o pré-voo não arma e escreve exatamente essa frase — nunca `network_checked` nem `network_unverified`.
+    #[test]
+    fn r85c_journal_por_sobrevivente() {
+        for (id, erro, chave) in sobreviventes() {
+            let pf = corre_com(Err(erro.clone()), false);
+            assert!(!pf.report().network_ok, "{id}: não pode armar");
+            let valores: Vec<(&str, String)> = match &erro {
+                NetworkPolicyError::ProbeFailed { probe, error } => vec![("{probe}", probe.to_string()), ("{error}", error.clone())],
+                NetworkPolicyError::WifiActive { interfaces } => vec![("{interfaces}", interfaces.join(", "))],
+                NetworkPolicyError::ProbeUnavailable { .. } => panic!("{id}: nenhum sobrevivente é ProbeUnavailable"),
+            };
+            let v: Vec<(&str, &str)> = valores.iter().map(|(k, x)| (*k, x.as_str())).collect();
+            assert_eq!(detalhe(&pf, chave), frase_da_tabela(chave, &v), "{id}");
+            for proibida in ["network_checked", "network_unverified", "network_local"] {
+                assert!(!tem(&pf, proibida), "{id}: {proibida} mentiria");
+            }
+        }
+    }
+
+    /// Ligação ao led-hal: cada texto de erro da tabela acima existe, LITERAL, nos testes `r85c_*` do led-hal
+    /// (a ligação é por valor, não por tipo — limite declarado no accept).
+    #[test]
+    fn r85c_valores_do_journal_existem_no_led_hal() {
+        let hal = include_str!("../../led-hal/src/network_guard.rs");
+        for (id, erro, _) in sobreviventes() {
+            if let NetworkPolicyError::ProbeFailed { error, .. } = erro {
+                let resto = error.trim_start_matches("estado WiFi indeterminado: ");
+                assert!(hal.contains(resto) && hal.contains("r85c_"), "{id}: {resto:?} não está no led-hal");
+            }
+        }
+    }
+
 }

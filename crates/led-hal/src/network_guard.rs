@@ -198,39 +198,52 @@ fn veredito_wifi(
     Ok(())
 }
 
-/// macOS: enumerate hardware ports via `networksetup`, find Wi-Fi devices,
-/// then read each one's `status:` from `ifconfig`.
+/// macOS: a sonda real — `probe_macos_com` com o `networksetup` e o `ifconfig` do sistema.
 #[cfg(target_os = "macos")]
 fn probe_macos() -> Result<(), NetworkPolicyError> {
-    use std::process::Command;
+    probe_macos_com(networksetup_real, ifconfig_real)
+}
 
-    // Step 1: list all hardware ports to find Wi-Fi interface names
-    let ports_out = Command::new("/usr/sbin/networksetup")
+/// macOS: `networksetup -listallhardwareports` (a lista de portas, ou `ProbeFailed`).
+#[cfg(target_os = "macos")]
+fn networksetup_real() -> Result<String, NetworkPolicyError> {
+    let ports_out = std::process::Command::new("/usr/sbin/networksetup")
         .arg("-listallhardwareports")
         .output()
         .map_err(|e| NetworkPolicyError::ProbeFailed {
             probe: "networksetup -listallhardwareports",
             error: e.to_string(),
         })?;
-
     if !ports_out.status.success() {
         return Err(NetworkPolicyError::ProbeFailed {
             probe: "networksetup -listallhardwareports",
             error: format!("exit status {}", ports_out.status),
         });
     }
+    Ok(String::from_utf8_lossy(&ports_out.stdout).to_string())
+}
 
-    let ports_str = String::from_utf8_lossy(&ports_out.stdout);
-    let wifi_ifaces = parse_macos_wifi_interfaces(&ports_str);
+/// macOS: `ifconfig <iface>` — `None` se não correu; `Some((exit ok, stdout))` caso contrário.
+#[cfg(target_os = "macos")]
+fn ifconfig_real(iface: &str) -> Option<(bool, String)> {
+    let o = std::process::Command::new("/sbin/ifconfig").arg(iface).output().ok()?;
+    Some((o.status.success(), String::from_utf8_lossy(&o.stdout).to_string()))
+}
 
-    // Step 2: for each Wi-Fi interface, its state as `ifconfig` reports it. A failure to run,
-    // a non-zero exit or a missing `status:` line is INDETERMINATE — never "inactive".
-    let estados = wifi_ifaces
+/// macOS: a regra inteira, com as duas sondas por PARÂMETRO (o padrão do `run_com`; TD-029 R8.5c).
+/// Para cada porta Wi-Fi, o estado do `ifconfig`: falhar, sair com erro ou não trazer `status:` é
+/// INDETERMINADO — nunca «inactive», e nunca filtrado (H13/H14b da ronda 14).
+#[cfg(any(test, target_os = "macos"))]
+fn probe_macos_com(
+    listar_portas: impl FnOnce() -> Result<String, NetworkPolicyError>,
+    ifconfig: impl Fn(&str) -> Option<(bool, String)>,
+) -> Result<(), NetworkPolicyError> {
+    let portas = listar_portas()?;
+    let estados = parse_macos_wifi_interfaces(&portas)
         .into_iter()
         .map(|iface| {
-            let out = Command::new("/sbin/ifconfig").arg(&iface).output().ok();
-            let texto = out.as_ref().map(|o| (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string()));
-            let (estado, porque) = estado_ifconfig(texto.as_ref().map(|(ok, t)| (*ok, t.as_str())));
+            let saida = ifconfig(&iface);
+            let (estado, porque) = estado_ifconfig(saida.as_ref().map(|(ok, t)| (*ok, t.as_str())));
             (iface, estado, porque)
         })
         .collect();
@@ -244,7 +257,7 @@ fn probe_macos() -> Result<(), NetworkPolicyError> {
 /// Device: en0
 /// Ethernet Address: xx:xx:xx:xx:xx:xx
 /// ```
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn parse_macos_wifi_interfaces(output: &str) -> Vec<String> {
     let mut ifaces = Vec::new();
     let mut in_wifi_block = false;
@@ -312,47 +325,92 @@ fn e_wifi_linux(nome: &str, tem_wireless: bool, tem_phy80211: bool, uevent: Opti
     uevent.map(|u| u.lines().any(|l| l.trim() == "DEVTYPE=wlan"))
 }
 
-/// Linux: a regra inteira sobre um diretório com o formato de `/sys/class/net`. Função pura sobre o
-/// sistema de ficheiros — o `probe_linux` passa a raiz real; os testes passam um diretório temporário.
+/// Linux: o que se leu de UMA entrada de `/sys/class/net`.
+#[cfg(any(test, target_os = "linux"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EntradaSysfs {
+    /// Não é diretório (ex.: `bonding_masters`, um ficheiro do módulo bonding): não é interface.
+    NaoDiretorio,
+    /// Não se conseguiu saber o que é (metadata ilegível, ex.: symlink pendurado) — fica INDETERMINADA.
+    Ilegivel { nome: String, porque: String },
+    /// Um diretório de interface, com os sinais já lidos.
+    Interface { nome: String, wireless: bool, phy80211: bool, uevent: Option<String>, operstate: Option<String> },
+}
+
+/// Linux: lê uma entrada. Só DIRETÓRIOS (seguindo o symlink — em /sys/class/net cada interface é um
+/// symlink para o diretório do dispositivo) contam como interface (R8.5c, `bonding_masters`).
+#[cfg(any(test, target_os = "linux"))]
+fn ler_entrada(p: &std::path::Path, nome: String) -> EntradaSysfs {
+    use std::fs;
+    match fs::metadata(p) {
+        Err(_) => EntradaSysfs::Ilegivel { nome, porque: "metadata ilegivel".into() },
+        Ok(m) if !m.is_dir() => EntradaSysfs::NaoDiretorio,
+        Ok(_) => EntradaSysfs::Interface {
+            wireless: p.join("wireless").exists(),
+            phy80211: p.join("phy80211").exists(),
+            uevent: fs::read_to_string(p.join("uevent")).ok(),
+            operstate: fs::read_to_string(p.join("operstate")).ok(),
+            nome,
+        },
+    }
+}
+
+/// Linux: a regra sobre as entradas já lidas — as leituras chegam por PARÂMETRO, por isso uma entrada
+/// de `read_dir` ilegível é testável sem injeção no binário (H11 da ronda 14).
+#[cfg(any(test, target_os = "linux"))]
+fn classificar_entradas(
+    sonda: &'static str,
+    entradas: impl Iterator<Item = std::io::Result<EntradaSysfs>>,
+) -> Result<(), NetworkPolicyError> {
+    let mut estados = Vec::new();
+    for entrada in entradas {
+        match entrada {
+            // Uma entrada ilegível não pode desaparecer em silêncio: pode ser a interface WiFi.
+            Err(_) => estados.push(("?".to_string(), EstadoWifi::Indeterminada, "entrada de read_dir ilegivel".to_string())),
+            Ok(EntradaSysfs::NaoDiretorio) => continue,
+            Ok(EntradaSysfs::Ilegivel { nome, porque }) => estados.push((nome, EstadoWifi::Indeterminada, porque)),
+            Ok(EntradaSysfs::Interface { nome, wireless, phy80211, uevent, operstate }) => {
+                match e_wifi_linux(&nome, wireless, phy80211, uevent.as_deref()) {
+                    Some(false) => continue,
+                    None => estados.push((nome, EstadoWifi::Indeterminada, "uevent ilegivel".to_string())),
+                    Some(true) => {
+                        let (estado, porque) = estado_operstate(operstate.as_deref());
+                        estados.push((nome, estado, porque));
+                    }
+                }
+            }
+        }
+    }
+    veredito_wifi(sonda, estados)
+}
+
+/// Linux: a regra inteira sobre um diretório com o formato de `/sys/class/net`. O `probe_linux` passa a
+/// raiz real; os testes passam um diretório temporário.
 #[cfg(any(test, target_os = "linux"))]
 fn probe_sysfs(raiz: &std::path::Path) -> Result<(), NetworkPolicyError> {
-    use std::fs;
     const SONDA: &str = "sysfs /sys/class/net";
 
     if !raiz.exists() {
         return Err(NetworkPolicyError::ProbeFailed { probe: SONDA, error: format!("{} not found", raiz.display()) });
     }
-    let entradas = fs::read_dir(raiz).map_err(|e| NetworkPolicyError::ProbeFailed {
+    let entradas = std::fs::read_dir(raiz).map_err(|e| NetworkPolicyError::ProbeFailed {
         probe: SONDA,
         error: format!("read_dir: {e}"),
     })?;
-
-    let mut estados = Vec::new();
-    for entrada in entradas {
-        // Uma entrada ilegível não pode desaparecer em silêncio: pode ser a interface WiFi.
-        let Ok(entrada) = entrada else {
-            estados.push(("?".to_string(), EstadoWifi::Indeterminada, "entrada de read_dir ilegivel".to_string()));
-            continue;
-        };
-        let p = entrada.path();
-        let nome = entrada.file_name().to_string_lossy().to_string();
-        let uevent = fs::read_to_string(p.join("uevent")).ok();
-        match e_wifi_linux(&nome, p.join("wireless").exists(), p.join("phy80211").exists(), uevent.as_deref()) {
-            Some(false) => continue,
-            None => estados.push((nome, EstadoWifi::Indeterminada, "uevent ilegivel".to_string())),
-            Some(true) => {
-                let (estado, porque) = estado_operstate(fs::read_to_string(p.join("operstate")).ok().as_deref());
-                estados.push((nome, estado, porque));
-            }
-        }
-    }
-    veredito_wifi(SONDA, estados)
+    classificar_entradas(
+        SONDA,
+        entradas.map(|r| r.map(|e| ler_entrada(&e.path(), e.file_name().to_string_lossy().to_string()))),
+    )
 }
 
-/// Linux: a sonda real — `probe_sysfs` sobre `/sys/class/net`.
+/// Linux: a raiz real das interfaces de rede.
+#[cfg(any(test, target_os = "linux"))]
+const RAIZ_SYSFS: &str = "/sys/class/net";
+
+/// Linux: a sonda real — `probe_sysfs` sobre `RAIZ_SYSFS`, sem nada à volta (L2/L3/L6 da ronda 14).
 #[cfg(target_os = "linux")]
 fn probe_linux() -> Result<(), NetworkPolicyError> {
-    probe_sysfs(std::path::Path::new("/sys/class/net"))
+    probe_sysfs(std::path::Path::new(RAIZ_SYSFS))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -691,5 +749,244 @@ Ethernet Address: aa:bb:cc:dd:ee:ff
     fn network_guard_name_is_accessible_on_trait_object() {
         let guard: Box<dyn NetworkGuard> = Box::new(PermissiveGuard);
         assert!(!guard.name().is_empty());
+    }
+
+    // ── TD-029 R8.5c: um teste por sobrevivente da ronda 14 (o nome diz o mutante que mata) ──────
+    //
+    // Cada um afirma o VEREDITO (variante + Display exato). A frase do journal para estes mesmos valores é
+    // afirmada no led-daemon-bin (`r85c_journal_por_sobrevivente`), pela entrada da tabela `FRASES`.
+
+    /// O fonte de PRODUÇÃO deste ficheiro (até ao `mod tests`), sem comentários `//` nem espaços.
+    fn producao_normalizada() -> String {
+        let f = include_str!("network_guard.rs");
+        let producao = &f[..f.find("#[cfg(test)]\nmod tests").expect("mod tests")];
+        normaliza(producao)
+    }
+    fn normaliza(t: &str) -> String {
+        t.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<String>().chars().filter(|c| !c.is_whitespace()).collect()
+    }
+    /// O item que começa em `inicio` até à chaveta que fecha o seu corpo.
+    fn item(fonte: &str, inicio: &str) -> String {
+        let i = fonte.find(inicio).unwrap_or_else(|| panic!("{inicio} não encontrado"));
+        let mut prof = 0i32;
+        for (j, c) in fonte[i..].char_indices() {
+            match c {
+                '{' => prof += 1,
+                '}' => {
+                    prof -= 1;
+                    if prof == 0 {
+                        return fonte[i..i + j + 1].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("{inicio}: corpo sem fecho")
+    }
+
+    const PORTAS: &str = "Hardware Port: Wi-Fi\nDevice: en0\nEthernet Address: aa\n\nHardware Port: Ethernet\nDevice: en1\n";
+
+    #[test]
+    fn r85c_h13_ifconfig_falhado_nao_e_filtrado() {
+        let consultadas = std::cell::RefCell::new(Vec::new());
+        let r = probe_macos_com(
+            || Ok(PORTAS.to_string()),
+            |i| {
+                consultadas.borrow_mut().push(i.to_string());
+                None
+            },
+        );
+        let esperado = NetworkPolicyError::ProbeFailed {
+            probe: "ifconfig",
+            error: "estado WiFi indeterminado: en0=ifconfig nao correu".into(),
+        };
+        assert_eq!(r, Err(esperado.clone()), "ifconfig que não corre é INDETERMINADO, nunca filtrado");
+        assert_eq!(
+            esperado.to_string(),
+            "[LUMYX CRITICAL] WiFi probe `ifconfig` failed (estado WiFi indeterminado: en0=ifconfig nao correu). \
+             The WiFi-forbidden rule could not be verified on a supported platform."
+        );
+        assert_eq!(*consultadas.borrow(), vec!["en0".to_string()], "só a porta Wi-Fi é consultada");
+        // controlos: ativa → WifiActive; inactive → Ok; networksetup falhado → o seu ProbeFailed
+        assert_eq!(probe_macos_com(|| Ok(PORTAS.into()), |_| Some((true, "\tstatus: active\n".into()))),
+            Err(NetworkPolicyError::WifiActive { interfaces: vec!["en0".into()] }));
+        assert_eq!(probe_macos_com(|| Ok(PORTAS.into()), |_| Some((true, "\tstatus: inactive\n".into()))), Ok(()));
+        let ns = NetworkPolicyError::ProbeFailed { probe: "networksetup -listallhardwareports", error: "exit status 1".into() };
+        assert_eq!(probe_macos_com(|| Err(ns.clone()), |_| panic!("não há portas para consultar")), Err(ns));
+    }
+
+    #[test]
+    fn r85c_h14b_indeterminada_nao_vira_desligada() {
+        for (saida, erro) in [
+            (Some((false, "\tstatus: inactive\n")), "estado WiFi indeterminado: en0=ifconfig com exit != 0"),
+            (Some((true, "\tether aa\n")), "estado WiFi indeterminado: en0=sem linha status: reconhecida"),
+        ] {
+            let r = probe_macos_com(|| Ok(PORTAS.into()), |_| saida.map(|(ok, t)| (ok, t.to_string())));
+            let esperado = NetworkPolicyError::ProbeFailed { probe: "ifconfig", error: erro.into() };
+            assert_eq!(r, Err(esperado.clone()), "{saida:?}: indeterminado nunca é desligado");
+            assert_eq!(
+                esperado.to_string(),
+                format!("[LUMYX CRITICAL] WiFi probe `ifconfig` failed ({erro}). The WiFi-forbidden rule could not be verified on a supported platform.")
+            );
+        }
+    }
+
+    fn cabo(nome: &str) -> EntradaSysfs {
+        EntradaSysfs::Interface { nome: nome.into(), wireless: false, phy80211: false,
+            uevent: Some(format!("INTERFACE={nome}\n")), operstate: Some("up\n".into()) }
+    }
+
+    #[test]
+    fn r85c_h11_entrada_ilegivel_do_read_dir_e_indeterminada() {
+        let entradas = vec![Ok(cabo("eth0")), Err(std::io::Error::other("EIO")), Ok(cabo("eth1"))];
+        let r = classificar_entradas("sysfs /sys/class/net", entradas.into_iter());
+        let esperado = NetworkPolicyError::ProbeFailed {
+            probe: "sysfs /sys/class/net",
+            error: "estado WiFi indeterminado: ?=entrada de read_dir ilegivel".into(),
+        };
+        assert_eq!(r, Err(esperado.clone()), "uma entrada ilegível não desaparece em silêncio");
+        assert_eq!(esperado.to_string(), "[LUMYX CRITICAL] WiFi probe `sysfs /sys/class/net` failed (estado WiFi indeterminado: ?=entrada de read_dir ilegivel). The WiFi-forbidden rule could not be verified on a supported platform.");
+        // controlo: sem a entrada ilegível, só cabo → Ok
+        assert_eq!(classificar_entradas("sysfs /sys/class/net", vec![Ok(cabo("eth0"))].into_iter()), Ok(()));
+    }
+
+    const PROBE_LINUX: &str = r#"
+        #[cfg(target_os = "linux")]
+        fn probe_linux() -> Result<(), NetworkPolicyError> {
+            probe_sysfs(std::path::Path::new(RAIZ_SYSFS))
+        }"#;
+
+    #[test]
+    fn r85c_l2_probe_linux_nao_tem_fallback() {
+        // (a) estrutural: o corpo de produção é EXATAMENTE a chamada — sem fallback para o algoritmo antigo
+        let f = producao_normalizada();
+        assert_eq!(item(&f, "#[cfg(target_os=\"linux\")]fnprobe_linux()"), normaliza(PROBE_LINUX));
+        // (b) a regra: um rádio phy80211 em `dormant` é INDETERMINADO (o algoritmo antigo dizia desligado)
+        let sys = Sysfs::novo(&[("wlan0", false, true, Some("INTERFACE=wlan0\n"), Some("dormant\n"))]);
+        let esperado = NetworkPolicyError::ProbeFailed {
+            probe: "sysfs /sys/class/net",
+            error: "estado WiFi indeterminado: wlan0=dormant".into(),
+        };
+        assert_eq!(probe_sysfs(&sys.0), Err(esperado.clone()));
+        assert_eq!(esperado.to_string(), "[LUMYX CRITICAL] WiFi probe `sysfs /sys/class/net` failed (estado WiFi indeterminado: wlan0=dormant). The WiFi-forbidden rule could not be verified on a supported platform.");
+    }
+
+    #[test]
+    fn r85c_l3_probe_failed_nao_vira_ok() {
+        let corpo = item(&producao_normalizada(), "#[cfg(target_os=\"linux\")]fnprobe_linux()");
+        assert!(!corpo.contains("Ok(") && !corpo.contains("match"), "probe_linux reinterpreta o resultado: {corpo}");
+        assert_eq!(corpo, normaliza(PROBE_LINUX));
+    }
+
+    const PROBE_WIFI: &str = r#"
+        fn probe_wifi() -> Result<(), NetworkPolicyError> {
+            #[cfg(target_os = "macos")]
+            return probe_macos();
+
+            #[cfg(target_os = "linux")]
+            return probe_linux();
+
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            return Err(NetworkPolicyError::ProbeUnavailable {
+                reason: format!(
+                    "unsupported platform '{}' — WiFi check not implemented",
+                    std::env::consts::OS
+                ),
+            });
+        }"#;
+
+    #[test]
+    fn r85c_l4_probe_failed_nao_vira_unavailable() {
+        let corpo = item(&producao_normalizada(), "fnprobe_wifi()");
+        let linux = &corpo[corpo.find("#[cfg(target_os=\"linux\")]").unwrap()..corpo.find("#[cfg(not(").unwrap()];
+        assert_eq!(linux, "#[cfg(target_os=\"linux\")]returnprobe_linux();", "o ramo Linux devolve a sonda sem a tocar");
+        assert_eq!(corpo, normaliza(PROBE_WIFI));
+    }
+
+    #[test]
+    fn r85c_l5_resultado_da_sonda_nao_e_ignorado() {
+        let corpo = item(&producao_normalizada(), "fnprobe_wifi()");
+        assert!(corpo.contains("returnprobe_linux();") && corpo.contains("returnprobe_macos();"));
+        assert!(!corpo.contains("let_=") && !corpo.contains("Ok(())"), "o resultado da sonda é descartado: {corpo}");
+        assert_eq!(corpo, normaliza(PROBE_WIFI));
+        assert_eq!(item(&producao_normalizada(), "#[cfg(target_os=\"macos\")]fnprobe_macos()"),
+            "#[cfg(target_os=\"macos\")]fnprobe_macos()->Result<(),NetworkPolicyError>{probe_macos_com(networksetup_real,ifconfig_real)}");
+    }
+
+    #[test]
+    fn r85c_l6_raiz_e_sys_class_net() {
+        assert_eq!(RAIZ_SYSFS, "/sys/class/net");
+        let f = producao_normalizada();
+        assert_eq!(f.matches("\"/sys/class/net\"").count(), 1, "o literal da raiz real existe UMA vez: {f}");
+        assert!(f.contains("constRAIZ_SYSFS:&str=\"/sys/class/net\";"), "e é o RAIZ_SYSFS");
+        let corpo = item(&f, "#[cfg(target_os=\"linux\")]fnprobe_linux()");
+        let corpo = &corpo[corpo.find('{').unwrap()..];
+        assert!(corpo.contains("RAIZ_SYSFS") && !corpo.contains('"'), "probe_linux usa RAIZ_SYSFS e nenhum literal: {corpo}");
+    }
+
+    #[test]
+    fn r85c_ficheiro_em_sys_class_net_nao_e_interface() {
+        let sys = Sysfs::novo(&[("eth0", false, false, Some("INTERFACE=eth0\n"), Some("up\n"))]);
+        std::fs::write(sys.0.join("bonding_masters"), "").unwrap();
+        assert_eq!(probe_sysfs(&sys.0), Ok(()), "bonding_masters é um ficheiro do módulo bonding, não uma interface");
+        assert_eq!(ler_entrada(&sys.0.join("bonding_masters"), "bonding_masters".into()), EntradaSysfs::NaoDiretorio);
+    }
+
+    #[test]
+    fn r85c_metadata_ilegivel_continua_indeterminada() {
+        let sys = Sysfs::novo(&[("eth0", false, false, Some("INTERFACE=eth0\n"), Some("up\n"))]);
+        // um symlink pendurado: metadata() falha — não se sabe o que é, logo INDETERMINADO (fail-closed)
+        std::os::unix::fs::symlink(sys.0.join("nao-existe"), sys.0.join("wlx0")).unwrap();
+        assert_eq!(probe_sysfs(&sys.0), Err(NetworkPolicyError::ProbeFailed {
+            probe: "sysfs /sys/class/net",
+            error: "estado WiFi indeterminado: wlx0=metadata ilegivel".into(),
+        }));
+    }
+
+    /// No /sys REAL do runner (CI ubuntu-24.04): a classificação de cada entrada presente é coerente, e o
+    /// `probe_linux()` real é o veredito dessas classificações. NÃO assume que não há WiFi.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn r85c_sys_real_classificacao_coerente() {
+        let raiz = std::path::Path::new(RAIZ_SYSFS);
+        let mut lidas = Vec::new();
+        for e in std::fs::read_dir(raiz).expect("/sys/class/net no runner") {
+            let e = e.expect("entrada legível no runner");
+            let p = e.path();
+            let nome = e.file_name().to_string_lossy().to_string();
+            let entrada = ler_entrada(&p, nome.clone());
+            let e_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
+            eprintln!("INVENTARIO {nome}: dir={e_dir} {entrada:?}");
+            match &entrada {
+                EntradaSysfs::NaoDiretorio => assert!(!e_dir, "{nome}"),
+                EntradaSysfs::Interface { wireless, phy80211, uevent, .. } => {
+                    assert!(e_dir, "{nome}");
+                    let sinais = *wireless || *phy80211 || nome.starts_with("wl")
+                        || uevent.as_deref().is_some_and(|u| u.lines().any(|l| l.trim() == "DEVTYPE=wlan"));
+                    assert_eq!(e_wifi_linux(&nome, *wireless, *phy80211, uevent.as_deref()).unwrap_or(true), sinais || uevent.is_none(), "{nome}");
+                    if nome == "lo" {
+                        assert!(!sinais, "lo nunca é WiFi");
+                    }
+                }
+                EntradaSysfs::Ilegivel { .. } => {}
+            }
+            lidas.push(Ok(entrada));
+        }
+        assert!(!lidas.is_empty(), "o runner tem de ter pelo menos `lo`");
+        assert_eq!(probe_linux(), classificar_entradas("sysfs /sys/class/net", lidas.into_iter()),
+            "probe_linux real ≠ veredito das classificações do mesmo /sys");
+    }
+
+    /// A API pública do led-hal neste ficheiro continua a ser exatamente a de 8b99cef (4 itens).
+    #[test]
+    fn r85c_api_publica_inalterada() {
+        let f = producao_normalizada();
+        let mut publicos: Vec<&str> = ["pubenum", "pubtrait", "pubstruct", "pubfn", "pubconst", "pubtype", "pubmod", "pubuse", "pub("]
+            .iter().flat_map(|k| f.match_indices(k).map(|(i, _)| &f[i..(i + 30).min(f.len())])).collect();
+        publicos.sort();
+        assert_eq!(publicos.len(), 4, "{publicos:?}");
+        for nome in ["pubenumNetworkPolicyError", "pubtraitNetworkGuard", "pubstructPermissiveGuard;", "pubstructWifiBlockGuard;"] {
+            assert!(publicos.iter().any(|p| p.starts_with(nome)), "{nome} em {publicos:?}");
+        }
     }
 }
