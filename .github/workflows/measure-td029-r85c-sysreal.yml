@@ -1,0 +1,41 @@
+# [MEDIÇÃO] TD-029 R8.5c, critério 6 (Linux) — NÃO MERGEAR. Ramo descartável measure/td029-r85c-sysreal sobre 8b13f46.
+# C0: r85c_sys_real_classificacao_coerente no /sys REAL do runner (imprime o inventário) + o estrutural do led-hal.
+# NEG: mutar a classificação do produto (`lo` passa a contar como WiFi em e_wifi_linux) → o teste tem de ficar VERMELHO.
+name: measure-td029-r85c-sysreal
+
+on:
+  pull_request:
+
+jobs:
+  sysreal:
+    name: r85c sysreal (${{ matrix.m }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        m: [C0, NEG]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Teste do /sys real
+        shell: bash {0}
+        run: |
+          M=${{ matrix.m }}
+          F=crates/led-hal/src/network_guard.rs
+          if [ "$M" = NEG ]; then
+            python3 -I - "$F" <<'PY'
+          import sys
+          p=sys.argv[1]; s=open(p).read()
+          a='    if tem_wireless || tem_phy80211 || nome.starts_with("wl") {'
+          b='    if tem_wireless || tem_phy80211 || nome.starts_with("wl") || nome == "lo" {'
+          assert s.count(a)==1, s.count(a); open(p,"w").write(s.replace(a,b)); print("NEG aplicado")
+          PY
+          fi
+          git diff --stat
+          cargo test -p led-hal --locked --lib network_guard::tests::r85c_sys_real_classificacao_coerente -- --exact --nocapture > t.txt 2>&1; rc=$?
+          grep -aE 'INVENTARIO|^test |test result|panicked|error\[E' t.txt | head -40
+          n=$(grep -aoE 'test result: [a-zA-Z]+\. [0-9]+ passed; [0-9]+ failed' t.txt | awk '{print $4+$6}')
+          echo "RESULTADO r85c-sysreal m=$M exit=$rc executados=$n panicked=$(grep -ac 'panicked at' t.txt) error_E=$(grep -ac '^error\[E' t.txt)"
