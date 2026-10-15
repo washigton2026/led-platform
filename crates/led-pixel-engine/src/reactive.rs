@@ -401,6 +401,155 @@ mod tests {
         let b = AudioShare::new();
         let c = AudioShare::new();
         assert!(b.id != id_a && c.id != id_a && b.id != c.id);
+        // em lote, muito acima de qualquer módulo pequeno (F8: id % 1024), criando e largando: nenhum id se repete
+        let mut vistos = std::collections::HashSet::new();
+        for lote in 0..10 {
+            let vivos: Vec<AudioShare> = (0..1000).map(|_| AudioShare::new()).collect();
+            for s in &vivos {
+                assert!(vistos.insert(s.id), "id {} repetido (lote {lote})", s.id);
+            }
+        }
+        assert_eq!(vistos.len(), 10_000);
+    }
+
+    // ── TD-030 (ordem G): K é fixado — o leitor faz no máximo 16 tentativas (§2.2) ──
+    #[test]
+    fn k_do_leitor_e_16() {
+        assert_eq!(TENTATIVAS_DO_LEITOR, 16);
+    }
+
+    /// Versão = `timestamp_ms` = `bass` (marca); `sample_rate` = a instância.
+    fn publica_versao(share: &AudioShare, v: u64, instancia: u32) {
+        let mut f = features(v % 2 == 1, v, v as f32);
+        f.sample_rate = instancia;
+        share.publish(&f);
+    }
+
+    // ── TD-030 (ordem G): ORÁCULO DE FRESCURA pelo scalars() ──
+    // Uma leitura iniciada depois de `c` publicações concluídas nunca devolve versão < c nem o default (c > 0), a não
+    // ser num fallback CONTADO (que devolve o último válido desta thread); a versão vista nunca recua.
+    #[test]
+    fn frescura_pelo_scalars_e_monotonia_por_leitor() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        let n: u64 = if cfg!(miri) { 40 } else { 50_000 };
+        let share = Arc::new(AudioShare::new());
+        let parar = Arc::new(AtomicBool::new(false));
+        let concluidas = Arc::new(AtomicU64::new(0));
+        let (rs, rp, rc) = (share.clone(), parar.clone(), concluidas.clone());
+        let leitor = std::thread::spawn(move || {
+            let (mut ultima, mut lidas, mut por_fallback) = (0u64, 0u64, 0u64);
+            while !rp.load(Ordering::Relaxed) {
+                let antes = rc.load(Ordering::Acquire);
+                let (fb0, _) = rs.fallbacks_do_leitor();
+                let s = rs.scalars();
+                let (fb1, _) = rs.fallbacks_do_leitor();
+                lidas += 1;
+                if s != AudioScalars::default() {
+                    assert_eq!(s.sample_rate, 4242, "snapshot alheio: {s:?}");
+                    assert_eq!(s.bass, s.timestamp_ms as f32, "snapshot incoerente: {s:?}");
+                }
+                if fb1 > fb0 {
+                    por_fallback += 1;
+                    assert_eq!(s.timestamp_ms, ultima, "o fallback devolve o último válido desta thread");
+                    continue;
+                }
+                assert!(s.timestamp_ms >= antes, "versão {} mais antiga do que as {antes} concluídas", s.timestamp_ms);
+                if antes > 0 { assert_ne!(s, AudioScalars::default(), "default depois de {antes} publicações concluídas"); }
+                assert!(s.timestamp_ms >= ultima, "a versão recuou: {} depois de {ultima}", s.timestamp_ms);
+                ultima = s.timestamp_ms;
+            }
+            (lidas, por_fallback)
+        });
+        for v in 1..=n {
+            publica_versao(&share, v, 4242);
+            concluidas.store(v, Ordering::Release);
+        }
+        parar.store(true, Ordering::Relaxed);
+        let (lidas, por_fallback) = leitor.join().unwrap();
+        assert!(lidas > 0);
+        eprintln!("TD030_FRESCURA publicacoes={n} leituras={lidas} fallbacks={por_fallback} contador={:?}", share.fallbacks_do_leitor());
+        assert_eq!(share.fallbacks_do_leitor().0, por_fallback, "cada fallback é contado, e só esses");
+    }
+
+    // ── TD-030 (ordem G): fallback sob CONTENÇÃO FORÇADA (K = 1 e escritor em ciclo apertado) ──
+    // Cada chamada em que o contador sobe devolve o último snapshot válido desta thread desta instância (ou o default,
+    // contado à parte, se ainda não havia nenhum); o contador sobe exatamente uma vez por fallback.
+    #[test]
+    fn fallback_sob_contencao_forcada() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let share = Arc::new(AudioShare::new());
+        let parar = Arc::new(AtomicBool::new(false));
+        let (ws, wp) = (share.clone(), parar.clone());
+        let escritor = std::thread::spawn(move || {
+            let mut v = 0u64;
+            while !wp.load(Ordering::Relaxed) {
+                v += 1;
+                publica_versao(&ws, v, 777);
+            }
+            v
+        });
+        let (mut ultima_valida, mut fallbacks, mut sem_snapshot) = (None::<AudioScalars>, 0u64, 0u64);
+        let inicio = std::time::Instant::now();
+        let alvo = if cfg!(miri) { 1 } else { 200 };
+        while fallbacks < alvo {
+            assert!(inicio.elapsed() < std::time::Duration::from_secs(60),
+                "pré-condição: sem contenção suficiente para {alvo} fallbacks em 60 s (houve {fallbacks})");
+            let (a0, b0) = share.fallbacks_do_leitor();
+            let s = share.scalars_com_tentativas(1);
+            let (a1, b1) = share.fallbacks_do_leitor();
+            match (a1 - a0, b1 - b0) {
+                (0, 0) => {
+                    assert!(s == AudioScalars::default() || (s.sample_rate == 777 && s.bass == s.timestamp_ms as f32), "{s:?}");
+                    ultima_valida = Some(s);
+                }
+                (1, 0) => { fallbacks += 1; assert_eq!(Some(s), ultima_valida, "fallback ≠ último válido"); }
+                (1, 1) => { fallbacks += 1; sem_snapshot += 1; assert_eq!(s, AudioScalars::default());
+                            assert!(ultima_valida.is_none(), "sem snapshot só antes da 1.ª leitura válida"); }
+                d => panic!("o contador subiu {d:?} numa só chamada"),
+            }
+        }
+        parar.store(true, Ordering::Relaxed);
+        let publicadas = escritor.join().unwrap();
+        eprintln!("TD030_FALLBACK_FORCADO k=1 fallbacks={fallbacks} sem_snapshot={sem_snapshot} publicadas={publicadas}");
+        assert_eq!(share.fallbacks_do_leitor(), (fallbacks, sem_snapshot));
+    }
+
+    // ── TD-030 (ordem G): o render não espera por NENHUM lock do AudioShare (P3, L1) ──
+    // Com o escritor (Mutex) e o espectro (RwLock de escrita) ocupados por outra thread, o scalars() tem de voltar logo.
+    #[test]
+    fn scalars_nao_espera_pelos_locks_do_share() {
+        let share = Arc::new(AudioShare::new());
+        share.publish(&features(true, 9, 0.5));
+        let _escritor = share.escritor.lock().unwrap();
+        let _espectro = share.spectrum.write().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s2 = share.clone();
+        std::thread::spawn(move || { let _ = tx.send(s2.scalars()); });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(2));
+        assert_eq!(r.map(|s| s.timestamp_ms), Ok(9), "scalars() bloqueou atrás de um lock do AudioShare");
+    }
+
+    // ── TD-030 (ordem G): o Escritor não é Clone nem Copy — verificado pelo compilador, não pelo texto (W1–W7) ──
+    // O `&` explícito é o mecanismo (autoref specialization: com `T: Clone` resolve no impl de `Sonda<T>`, senão no de
+    // `&Sonda<T>`); retirá-lo, como o clippy sugere, desligaria o detetor.
+    #[allow(clippy::needless_borrow)]
+    #[test]
+    fn escritor_nao_e_clone_nem_copy() {
+        use std::marker::PhantomData;
+        struct Sonda<T>(PhantomData<T>);
+        trait TemClone { fn clone_(&self) -> bool { true } }
+        impl<T: Clone> TemClone for Sonda<T> {}
+        trait SemClone { fn clone_(&self) -> bool { false } }
+        impl<T> SemClone for &Sonda<T> {}
+        trait TemCopy { fn copy_(&self) -> bool { true } }
+        impl<T: Copy> TemCopy for Sonda<T> {}
+        trait SemCopy { fn copy_(&self) -> bool { false } }
+        impl<T> SemCopy for &Sonda<T> {}
+        // controlo do próprio detetor: um tipo Clone+Copy e um tipo sem nada
+        assert!((&Sonda::<u8>(PhantomData)).clone_() && (&Sonda::<u8>(PhantomData)).copy_());
+        assert!(!(&Sonda::<std::sync::Mutex<u8>>(PhantomData)).clone_());
+        assert!(!(&Sonda::<seqlock::Escritor<PALAVRAS>>(PhantomData)).clone_(), "Escritor é Clone");
+        assert!(!(&Sonda::<seqlock::Escritor<PALAVRAS>>(PhantomData)).copy_(), "Escritor é Copy");
     }
 
     // ── TD-030: uma leitura válida fica como último snapshot DESTA instância nesta thread ──

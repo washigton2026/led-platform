@@ -11,7 +11,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::Arc;
 
-use led_core::{AudioFeatures, PixelColor};
+use led_core::{AudioFeatures, MusicalSection, PixelColor};
 use led_pixel_engine::{AudioShare, Band, BandPulse, BeatFlash, Effect, Vec3};
 
 struct Contador;
@@ -103,6 +103,29 @@ fn efeitos_reativos_renderizam_sem_alocar() {
             }
         });
         assert_eq!(n, 0, "{nome} alocou {n} vez(es) em 2000 frames de {N} píxeis");
+    }
+    // TD-030 (ordem G, L5): com CADA secção musical publicada (e sem secção), nem o scalars() nem o render alocam
+    let seccoes = [None, Some(MusicalSection::Intro), Some(MusicalSection::Verse), Some(MusicalSection::Chorus),
+        Some(MusicalSection::Bridge), Some(MusicalSection::Drop), Some(MusicalSection::Build), Some(MusicalSection::Outro),
+        Some(MusicalSection::Unknown)];
+    for (i, seccao) in seccoes.into_iter().enumerate() {
+        share.publish(&AudioFeatures {
+            sample_rate: 48_000, timestamp_ms: 10 + i as u64, rms: 0.5, beat: true, bass: 0.7, mid: 0.3, high: 0.1,
+            spectrum: vec![0.0; 8], musical_section: seccao, instrument_class: None,
+        });
+        for (_, fx) in &efeitos {
+            fx.render(0, &positions, &mut out); // aquecimento fora da contagem
+        }
+        let n = alocacoes_em(|| {
+            for t in 0..200u64 {
+                let s = share.scalars();
+                assert_eq!(s.musical_section, seccao);
+                for (_, fx) in &efeitos {
+                    fx.render(t, &positions, &mut out);
+                }
+            }
+        });
+        assert_eq!(n, 0, "secção {seccao:?}: {n} alocação(ões) em 200 frames");
     }
     assert_eq!(share.fallbacks_do_leitor(), (0, 0));
 }

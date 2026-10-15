@@ -38,6 +38,10 @@ optional = true
 [dev-dependencies]
 led-hal = { path = "../led-hal" }
 led-audio = { path = "../led-audio" }
+# TD-030 (ordem G): oráculo de modelo sequencial do latch (src/seqlock.rs) e estruturais por AST (tests/td030_estrutural.rs).
+proptest = { version = "1", default-features = false, features = ["std"] }
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+quote = "1"
 
 # loom (TD-030): só com RUSTFLAGS="--cfg loom"; modela o latch de src/seqlock.rs.
 [target.'cfg(loom)'.dev-dependencies]
