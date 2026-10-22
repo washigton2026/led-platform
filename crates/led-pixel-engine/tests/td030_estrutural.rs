@@ -218,6 +218,124 @@ fn scalars_e_uma_unica_chamada_com_tentativas_do_leitor() {
     assert!(erros.is_empty(), "{erros:?}");
 }
 
+// ── O2-bis (ronda 2, adenda 1a): `Leitor::ler` conta as tentativas ──
+// Um ÚNICO ciclo `for _ in 0..k` sobre o parâmetro `k`; um contador `let mut c = 0` incrementado (`c += 1`) em CADA
+// iteração, como instrução de topo do ciclo e junto à única chamada a `tentar()`; e `Esgotado { tentativas: c }`,
+// nunca `k` nem um literal.
+fn verificar_ler_canonico(seqlock: &str) -> Vec<String> {
+    let f = syn::parse_file(seqlock).expect("seqlock válido");
+    let mut corpos = Vec::new();
+    for item in &f.items {
+        if let syn::Item::Impl(i) = item {
+            if tokens(&i.self_ty).replace(' ', "").starts_with("Leitor") {
+                for ii in &i.items {
+                    if let syn::ImplItem::Fn(m) = ii {
+                        if m.sig.ident == "ler" {
+                            corpos.push(m.block.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if corpos.len() != 1 {
+        return vec![format!("Leitor::ler encontrado {} vez(es)", corpos.len())];
+    }
+    let corpo = &corpos[0];
+    struct V { ciclos: Vec<syn::ExprForLoop>, estruturas: Vec<syn::ExprStruct>, incrementos: usize, tentar: usize }
+    impl<'ast> Visit<'ast> for V {
+        fn visit_expr_for_loop(&mut self, e: &'ast syn::ExprForLoop) {
+            self.ciclos.push(e.clone());
+            syn::visit::visit_expr_for_loop(self, e);
+        }
+        fn visit_expr_while(&mut self, e: &'ast syn::ExprWhile) {
+            self.ciclos.push(syn::parse_quote!(for _ in 0..0 {})); // qualquer outro ciclo conta como um a mais
+            syn::visit::visit_expr_while(self, e);
+        }
+        fn visit_expr_loop(&mut self, e: &'ast syn::ExprLoop) {
+            self.ciclos.push(syn::parse_quote!(for _ in 0..0 {}));
+            syn::visit::visit_expr_loop(self, e);
+        }
+        fn visit_expr_struct(&mut self, e: &'ast syn::ExprStruct) {
+            if e.path.segments.last().is_some_and(|s| s.ident == "Esgotado") {
+                self.estruturas.push(e.clone());
+            }
+            syn::visit::visit_expr_struct(self, e);
+        }
+        fn visit_expr_binary(&mut self, e: &'ast syn::ExprBinary) {
+            if matches!(e.op, syn::BinOp::AddAssign(_)) {
+                self.incrementos += 1;
+            }
+            syn::visit::visit_expr_binary(self, e);
+        }
+        fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+            if m.method == "tentar" {
+                self.tentar += 1;
+            }
+            syn::visit::visit_expr_method_call(self, m);
+        }
+    }
+    let mut v = V { ciclos: vec![], estruturas: vec![], incrementos: 0, tentar: 0 };
+    v.visit_block(corpo);
+    let mut erros = Vec::new();
+    let e_caminho = |e: &syn::Expr, n: &str| matches!(e, syn::Expr::Path(p) if p.qself.is_none() && p.path.is_ident(n));
+    let e_lit = |e: &syn::Expr, x: &str| matches!(e, syn::Expr::Lit(l) if tokens(&l.lit).trim_end_matches("u32") == x);
+    // o contador: `let mut <c> = 0[u32];` ao nível do corpo
+    let contador = corpo.stmts.iter().find_map(|st| match st {
+        syn::Stmt::Local(l) => match (&l.pat, &l.init) {
+            (syn::Pat::Ident(pi), Some(init)) if pi.mutability.is_some() && e_lit(&init.expr, "0") => Some(pi.ident.to_string()),
+            (syn::Pat::Type(pt), Some(init)) if e_lit(&init.expr, "0") => match &*pt.pat {
+                syn::Pat::Ident(pi) if pi.mutability.is_some() => Some(pi.ident.to_string()),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    });
+    let Some(c) = contador else { return vec!["sem contador `let mut c = 0`".into()] };
+    if v.ciclos.len() != 1 {
+        erros.push(format!("{} ciclo(s); tem de haver um só `for _ in 0..k`", v.ciclos.len()));
+    }
+    if v.incrementos != 1 || v.tentar != 1 {
+        erros.push(format!("{} incremento(s) e {} chamada(s) a tentar(); tem de haver um de cada", v.incrementos, v.tentar));
+    }
+    if let Some(ciclo) = v.ciclos.first() {
+        let faixa_ok = matches!(&*ciclo.expr, syn::Expr::Range(r)
+            if matches!(r.limits, syn::RangeLimits::HalfOpen(_))
+                && r.start.as_deref().is_some_and(|a| e_lit(a, "0"))
+                && r.end.as_deref().is_some_and(|b| e_caminho(b, "k")));
+        if !matches!(&*ciclo.pat, syn::Pat::Wild(_)) || !faixa_ok {
+            erros.push(format!("o ciclo não é `for _ in 0..k`: `for {} in {}`", tokens(&ciclo.pat), tokens(&ciclo.expr)));
+        }
+        // o incremento é uma instrução de topo do ciclo, adjacente à instrução que chama tentar()
+        let st = &ciclo.body.stmts;
+        let e_incremento = |s: &syn::Stmt| matches!(s, syn::Stmt::Expr(syn::Expr::Binary(b), Some(_))
+            if matches!(b.op, syn::BinOp::AddAssign(_)) && e_caminho(&b.left, &c) && e_lit(&b.right, "1"));
+        let chama_tentar = |s: &syn::Stmt| tokens(s).contains("tentar ()");
+        let junto = st.windows(2).any(|w| (e_incremento(&w[0]) && chama_tentar(&w[1])) || (chama_tentar(&w[0]) && e_incremento(&w[1])));
+        if !junto {
+            erros.push(format!("`{c} += 1` não é uma instrução do ciclo junto à chamada a tentar()"));
+        }
+    }
+    if v.estruturas.is_empty() {
+        erros.push("nenhum `Esgotado { … }`".into());
+    }
+    for e in &v.estruturas {
+        let campo_ok = e.fields.len() == 1 && e.rest.is_none() && e.fields.iter().all(|fv|
+            matches!(&fv.member, syn::Member::Named(n) if n == "tentativas") && e_caminho(&fv.expr, &c));
+        if !campo_ok {
+            erros.push(format!("`{}` não leva o contador `{c}`", tokens(e)));
+        }
+    }
+    erros
+}
+
+#[test]
+fn ler_conta_as_tentativas_por_estrutura() {
+    let erros = verificar_ler_canonico(SEQLOCK);
+    assert!(erros.is_empty(), "{erros:?}");
+}
+
 fn verificar_escritor_unico(seqlock: &str) -> Vec<String> {
     let f = syn::parse_file(seqlock).expect("seqlock válido");
     struct V { construcoes: Vec<String>, dentro_de: Vec<String>, escritas_no_leitor: Vec<String>, macros_item: usize,
@@ -307,6 +425,26 @@ fn os_detetores_veem_o_que_foi_plantado() {
         ("outro método", canon.replace("scalars_com_tentativas(", "scalars_outra(")),
     ] {
         assert!(!verificar_scalars_canonico(&f).is_empty(), "O2 não visto: {nome}");
+    }
+    // O2-bis: o `ler` canónico passa; X3, X3b e as outras formas reprovam
+    let ler = "impl<const W: usize> Leitor<W> { fn ler(&self, k: u32) -> Result<u8, Esgotado> { \
+               let mut tentativas = 0u32; for _ in 0..k { tentativas += 1; if let Some(p) = self.tentar() { return Ok(p); } } \
+               Err(Esgotado { tentativas }) } }";
+    assert!(verificar_ler_canonico(ler).is_empty(), "o ler canónico passa: {:?}", verificar_ler_canonico(ler));
+    for (nome, f) in [
+        ("X3 0..2k", ler.replace("0..k", "0..k.saturating_mul(2)")),
+        ("X3b 0..2k com tentativas: k", ler.replace("0..k", "0..k.saturating_mul(2)").replace("Esgotado { tentativas }", "Esgotado { tentativas: k }")),
+        ("tentativas: k", ler.replace("Esgotado { tentativas }", "Esgotado { tentativas: k }")),
+        ("tentativas literal", ler.replace("Esgotado { tentativas }", "Esgotado { tentativas: 16 }")),
+        ("sem incremento", ler.replace("tentativas += 1; ", "")),
+        ("incremento condicional", ler.replace("tentativas += 1; ", "if k > 1 { tentativas += 1; } ")),
+        ("incremento longe do tentar", ler.replace("tentativas += 1; if let Some(p) = self.tentar() { return Ok(p); }", "tentativas += 1; let _ = 0; if let Some(p) = self.tentar() { return Ok(p); }")),
+        ("incremento de 2", ler.replace("tentativas += 1", "tentativas += 2")),
+        ("dois ciclos", ler.replace("Err(Esgotado", "for _ in 0..k {} Err(Esgotado")),
+        ("ciclo while", ler.replace("for _ in 0..k {", "while tentativas < k {")),
+        ("0..=k", ler.replace("0..k", "0..=k")),
+    ] {
+        assert!(!verificar_ler_canonico(&f).is_empty(), "O2-bis não visto: {nome}");
     }
     let base_esc = "pub(crate) struct Escritor<const W: usize> { latch: u8 } struct Leitor { } \
                     pub(crate) fn novo<const W: usize>() -> Escritor<W> { Escritor { latch: 0 } } \

@@ -48,6 +48,13 @@ pub(crate) struct Leitor<const W: usize> {
     latch: Arc<Latch<W>>,
 }
 
+/// Todas as tentativas de [`Leitor::ler`] apanharam o escritor a avançar. `tentativas` é CONTADA dentro do ciclo,
+/// nunca copiada de `k` (TD-030, ronda 2: o oráculo loom O3 e o estrutural O2-bis dependem disso).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Esgotado {
+    pub(crate) tentativas: u32,
+}
+
 /// O ÚNICO lado de escrita. Não é `Clone` nem `Copy`.
 pub(crate) struct Escritor<const W: usize> {
     latch: Arc<Latch<W>>,
@@ -88,14 +95,16 @@ impl<const W: usize> Leitor<W> {
         (s1 == s2).then_some(palavras)
     }
 
-    /// Até `k` tentativas. `None` se todas apanharam o escritor a avançar.
-    pub(crate) fn ler(&self, k: u32) -> Option<[u64; W]> {
+    /// Até `k` tentativas. `Err(Esgotado)` se todas apanharam o escritor a avançar, com o número de tentativas feitas.
+    pub(crate) fn ler(&self, k: u32) -> Result<[u64; W], Esgotado> {
+        let mut tentativas = 0u32;
         for _ in 0..k {
+            tentativas += 1;
             if let Some(p) = self.tentar() {
-                return Some(p);
+                return Ok(p);
             }
         }
-        None
+        Err(Esgotado { tentativas })
     }
 }
 
@@ -136,7 +145,7 @@ mod tests {
             let mut por_paridade = [0usize; 2];
             let verifica = |r: &Leitor<4>, esperado: [u64; 4], por_paridade: &mut [usize; 2]| -> Result<(), TestCaseError> {
                 por_paridade[paridade(r) as usize] += 1;
-                prop_assert_eq!(r.ler(1), Some(esperado));
+                prop_assert_eq!(r.ler(1), Ok(esperado));
                 prop_assert_eq!(r.tentar(), Some(esperado));
                 Ok(())
             };
@@ -162,10 +171,10 @@ mod tests {
     #[test]
     fn cada_publicacao_alterna_o_slot_lido() {
         let (r, mut w) = novo([7u64; 2]);
-        assert_eq!((paridade(&r), r.ler(1)), (0, Some([7, 7])));
+        assert_eq!((paridade(&r), r.ler(1)), (0, Ok([7, 7])));
         for i in 1..=6u64 {
             w.escrever([i, !i]);
-            assert_eq!((paridade(&r), r.ler(1)), (i & 1, Some([i, !i])), "publicação {i}");
+            assert_eq!((paridade(&r), r.ler(1)), (i & 1, Ok([i, !i])), "publicação {i}");
         }
     }
 
@@ -205,7 +214,7 @@ mod tests {
             assert!(lidas > 0, "o leitor não leu nada: o teste não exercitou nada");
             eprintln!("SEQLOCK_FRESCURA leituras={lidas} ultima_versao={ultima}");
         }
-        assert_eq!(r.ler(1), Some([n; 4]));
+        assert_eq!(r.ler(1), Ok([n; 4]));
     }
 }
 
@@ -235,5 +244,39 @@ mod loom_tests {
             t.join().unwrap();
             assert_eq!(r.tentar(), Some([2, 2]));
         });
+    }
+
+    /// O3 (ronda 2): `ler(k)` com `k` publicações concorrentes (k = 1 e k = 2). Em cada intercalação, um `Err(e)` tem
+    /// `e.tentativas == k` e um `Ok(v)` é coerente. Não-vacuidade: um contador `std`, fora do modelo, conta os `Err`, e
+    /// exige-se pelo menos um por `k` — senão o oráculo não exercitou nada.
+    ///
+    /// O leitor é a thread LANÇADA e as publicações correm na principal: com o leitor na principal e k = 1, o loom só
+    /// explorou UMA intercalação (medido: 1 iteração, 0 `Err`); assim explora 10 (3 `Err`) com k = 1 e 1583 (361 `Err`)
+    /// com k = 2 (`ronda2/g2/exp-loom/`).
+    #[test]
+    fn loom_ler_esgotado_conta_as_tentativas() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        for k in [1u32, 2] {
+            let erros = std::sync::Arc::new(AtomicUsize::new(0));
+            let e2 = erros.clone();
+            loom::model(move || {
+                let (r, mut w) = novo([0u64; 2]);
+                let e3 = e2.clone();
+                let t = loom::thread::spawn(move || match r.ler(k) {
+                    Ok(v) => assert_eq!(v[0], v[1], "snapshot misturado: {v:?}"),
+                    Err(e) => {
+                        assert_eq!(e.tentativas, k, "Esgotado com {} tentativas para k = {k}", e.tentativas);
+                        e3.fetch_add(1, Relaxed);
+                    }
+                });
+                for v in 1..=u64::from(k) {
+                    w.escrever([v, v]);
+                }
+                t.join().unwrap();
+            });
+            let n = erros.load(Relaxed);
+            eprintln!("LOOM_O3 k={k} err={n}");
+            assert!(n >= 1, "k = {k}: nenhuma intercalação deu Err — o oráculo não exercitou nada");
+        }
     }
 }

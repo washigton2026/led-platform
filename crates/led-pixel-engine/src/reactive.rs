@@ -205,12 +205,12 @@ impl AudioShare {
     /// O corpo de [`Self::scalars`] com `k` explícito (os testes forçam o fallback com `k = 0`).
     fn scalars_com_tentativas(&self, k: u32) -> AudioScalars {
         match self.leitor.ler(k) {
-            Some(palavras) => {
+            Ok(palavras) => {
                 let s = descodificar(palavras);
                 ULTIMO_VALIDO.with(|c| c.set(Some((self.id, s))));
                 s
             }
-            None => self.fallback(),
+            Err(_) => self.fallback(),
         }
     }
 
