@@ -1021,3 +1021,95 @@ mod adversarial_tests {
     }
 }
 
+/// TD-030 (ronda 2, O5): o FALLBACK do `scalars()` não aloca, medido de forma determinística — `k = 0` vai direto ao
+/// fallback, sem contenção nem relógio. `scalars_com_tentativas` é privado, por isso o teste vive aqui e não no
+/// `tests/no_alloc_reativo.rs`.
+///
+/// O contador é o `#[global_allocator]` DESTE binário de testes unitários (D-r2-1, só sob `cfg(test)`): só delega para
+/// `System` e conta; a TLS tem init `const` (sem alocação nem reentrância no alocador) e só conta a thread marcada —
+/// a réplica mínima do TD-023 que está no `no_alloc_reativo.rs`. Fora do Miri e do loom, para não mudar essas medições.
+#[cfg(all(test, not(loom), not(miri)))]
+mod no_alloc_fallback {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    struct Contador;
+
+    thread_local! {
+        static MARCADA: Cell<bool> = const { Cell::new(false) };
+        static ALOCACOES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn contar() {
+        // `try_with`: durante a destruição da thread o TLS pode já não existir — não conta.
+        let _ = MARCADA.try_with(|m| {
+            if m.get() {
+                let _ = ALOCACOES.try_with(|a| a.set(a.get() + 1));
+            }
+        });
+    }
+
+    unsafe impl GlobalAlloc for Contador {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            contar();
+            unsafe { System.alloc(l) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            unsafe { System.dealloc(p, l) }
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            contar();
+            unsafe { System.alloc_zeroed(l) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+            contar();
+            unsafe { System.realloc(p, l, n) }
+        }
+    }
+
+    #[global_allocator]
+    static A: Contador = Contador;
+
+    /// Alocações feitas por ESTA thread durante `corpo`.
+    fn alocacoes_em(corpo: impl FnOnce()) -> usize {
+        let antes = ALOCACOES.with(|a| a.get());
+        MARCADA.with(|m| m.set(true));
+        corpo();
+        MARCADA.with(|m| m.set(false));
+        ALOCACOES.with(|a| a.get()) - antes
+    }
+
+    #[test]
+    fn fallback_forcado_nao_aloca() {
+        let share = AudioShare::new();
+        share.publish(&AudioFeatures {
+            sample_rate: 48_000, timestamp_ms: 5, rms: 0.5, beat: true, bass: 0.7, mid: 0.3, high: 0.1,
+            spectrum: vec![0.0; 8], musical_section: Some(MusicalSection::Drop), instrument_class: None,
+        });
+        // fora da contagem: uma leitura válida (fica como último válido desta thread) e um fallback de aquecimento
+        let valido = share.scalars();
+        assert_eq!(valido.timestamp_ms, 5);
+        assert_eq!(share.scalars_com_tentativas(0), valido);
+        let mut iguais = 0u32;
+        let n = alocacoes_em(|| {
+            for _ in 0..200 {
+                if share.scalars_com_tentativas(0) == valido {
+                    iguais += 1;
+                }
+            }
+        });
+        assert_eq!(share.fallbacks_do_leitor(), (201, 0), "cada chamada com k = 0 tem de passar pelo fallback");
+        assert_eq!(iguais, 200, "o fallback devolve o último válido desta instância");
+        assert_eq!(n, 0, "o fallback alocou {n} vez(es) em 200 chamadas");
+    }
+
+    /// Controlo negativo do próprio contador (KB-012): uma alocação plantada TEM de ser vista.
+    #[test]
+    fn o_contador_da_lib_ve_uma_alocacao_plantada() {
+        let n = alocacoes_em(|| {
+            let v: Vec<u8> = Vec::with_capacity(64);
+            std::hint::black_box(v);
+        });
+        assert!(n >= 1, "o contador não viu a alocação plantada");
+    }
+}
