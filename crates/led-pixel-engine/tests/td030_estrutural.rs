@@ -174,6 +174,50 @@ fn render_sem_lock_nem_alocacao_no_fecho_de_chamadas() {
     assert!(erros.is_empty(), "lock/alocação no caminho do render: {erros:?}");
 }
 
+// ── O2 (ronda 2): o corpo de `AudioShare::scalars` é UMA expressão: `self.scalars_com_tentativas(TENTATIVAS_DO_LEITOR)` ──
+fn verificar_scalars_canonico(reactive: &str) -> Vec<String> {
+    let f = syn::parse_file(reactive).expect("reactive válido");
+    let mut corpos = Vec::new();
+    for item in &f.items {
+        if let syn::Item::Impl(i) = item {
+            if i.trait_.is_none() && tokens(&i.self_ty).replace(' ', "") == "AudioShare" {
+                for ii in &i.items {
+                    if let syn::ImplItem::Fn(m) = ii {
+                        if m.sig.ident == "scalars" {
+                            corpos.push(m.block.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if corpos.len() != 1 {
+        return vec![format!("AudioShare::scalars encontrado {} vez(es)", corpos.len())];
+    }
+    let e_caminho = |e: &syn::Expr, nome: &str| {
+        matches!(e, syn::Expr::Path(p) if p.attrs.is_empty() && p.qself.is_none() && p.path.is_ident(nome))
+    };
+    let canonico = match corpos[0].stmts.as_slice() {
+        [syn::Stmt::Expr(syn::Expr::MethodCall(m), None)] => {
+            m.attrs.is_empty() && m.turbofish.is_none() && e_caminho(&m.receiver, "self")
+                && m.method == "scalars_com_tentativas" && m.args.len() == 1
+                && e_caminho(&m.args[0], "TENTATIVAS_DO_LEITOR")
+        }
+        _ => false,
+    };
+    if canonico {
+        vec![]
+    } else {
+        vec![format!("o corpo de scalars não é `self.scalars_com_tentativas(TENTATIVAS_DO_LEITOR)`: {}", tokens(&corpos[0]))]
+    }
+}
+
+#[test]
+fn scalars_e_uma_unica_chamada_com_tentativas_do_leitor() {
+    let erros = verificar_scalars_canonico(REACTIVE);
+    assert!(erros.is_empty(), "{erros:?}");
+}
+
 fn verificar_escritor_unico(seqlock: &str) -> Vec<String> {
     let f = syn::parse_file(seqlock).expect("seqlock válido");
     struct V { construcoes: Vec<String>, dentro_de: Vec<String>, escritas_no_leitor: Vec<String>, macros_item: usize,
@@ -250,6 +294,19 @@ fn os_detetores_veem_o_que_foi_plantado() {
         ("format! escondido noutra macro", base_r.replace("fn escolher_fallback() -> u8 { 0 }", "fn escolher_fallback() -> u8 { assert!(format!(\"{}\", 1).len() > 0); 0 }"), base_s.to_string()),
     ] {
         assert!(!verificar_render(&[&r, &s]).is_empty(), "não visto: {nome}");
+    }
+    // O2: o corpo canónico passa; o literal 16, outra constante, ou mais de uma expressão, reprovam
+    let canon = "impl AudioShare { pub fn scalars(&self) -> u8 { self.scalars_com_tentativas(TENTATIVAS_DO_LEITOR) } }";
+    assert!(verificar_scalars_canonico(canon).is_empty(), "o corpo canónico passa");
+    for (nome, f) in [
+        ("X2 u32::MAX", canon.replace("TENTATIVAS_DO_LEITOR)", "u32::MAX)")),
+        ("literal 16", canon.replace("TENTATIVAS_DO_LEITOR)", "16)")),
+        ("outra constante", canon.replace("TENTATIVAS_DO_LEITOR)", "OUTRA)")),
+        ("caminho qualificado", canon.replace("TENTATIVAS_DO_LEITOR)", "crate::reactive::TENTATIVAS_DO_LEITOR)")),
+        ("uma instrução antes", canon.replace("{ self.scalars", "{ let _ = 0; self.scalars")),
+        ("outro método", canon.replace("scalars_com_tentativas(", "scalars_outra(")),
+    ] {
+        assert!(!verificar_scalars_canonico(&f).is_empty(), "O2 não visto: {nome}");
     }
     let base_esc = "pub(crate) struct Escritor<const W: usize> { latch: u8 } struct Leitor { } \
                     pub(crate) fn novo<const W: usize>() -> Escritor<W> { Escritor { latch: 0 } } \

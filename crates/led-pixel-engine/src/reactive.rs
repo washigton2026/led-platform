@@ -383,6 +383,34 @@ mod tests {
         assert_eq!(descodificar(codificar(&nan)).rms.to_bits(), f32::NAN.to_bits());
     }
 
+    // ── TD-030 (ronda 2, O1): NaN, +Inf e −Inf em CADA campo f32, os outros com valores normais, por `to_bits()` ──
+    #[test]
+    fn codec_preserva_nan_e_inf_em_cada_campo_f32() {
+        let normal = AudioScalars {
+            sample_rate: 48_000, timestamp_ms: 123_456, rms: 0.5, beat: true, bass: 0.25, mid: 0.125, high: 0.75,
+            musical_section: Some(MusicalSection::Chorus),
+        };
+        let bits = |s: &AudioScalars| [s.rms.to_bits(), s.bass.to_bits(), s.mid.to_bits(), s.high.to_bits()];
+        let mut casos = 0;
+        for nome in ["rms", "bass", "mid", "high"] {
+            for especial in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut s = normal;
+                match nome {
+                    "rms" => s.rms = especial,
+                    "bass" => s.bass = especial,
+                    "mid" => s.mid = especial,
+                    _ => s.high = especial,
+                }
+                let d = descodificar(codificar(&s));
+                assert_eq!(bits(&d), bits(&s), "{nome} = {especial}: bits de f32 têm de sobreviver");
+                assert_eq!((d.sample_rate, d.timestamp_ms, d.beat, d.musical_section),
+                           (s.sample_rate, s.timestamp_ms, s.beat, s.musical_section), "{nome} = {especial}");
+                casos += 1;
+            }
+        }
+        assert_eq!(casos, 12);
+    }
+
     // ── TD-030: o fallback nunca devolve a entrada de OUTRA instância ──
     #[test]
     fn fallback_so_aceita_a_entrada_desta_instancia() {
@@ -992,3 +1020,4 @@ mod adversarial_tests {
         assert!(falhas.is_empty(), "TD-030 isolamento violado: {}", falhas.join(" | "));
     }
 }
+
