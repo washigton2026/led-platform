@@ -828,3 +828,35 @@ compilação. Se for preciso paralelizar, é o primeiro candidato.
 4. **M1** (PROTOCOL_V=2) — muda o protocolo IPC: exige autorização antes de começar.
 
 Em paralelo e desde já, na trilha humana: **6.0** (WLAN → cabo nos nós 2–5).
+
+## VI.7 — Ferramentas externas: REA
+
+> **O que é.** REA = **reverse-engineer-anything** — ferramenta **externa**, não faz parte do
+> LUMYX nem de nenhum repositório dele. Pacote npm `rea-agents` **6.8.0**, servidor MCP
+> `rea`, skill `reverse-engineer-anything` v49; catálogo de 229 ferramentas MCP (Ghidra,
+> Hopper, JADX, apktool, browser/Electron, Frida/GDB/Rizin…). Instalado **só no Mac do
+> operador** (Node 26.13.0), usado pelo Claude Code local, Claude Desktop e Codex.
+> Atualização 6.7.0 → 6.8.0 a 2026-11-08 (corrige `compare_web_captures`); relatório em
+> `~/rea-setup/update-6.8.0-2026-11-08.txt`: `binary_session alignment=aligned`, 0 FAIL.
+> **[RELATADO PELO OPERADOR]** — sessões na nuvem não têm o REA; nada aqui foi medido por
+> elas.
+
+### Papel por marco
+
+| Marco | Papel do REA | Ferramentas | Limite |
+|---|---|---|---|
+| M0, M1, M2, M3, M5, M7, M8 | **nenhum** | — | M3: fps WebGPU **não vale** em browser headless — continua 3.7 (🔵 GPU real) |
+| **M4** — Console | regressão **antes/depois** de cada PR do console: DOM, rede, WebSocket | `compare_web_captures`, `compare_web_screenshots` | evidência **complementar, nunca gate** — o gate continua o do ADR-0028 / CI |
+| **M6** — Rig | **limitado**: análise de pcap de sACN/Art-Net/DDP | — | só em **host Linux**; indisponível no Mac. A medição física continua 🔵 humana |
+| **M9** — Distribuição | auditar **assinatura** e **reprodutibilidade** dos binários de release (9.2) | `inspect_rust_binary`, `inspect_signature`, `compare_artifacts` | complementa o cosign; não o substitui |
+| Referência FPP / OLA / xLights | **de reserva** | — | são open source: **fonte, doc e testes primeiro** |
+| Concorrente fechado (Light Balance) | fase futura | — | só com **autorização do operador** e respeitando a licença |
+
+### Regras
+
+1. **Fonte antes de RE.** Se existe código, doc ou teste, lê-se isso primeiro.
+2. **Saída do REA é evidência, nunca autoridade.** Não fecha TD, não fecha critério C1–C9.
+3. **Não substitui** `cargo test`, `clippy`, nem controlo negativo.
+4. **Nunca carimba hardware** — `NaoMedido ≠ Pass` continua a valer.
+5. **Nada muda o LUMYX** a partir de um achado do REA sem passar pela constituição
+   (`lumyx-system-architect`) **e** pela autorização do operador.
