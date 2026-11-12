@@ -195,8 +195,16 @@ td_id:     TD-002
 alias:     TD-010 (registrado em 2026-06-18 antes de reconciliação)
 title:     "AudioShare scalars() adquiria lock no render hot-path por frame; atomics violavam coerência"
 severity:  High
-status:    closed
-closed_on: 2026-06-19 (commit 94c42e4 — ArcSwap)
+status:    open
+first_closed_on: 2026-06-19 (commit 94c42e4 — ArcSwap)
+reopened_on: 2026-10-11
+reopen_reason: |
+  REABERTO (ordem F, 1a): o fecho assentou em «ArcSwap = 0 violações» medido numa execução ISOLADA do teste de
+  coerência (evidence_ref abaixo: 1 passed, 45 filtered out). O TD-030 contradiz essa evidência: com outros testes em
+  paralelo, o ArcSwap (arc-swap 1.9.1) devolve snapshots de OUTRA instância de AudioShare — macOS x86_64 local 14/3000,
+  macos-26 arm64 14/1000; a reprodução mínima só com o arc-swap reproduz (macos-26 arm64 29/1000). A metade
+  RT-LOCK-RENDER-001 (sem lock no render) continua verdadeira; a metade «coerente» não. Fecha de novo com o TD-030
+  (latch de sequência, src/seqlock.rs), com a evidência dele e por ordem do operador.
 history: |
   Commit f6c496c: Mutex → RwLock (melhoria parcial — ainda bloqueante, coerente).
   Commit 60afc4a: RwLock → 7 AtomicU32/U64/Bool — lock-free mas INCOERENTE
@@ -1821,8 +1829,8 @@ review_by: 2026-10-31
 ```yaml
 td_id:     TD-030
 title:     "audioshare_scalars_beat_timestamp_coherent_under_concurrency (o detetor do TD-002, closed) reprovou uma vez no runner macos-26-arm64: uma snapshot de AudioShare::scalars() com beat e timestamp_ms incoerentes"
-severity:  High
-severity_note: "PROVISORIA (operador, 2026-10-07): passa a Critical se a reproducao confirmar incoerencia real — o render podia ver o beat de um publish e o timestamp de outro (BeatFlash errado)."
+severity:  Critical
+severity_note: "Critical por decisão do operador (ordem F, 2026-10-11): a reprodução confirmou incoerência real e pior — scalars() devolve o snapshot de OUTRA instância de AudioShare. (Provisória High desde 2026-10-07.)"
 status:    open
 origin:    "PR #30 (R4.6, so a etiqueta da imagem macOS mudou), run 37585504571, job 112674573237 `test (macos-26)`, Image macos-26-arm64 20260907.0351.1 (a mesma do macos-latest): `panicked at crates/led-pixel-engine/src/reactive.rs:474:9: coherence violated 1 times: beat/timestamp_ms from different publishes`. Nao repetido (STOP, 2026-10-07). Unica ocorrencia conhecida; o teste passou em todas as runs anteriores lidas."
 source_files: crates/led-pixel-engine/src/reactive.rs
@@ -1839,6 +1847,12 @@ context: |
 impact: |
   Se for real: em arm64 (Apple Silicon, Raspberry Pi 5, nos ARM) o render pode ler beat e timestamp de publishes
   diferentes — o defeito exato que o TD-002 fechou em x86. O rig de producao e x86/Linux hoje; o macOS de autoria e arm64.
+required_fix_v2: |
+  Accept v2 (operador, ordem F; sha 714e43cc…87e4): latch de sequencia proprio sem unsafe (src/seqlock.rs), um so
+  escritor por estrutura, leitor limitado a K tentativas com fallback no ultimo snapshot valido desta instancia
+  (contado), loom + Miri, teste novo audioshare_isolamento_entre_instancias (vermelho antes: 13/500 isolado, x86_64)
+  e o teste original inalterado. Fecho: 0 violacoes em x86_64 E arm64 com N registado, nas condicoes intercaladas da
+  medicao; fecha so por ordem do operador.
 required_fix: |
   Medir primeiro (R5.1 passo B: o teste em ciclo, N=500, macos-26 arm64 · ubuntu-24.04 x86 · ubuntu-24.04-arm). Se a
   taxa > 0 em arm64 e 0 em x86 → incoerencia real → accept da correcao (contrato canonico + hot-path = area protegida)
@@ -1857,6 +1871,14 @@ measured: |
   ESTADO: EM OBSERVACAO (operador, R7.3, 2026-10-08) — sem mais medicao as cegas. D-REP: a 2.a ocorrencia em
   qualquer job → STOP com os valores que o diagnostico do PR #39 imprime na falha (beat, timestamp_ms, beat
   esperado, ultimo publish concluido, iteracao do reader).
+  2.a OCORRENCIA (2026-10-11, PR #49, job test (macos-26)) → STOP D-REP → diagnostico (ordem E, PR #50 [MEDICAO]):
+  isolado 0/7000 em todas as arquiteturas; com os outros testes de AudioShare do binario em paralelo: macOS x86_64
+  local 14/3000 (ArcSwap) contra 0/3000 (controlo std::RwLock), macos-26 arm64 2/300; ubuntu x86_64/aarch64 0/300.
+  As marcas por campo mostram snapshots de OUTRA instancia (sr=48000 de outro teste), internamente coerentes.
+  Reproducao minima SO com arc-swap 1.9.1, sem codigo LUMYX (ordem F 1a, PR #52 [MEDICAO], N=1000 intercalado com o
+  led-pixel-engine): macos-26 arm64 29/1000 (producao 14/1000); ubuntu-24.04 x86_64 0/1000; ubuntu-24.04-arm 0/1000;
+  macOS x86_64 local: ver a evidencia de fecho. → a causa esta no arc-swap 1.9.1 (estrategia por omissao), nao no uso
+  do LUMYX; levantamento: o AudioShare.scalars e o UNICO uso de arc-swap no workspace.
 review_by: 2026-10-21
 ```
 
@@ -1916,5 +1938,34 @@ required_fix: |
   nomeado. Só teste; nenhuma mudança de produção.
 falsification_required: |
   A mutação X7 (trocar `(false, _) => Missing` pela precedência inversa) tem de ficar vermelha.
+review_by: 2026-11-30
+```
+
+---
+
+## TD-033 — `beatflash_render_latency_under_1ms` é um orçamento de tempo de parede num teste unitário
+
+```yaml
+td_id:     TD-033
+title:     "beatflash_render_latency_under_1ms afirma `elapsed < 5 ms` ao relógio de parede, dentro do binário de testes partilhado: falha sob carga sem defeito no render"
+severity:  Medium
+status:    open
+origin:    "Diagnóstico do TD-030 (ordem E, 2026-10-11, x86_64 local i5-8210Y, debug), contado nos ficheiros por iteração: suite completa 1/300; filtro reactive::adversarial_tests 1/1000; controlo std::RwLock 2/1000; intercalado ArcSwap 2/2000 e RwLock 7/2000. Total: 13 falhas em 6300 execuções, sempre com outros testes em paralelo. Registado por decisão do operador (ordem F, item 3)."
+source_files: crates/led-pixel-engine/src/reactive.rs
+context: |
+  `led-pixel-engine::reactive::adversarial_tests::beatflash_render_latency_under_1ms`: 1000 píxeis, um render,
+  `assert!(elapsed.as_millis() < 5)`. O nome diz 1 ms e o limite é 5 ms. Corre em paralelo com os outros testes do
+  binário, por isso o tempo medido inclui preempção e carga alheias. É a classe do TD-006 e do TD-024 (orçamento de
+  tempo de parede num teste partilhado).
+impact: |
+  Falsos vermelhos sob carga (CI ou local) que custam reruns e escondem sinais reais. Não prova a propriedade de
+  tempo real: um verde com a máquina ociosa não diz nada do pior caso.
+required_fix: |
+  Mover o orçamento para um gate de performance separado (processo próprio, plataforma declarada, N execuções e
+  percentil registados), como o TD-006 fez com `#[ignore]` + execução manual ou um job dedicado. No teste unitário fica
+  só o que é determinístico. Nesta ordem o teste NÃO é alterado.
+falsification_required: |
+  Com a suite completa em paralelo e N fixo, o teste unitário deixa de depender do relógio (0 asserts de tempo de
+  parede no binário partilhado). O gate de performance reprova um render com uma espera plantada.
 review_by: 2026-11-30
 ```

@@ -5,32 +5,38 @@
 //! Hot-path discipline: the render side reads only [`AudioScalars`] (Copy, allocation-free).
 //! The spectrum stays behind [`AudioShare::with_spectrum`] so it is never cloned per frame.
 //!
-//! ## ArcSwap design — lock-free + coherent (TD-002 / RT-LOCK-RENDER-001)
+//! ## Latch de sequência — sem lock, coerente e isolado (TD-002 / TD-030 / RT-LOCK-RENDER-001)
 //!
-//! `AudioScalars` scalars are published as an `Arc<AudioScalars>` via `ArcSwap`.
+//! Os escalares vão codificados em 4 palavras `AtomicU64` num latch de sequência com dois
+//! slots ([`crate::seqlock`]), um por instância, sem nada global nem reciclado.
 //!
-//! - `publish()` (audio thread, ~200 Hz): `self.scalars.store(Arc::new(AudioScalars{..}))`
-//!   — one atomic pointer swap, the whole struct at once.
-//! - `scalars()` (render thread, every frame): `*self.scalars.load()` — one atomic load,
-//!   no lock, no blocking, returns a coherent copy of ALL fields from the same publish.
+//! - `publish()` (thread de áudio, ~200 Hz): codifica a struct e escreve-a com o ÚNICO
+//!   `Escritor` do latch, guardado num `Mutex` usado só aqui (fora do render).
+//! - `scalars()` (thread de render, cada frame): até [`TENTATIVAS_DO_LEITOR`] leituras do
+//!   latch, sem lock e sem alocação; todos os campos vêm da mesma publicação DESTA instância.
+//!   Se as tentativas se esgotarem (o escritor avançou durante cada uma), devolve o último
+//!   snapshot válido que esta thread leu desta instância, e conta o fallback.
 //!
-//! Why ArcSwap over previous attempts:
-//!   - Per-field atomics (60afc4a): lock-free but INCOHERENT — beat and timestamp_ms
-//!     could come from different publishes; broke BeatFlash detection.
-//!   - RwLock<AudioScalars> (57f7722): coherent but acquires a lock per render frame;
-//!     RT-LOCK-RENDER-001 still fired.
-//!   - ArcSwap (this): lock-free AND coherent — closes both properties together.
+//! Histórico:
+//!   - Atómicos por campo (60afc4a): sem lock mas INCOERENTE (beat e timestamp_ms de
+//!     publicações diferentes).
+//!   - RwLock<AudioScalars> (57f7722): coerente, mas um lock por frame (RT-LOCK-RENDER-001).
+//!   - ArcSwap (94c42e4, TD-002): sem lock, mas o TD-030 mediu `scalars()` a devolver um
+//!     snapshot de OUTRA instância de `AudioShare` (arc-swap 1.9.1; a reprodução mínima só com o
+//!     arc-swap reproduz).
+//!   - Latch (este): sem lock, coerente, e cada instância só lê os seus próprios atómicos.
 //!
-//! `spectrum` (Vec<f32>) stays behind a `RwLock` — never called from `render()`.
+//! `spectrum` (Vec<f32>) continua atrás de um `RwLock` — `render()` nunca lhe toca.
 
 use std::cell::Cell;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
-use arc_swap::ArcSwap;
-use led_core::{AudioFeatures, PixelColor};
+use led_core::{AudioFeatures, MusicalSection, PixelColor};
 
 use crate::color;
 use crate::effect::{Effect, Vec3};
+use crate::seqlock;
 
 /// The scalar audio fields — cheap to copy, safe to read every frame.
 /// `musical_section` is included so reactive effects and `SectionClip` can
@@ -48,17 +54,101 @@ pub struct AudioScalars {
     pub musical_section: Option<led_core::MusicalSection>,
 }
 
-/// Shared latest audio analysis. One writer (audio thread) via [`publish`](Self::publish),
-/// many readers (render thread) via [`scalars`](Self::scalars).
+/// Tentativas de leitura do latch por `scalars()` antes do fallback (TD-030, accept v2 §2.2).
+/// Uma tentativa só falha se o escritor avançar durante ela; a ~200 Hz isso é raro.
+pub const TENTATIVAS_DO_LEITOR: u32 = 16;
+
+/// Palavras do latch: os escalares codificados (ver [`codificar`]).
+const PALAVRAS: usize = 4;
+
+/// Id de instância, nunca reutilizado (um endereço seria: depois de um drop, outra instância
+/// podia nascer no mesmo sítio e o fallback devolveria o valor dela — a classe do TD-030).
+static PROXIMO_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// O último snapshot válido que ESTA thread leu, e de que instância. Init `const`, sem
+    /// destrutor: não aloca no caminho do render. Só o fallback o devolve, e só se o id bater.
+    static ULTIMO_VALIDO: Cell<Option<(u64, AudioScalars)>> = const { Cell::new(None) };
+}
+
+/// Shared latest audio analysis. One writer at a time (audio thread) via
+/// [`publish`](Self::publish), many readers (render thread) via [`scalars`](Self::scalars).
 ///
-/// `scalars()` is **lock-free and coherent**: one `ArcSwap::load()` returns an atomic
-/// pointer to the latest `AudioScalars` struct; dereferencing copies all 7 fields at once
-/// from a single published snapshot. No lock acquired on the render path.
+/// `scalars()` is **lock-free, coherent and isolated**: a bounded number of reads of this
+/// instance's own sequence latch; all fields come from a single `publish()` of THIS instance.
+/// No lock acquired and nothing allocated on the render path.
 ///
 /// `with_spectrum()` uses a separate `RwLock<Vec<f32>>` — never called from `render()`.
 pub struct AudioShare {
-    scalars:  ArcSwap<AudioScalars>,
+    leitor:   seqlock::Leitor<PALAVRAS>,
+    /// O ÚNICO escritor do latch. O `Mutex` serializa `publish` (lado da escrita, fora do render).
+    escritor: Mutex<seqlock::Escritor<PALAVRAS>>,
+    id:       u64,
+    fallbacks:              AtomicU64,
+    fallbacks_sem_snapshot: AtomicU64,
     spectrum: RwLock<Vec<f32>>,
+}
+
+/// Código de `musical_section` na palavra 3: 0 = `None`, 1..=8 = a variante.
+fn codigo_da_seccao(s: Option<MusicalSection>) -> u64 {
+    match s {
+        None => 0,
+        Some(MusicalSection::Intro) => 1,
+        Some(MusicalSection::Verse) => 2,
+        Some(MusicalSection::Chorus) => 3,
+        Some(MusicalSection::Bridge) => 4,
+        Some(MusicalSection::Drop) => 5,
+        Some(MusicalSection::Build) => 6,
+        Some(MusicalSection::Outro) => 7,
+        Some(MusicalSection::Unknown) => 8,
+    }
+}
+
+fn seccao_do_codigo(c: u64) -> Option<MusicalSection> {
+    match c {
+        1 => Some(MusicalSection::Intro),
+        2 => Some(MusicalSection::Verse),
+        3 => Some(MusicalSection::Chorus),
+        4 => Some(MusicalSection::Bridge),
+        5 => Some(MusicalSection::Drop),
+        6 => Some(MusicalSection::Build),
+        7 => Some(MusicalSection::Outro),
+        8 => Some(MusicalSection::Unknown),
+        _ => None,
+    }
+}
+
+/// O fallback só aceita a entrada da thread se for DESTA instância (`id`); nunca a de outra.
+fn escolher_fallback(id: u64, entrada: Option<(u64, AudioScalars)>) -> Option<AudioScalars> {
+    match entrada {
+        Some((dono, s)) if dono == id => Some(s),
+        _ => None,
+    }
+}
+
+/// `AudioScalars` → 4 palavras. Os `f32` vão pelos bits (NaN e ±Inf preservados).
+fn codificar(s: &AudioScalars) -> [u64; PALAVRAS] {
+    [
+        s.timestamp_ms,
+        u64::from(s.sample_rate) | (u64::from(s.rms.to_bits()) << 32),
+        u64::from(s.bass.to_bits()) | (u64::from(s.mid.to_bits()) << 32),
+        u64::from(s.high.to_bits())
+            | (u64::from(s.beat) << 32)
+            | (codigo_da_seccao(s.musical_section) << 40),
+    ]
+}
+
+fn descodificar(p: [u64; PALAVRAS]) -> AudioScalars {
+    AudioScalars {
+        timestamp_ms:    p[0],
+        sample_rate:     p[1] as u32,
+        rms:             f32::from_bits((p[1] >> 32) as u32),
+        bass:            f32::from_bits(p[2] as u32),
+        mid:             f32::from_bits((p[2] >> 32) as u32),
+        high:            f32::from_bits(p[3] as u32),
+        beat:            (p[3] >> 32) & 1 == 1,
+        musical_section: seccao_do_codigo((p[3] >> 40) & 0xff),
+    }
 }
 
 impl Default for AudioShare {
@@ -69,17 +159,23 @@ impl Default for AudioShare {
 
 impl AudioShare {
     pub fn new() -> Self {
+        let (leitor, escritor) = seqlock::novo(codificar(&AudioScalars::default()));
         Self {
-            scalars:  ArcSwap::from_pointee(AudioScalars::default()),
+            leitor,
+            escritor: Mutex::new(escritor),
+            id: PROXIMO_ID.fetch_add(1, Ordering::Relaxed),
+            fallbacks: AtomicU64::new(0),
+            fallbacks_sem_snapshot: AtomicU64::new(0),
             spectrum: RwLock::new(Vec::new()),
         }
     }
 
     /// Publish the newest features (audio thread, ~200 Hz).
-    /// One atomic pointer swap — publishes the whole AudioScalars struct at once.
+    /// Writes the whole AudioScalars struct into this instance's latch through its single
+    /// writer (serialized by a `Mutex` on the publish side only — never on the render path).
     /// Spectrum update uses a separate RwLock (off render hot-path).
     pub fn publish(&self, f: &AudioFeatures) {
-        self.scalars.store(Arc::new(AudioScalars {
+        let palavras = codificar(&AudioScalars {
             sample_rate:     f.sample_rate,
             timestamp_ms:    f.timestamp_ms,
             rms:             f.rms,
@@ -88,7 +184,8 @@ impl AudioShare {
             mid:             f.mid,
             high:            f.high,
             musical_section: f.musical_section,
-        }));
+        });
+        self.escritor.lock().unwrap_or_else(|e| e.into_inner()).escrever(palavras);
         let mut g = self.spectrum.write().unwrap();
         if g.len() != f.spectrum.len() {
             g.resize(f.spectrum.len(), 0.0);
@@ -96,10 +193,41 @@ impl AudioShare {
         g.copy_from_slice(&f.spectrum);
     }
 
-    /// Latest scalar fields. **Lock-free and coherent.**
-    /// One atomic `load()` — all fields from the same `publish()` call, no lock.
+    /// Latest scalar fields. **Lock-free, coherent and isolated.**
+    /// Up to [`TENTATIVAS_DO_LEITOR`] reads of this instance's latch — all fields from the
+    /// same `publish()` of THIS instance, no lock, no allocation. If every attempt caught the
+    /// writer mid-publish, returns the last valid snapshot this thread read from this
+    /// instance (or the default if there is none) and counts it ([`Self::fallbacks_do_leitor`]).
     pub fn scalars(&self) -> AudioScalars {
-        *self.scalars.load().as_ref()
+        self.scalars_com_tentativas(TENTATIVAS_DO_LEITOR)
+    }
+
+    /// O corpo de [`Self::scalars`] com `k` explícito (os testes forçam o fallback com `k = 0`).
+    fn scalars_com_tentativas(&self, k: u32) -> AudioScalars {
+        match self.leitor.ler(k) {
+            Ok(palavras) => {
+                let s = descodificar(palavras);
+                ULTIMO_VALIDO.with(|c| c.set(Some((self.id, s))));
+                s
+            }
+            Err(_) => self.fallback(),
+        }
+    }
+
+    #[cold]
+    fn fallback(&self) -> AudioScalars {
+        self.fallbacks.fetch_add(1, Ordering::Relaxed);
+        let escolhido = escolher_fallback(self.id, ULTIMO_VALIDO.with(|c| c.get()));
+        if escolhido.is_none() {
+            self.fallbacks_sem_snapshot.fetch_add(1, Ordering::Relaxed);
+        }
+        escolhido.unwrap_or_default()
+    }
+
+    /// Contadores do leitor (TD-030): `(tentativas esgotadas, das quais sem snapshot desta
+    /// instância nesta thread)`. Só leitura; para medição e registo.
+    pub fn fallbacks_do_leitor(&self) -> (u64, u64) {
+        (self.fallbacks.load(Ordering::Relaxed), self.fallbacks_sem_snapshot.load(Ordering::Relaxed))
     }
 
     /// Borrow the latest spectrum without cloning it.
@@ -212,6 +340,307 @@ mod tests {
         let mut out = [PixelColor::default(); 2];
         fx.render(t, &[Vec3::ZERO; 2], &mut out);
         out[0]
+    }
+
+    // ── TD-030: codec do latch — ida e volta exata, todos os valores de MusicalSection ──
+    #[test]
+    fn codec_ida_e_volta_exata() {
+        let seccoes = [
+            None,
+            Some(MusicalSection::Intro),
+            Some(MusicalSection::Verse),
+            Some(MusicalSection::Chorus),
+            Some(MusicalSection::Bridge),
+            Some(MusicalSection::Drop),
+            Some(MusicalSection::Build),
+            Some(MusicalSection::Outro),
+            Some(MusicalSection::Unknown),
+        ];
+        let reais = [0.0f32, -0.0, 1.5, -3.25, f32::INFINITY, f32::NEG_INFINITY, f32::MIN_POSITIVE, f32::MAX];
+        for (i, seccao) in seccoes.into_iter().enumerate() {
+            for (j, &x) in reais.iter().enumerate() {
+                let s = AudioScalars {
+                    sample_rate: u32::MAX - i as u32,
+                    timestamp_ms: u64::MAX - j as u64,
+                    rms: x,
+                    beat: (i + j) % 2 == 1,
+                    bass: -x,
+                    mid: x * 0.5,
+                    high: reais[(j + 1) % reais.len()],
+                    musical_section: seccao,
+                };
+                let d = descodificar(codificar(&s));
+                assert_eq!(d.sample_rate, s.sample_rate);
+                assert_eq!(d.timestamp_ms, s.timestamp_ms);
+                assert_eq!(d.beat, s.beat);
+                assert_eq!(d.musical_section, s.musical_section);
+                for (a, b) in [(d.rms, s.rms), (d.bass, s.bass), (d.mid, s.mid), (d.high, s.high)] {
+                    assert_eq!(a.to_bits(), b.to_bits(), "bits de f32 têm de sobreviver");
+                }
+            }
+        }
+        let nan = AudioScalars { rms: f32::NAN, ..AudioScalars::default() };
+        assert_eq!(descodificar(codificar(&nan)).rms.to_bits(), f32::NAN.to_bits());
+    }
+
+    // ── TD-030 (ronda 2, O1): NaN, +Inf e −Inf em CADA campo f32, os outros com valores normais, por `to_bits()` ──
+    #[test]
+    fn codec_preserva_nan_e_inf_em_cada_campo_f32() {
+        let normal = AudioScalars {
+            sample_rate: 48_000, timestamp_ms: 123_456, rms: 0.5, beat: true, bass: 0.25, mid: 0.125, high: 0.75,
+            musical_section: Some(MusicalSection::Chorus),
+        };
+        let bits = |s: &AudioScalars| [s.rms.to_bits(), s.bass.to_bits(), s.mid.to_bits(), s.high.to_bits()];
+        let mut casos = 0;
+        for nome in ["rms", "bass", "mid", "high"] {
+            for especial in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut s = normal;
+                match nome {
+                    "rms" => s.rms = especial,
+                    "bass" => s.bass = especial,
+                    "mid" => s.mid = especial,
+                    _ => s.high = especial,
+                }
+                let d = descodificar(codificar(&s));
+                assert_eq!(bits(&d), bits(&s), "{nome} = {especial}: bits de f32 têm de sobreviver");
+                assert_eq!((d.sample_rate, d.timestamp_ms, d.beat, d.musical_section),
+                           (s.sample_rate, s.timestamp_ms, s.beat, s.musical_section), "{nome} = {especial}");
+                casos += 1;
+            }
+        }
+        assert_eq!(casos, 12);
+    }
+
+    // ── TD-030: o fallback nunca devolve a entrada de OUTRA instância ──
+    #[test]
+    fn fallback_so_aceita_a_entrada_desta_instancia() {
+        let s = AudioScalars { sample_rate: 7, timestamp_ms: 9, ..AudioScalars::default() };
+        assert_eq!(escolher_fallback(3, Some((3, s))), Some(s));
+        assert_eq!(escolher_fallback(3, Some((4, s))), None, "entrada de outra instância");
+        assert_eq!(escolher_fallback(3, None), None);
+    }
+
+    // ── TD-030: ids de instância nunca se repetem, nem depois de um drop ──
+    #[test]
+    fn ids_de_instancia_unicos_mesmo_depois_de_drop() {
+        let a = AudioShare::new();
+        let id_a = a.id;
+        drop(a);
+        let b = AudioShare::new();
+        let c = AudioShare::new();
+        assert!(b.id != id_a && c.id != id_a && b.id != c.id);
+        // em lote, muito acima de qualquer módulo pequeno (F8: id % 1024), criando e largando: nenhum id se repete
+        let mut vistos = std::collections::HashSet::new();
+        for lote in 0..10 {
+            let vivos: Vec<AudioShare> = (0..1000).map(|_| AudioShare::new()).collect();
+            for s in &vivos {
+                assert!(vistos.insert(s.id), "id {} repetido (lote {lote})", s.id);
+            }
+        }
+        assert_eq!(vistos.len(), 10_000);
+    }
+
+    // ── TD-030 (ordem G): K é fixado — o leitor faz no máximo 16 tentativas (§2.2) ──
+    #[test]
+    fn k_do_leitor_e_16() {
+        assert_eq!(TENTATIVAS_DO_LEITOR, 16);
+    }
+
+    /// Versão = `timestamp_ms` = `bass` (marca); `sample_rate` = a instância.
+    fn publica_versao(share: &AudioShare, v: u64, instancia: u32) {
+        let mut f = features(v % 2 == 1, v, v as f32);
+        f.sample_rate = instancia;
+        share.publish(&f);
+    }
+
+    // ── TD-030 (ordem G): ORÁCULO DE FRESCURA pelo scalars() ──
+    // Uma leitura iniciada depois de `c` publicações concluídas nunca devolve versão < c nem o default (c > 0), a não
+    // ser num fallback CONTADO (que devolve o último válido desta thread); a versão vista nunca recua.
+    #[test]
+    fn frescura_pelo_scalars_e_monotonia_por_leitor() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        let n: u64 = if cfg!(miri) { 40 } else { 50_000 };
+        let share = Arc::new(AudioShare::new());
+        let parar = Arc::new(AtomicBool::new(false));
+        let concluidas = Arc::new(AtomicU64::new(0));
+        let (rs, rp, rc) = (share.clone(), parar.clone(), concluidas.clone());
+        let leitor = std::thread::spawn(move || {
+            let (mut ultima, mut lidas, mut por_fallback) = (0u64, 0u64, 0u64);
+            while !rp.load(Ordering::Relaxed) {
+                let antes = rc.load(Ordering::Acquire);
+                let (fb0, _) = rs.fallbacks_do_leitor();
+                let s = rs.scalars();
+                let (fb1, _) = rs.fallbacks_do_leitor();
+                lidas += 1;
+                if s != AudioScalars::default() {
+                    assert_eq!(s.sample_rate, 4242, "snapshot alheio: {s:?}");
+                    assert_eq!(s.bass, s.timestamp_ms as f32, "snapshot incoerente: {s:?}");
+                }
+                if fb1 > fb0 {
+                    por_fallback += 1;
+                    assert_eq!(s.timestamp_ms, ultima, "o fallback devolve o último válido desta thread");
+                    continue;
+                }
+                assert!(s.timestamp_ms >= antes, "versão {} mais antiga do que as {antes} concluídas", s.timestamp_ms);
+                if antes > 0 { assert_ne!(s, AudioScalars::default(), "default depois de {antes} publicações concluídas"); }
+                assert!(s.timestamp_ms >= ultima, "a versão recuou: {} depois de {ultima}", s.timestamp_ms);
+                ultima = s.timestamp_ms;
+            }
+            (lidas, por_fallback)
+        });
+        for v in 1..=n {
+            publica_versao(&share, v, 4242);
+            concluidas.store(v, Ordering::Release);
+        }
+        parar.store(true, Ordering::Relaxed);
+        let (lidas, por_fallback) = leitor.join().unwrap();
+        assert!(lidas > 0);
+        eprintln!("TD030_FRESCURA publicacoes={n} leituras={lidas} fallbacks={por_fallback} contador={:?}", share.fallbacks_do_leitor());
+        assert_eq!(share.fallbacks_do_leitor().0, por_fallback, "cada fallback é contado, e só esses");
+    }
+
+    // ── TD-030 (ordem G): fallback sob CONTENÇÃO FORÇADA (K = 1 e escritor em ciclo apertado) ──
+    // Cada chamada em que o contador sobe devolve o último snapshot válido desta thread desta instância (ou o default,
+    // contado à parte, se ainda não havia nenhum); o contador sobe exatamente uma vez por fallback.
+    #[test]
+    fn fallback_sob_contencao_forcada() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let share = Arc::new(AudioShare::new());
+        let parar = Arc::new(AtomicBool::new(false));
+        let (ws, wp) = (share.clone(), parar.clone());
+        let escritor = std::thread::spawn(move || {
+            let mut v = 0u64;
+            while !wp.load(Ordering::Relaxed) {
+                v += 1;
+                publica_versao(&ws, v, 777);
+            }
+            v
+        });
+        let (mut ultima_valida, mut fallbacks, mut sem_snapshot) = (None::<AudioScalars>, 0u64, 0u64);
+        let inicio = std::time::Instant::now();
+        let alvo = if cfg!(miri) { 1 } else { 200 };
+        while fallbacks < alvo {
+            assert!(inicio.elapsed() < std::time::Duration::from_secs(60),
+                "pré-condição: sem contenção suficiente para {alvo} fallbacks em 60 s (houve {fallbacks})");
+            let (a0, b0) = share.fallbacks_do_leitor();
+            let s = share.scalars_com_tentativas(1);
+            let (a1, b1) = share.fallbacks_do_leitor();
+            match (a1 - a0, b1 - b0) {
+                (0, 0) => {
+                    assert!(s == AudioScalars::default() || (s.sample_rate == 777 && s.bass == s.timestamp_ms as f32), "{s:?}");
+                    ultima_valida = Some(s);
+                }
+                (1, 0) => { fallbacks += 1; assert_eq!(Some(s), ultima_valida, "fallback ≠ último válido"); }
+                (1, 1) => { fallbacks += 1; sem_snapshot += 1; assert_eq!(s, AudioScalars::default());
+                            assert!(ultima_valida.is_none(), "sem snapshot só antes da 1.ª leitura válida"); }
+                d => panic!("o contador subiu {d:?} numa só chamada"),
+            }
+        }
+        parar.store(true, Ordering::Relaxed);
+        let publicadas = escritor.join().unwrap();
+        eprintln!("TD030_FALLBACK_FORCADO k=1 fallbacks={fallbacks} sem_snapshot={sem_snapshot} publicadas={publicadas}");
+        assert_eq!(share.fallbacks_do_leitor(), (fallbacks, sem_snapshot));
+    }
+
+    // ── TD-030 (ordem G): o render não espera por NENHUM lock do AudioShare (P3, L1) ──
+    // Com o escritor (Mutex) e o espectro (RwLock de escrita) ocupados por outra thread, o scalars() tem de voltar logo.
+    #[test]
+    fn scalars_nao_espera_pelos_locks_do_share() {
+        let share = Arc::new(AudioShare::new());
+        share.publish(&features(true, 9, 0.5));
+        let _escritor = share.escritor.lock().unwrap();
+        let _espectro = share.spectrum.write().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s2 = share.clone();
+        std::thread::spawn(move || { let _ = tx.send(s2.scalars()); });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(2));
+        assert_eq!(r.map(|s| s.timestamp_ms), Ok(9), "scalars() bloqueou atrás de um lock do AudioShare");
+    }
+
+    // ── TD-030 (ordem G): o Escritor não é Clone nem Copy — verificado pelo compilador, não pelo texto (W1–W7) ──
+    // O `&` explícito é o mecanismo (autoref specialization: com `T: Clone` resolve no impl de `Sonda<T>`, senão no de
+    // `&Sonda<T>`); retirá-lo, como o clippy sugere, desligaria o detetor.
+    #[allow(clippy::needless_borrow)]
+    #[test]
+    fn escritor_nao_e_clone_nem_copy() {
+        use std::marker::PhantomData;
+        struct Sonda<T>(PhantomData<T>);
+        trait TemClone { fn clone_(&self) -> bool { true } }
+        impl<T: Clone> TemClone for Sonda<T> {}
+        trait SemClone { fn clone_(&self) -> bool { false } }
+        impl<T> SemClone for &Sonda<T> {}
+        trait TemCopy { fn copy_(&self) -> bool { true } }
+        impl<T: Copy> TemCopy for Sonda<T> {}
+        trait SemCopy { fn copy_(&self) -> bool { false } }
+        impl<T> SemCopy for &Sonda<T> {}
+        // controlo do próprio detetor: um tipo Clone+Copy e um tipo sem nada
+        assert!((&Sonda::<u8>(PhantomData)).clone_() && (&Sonda::<u8>(PhantomData)).copy_());
+        assert!(!(&Sonda::<std::sync::Mutex<u8>>(PhantomData)).clone_());
+        assert!(!(&Sonda::<seqlock::Escritor<PALAVRAS>>(PhantomData)).clone_(), "Escritor é Clone");
+        assert!(!(&Sonda::<seqlock::Escritor<PALAVRAS>>(PhantomData)).copy_(), "Escritor é Copy");
+    }
+
+    // ── TD-030: uma leitura válida fica como último snapshot DESTA instância nesta thread ──
+    #[test]
+    fn leitura_valida_regista_o_ultimo_desta_instancia() {
+        let share = AudioShare::new();
+        share.publish(&features(true, 77, 0.25));
+        let s = share.scalars();
+        assert_eq!(s.timestamp_ms, 77);
+        assert_eq!(ULTIMO_VALIDO.with(|c| c.get()), Some((share.id, s)));
+        assert_eq!(share.fallbacks_do_leitor(), (0, 0), "sem escritor concorrente não há fallback");
+    }
+
+    // ── TD-030: fallback forçado (k = 0) — último válido DESTA instância, senão o default ──
+    #[test]
+    fn fallback_forcado_devolve_o_ultimo_valido_desta_instancia() {
+        let a = AudioShare::new();
+        let b = AudioShare::new();
+        a.publish(&features(true, 5, 0.5));
+        b.publish(&features(false, 6, 0.25));
+        let lido_a = a.scalars();
+        assert_eq!(lido_a.timestamp_ms, 5);
+        a.publish(&features(true, 7, 0.75));
+        // k = 0: nenhuma tentativa → fallback → o último válido que ESTA thread leu de `a`.
+        assert_eq!(a.scalars_com_tentativas(0), lido_a);
+        assert_eq!(a.fallbacks_do_leitor(), (1, 0));
+        // `b` nunca foi lida nesta thread e a entrada é de `a`: default, contado à parte.
+        assert_eq!(b.scalars_com_tentativas(0), AudioScalars::default());
+        assert_eq!(b.fallbacks_do_leitor(), (1, 1));
+    }
+
+    // ── TD-030: contadores do leitor com escritor em ciclo apertado (medidos, registados) ──
+    // Cada snapshot — incluindo os do fallback — tem de ser coerente e desta instância.
+    #[test]
+    fn fallbacks_medidos_com_escritor_continuo() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let n: u64 = if cfg!(miri) { 40 } else { 50_000 };
+        let share = Arc::new(AudioShare::new());
+        let parar = Arc::new(AtomicBool::new(false));
+        let (rs, rp) = (share.clone(), parar.clone());
+        let leitor = std::thread::spawn(move || {
+            let mut leituras = 0u64;
+            while !rp.load(Ordering::Relaxed) {
+                leituras += 1;
+                let s = rs.scalars();
+                if s != AudioScalars::default() {
+                    assert_eq!(s.sample_rate, 4242, "snapshot alheio: {s:?}");
+                    assert_eq!(s.bass, s.timestamp_ms as f32, "snapshot incoerente: {s:?}");
+                    assert_eq!(s.beat, s.timestamp_ms % 2 == 1, "snapshot incoerente: {s:?}");
+                }
+            }
+            leituras
+        });
+        for i in 1..=n {
+            let mut f = features(i % 2 == 1, i, i as f32);
+            f.sample_rate = 4242;
+            share.publish(&f);
+        }
+        parar.store(true, Ordering::Relaxed);
+        let leituras = leitor.join().unwrap();
+        let (esgotadas, sem_snapshot) = share.fallbacks_do_leitor();
+        eprintln!("TD030_FALLBACKS publicacoes={n} leituras={leituras} k={TENTATIVAS_DO_LEITOR} esgotadas={esgotadas} sem_snapshot={sem_snapshot}");
+        assert!(leituras > 0);
     }
 
     #[test]
@@ -514,5 +943,173 @@ mod adversarial_tests {
         fx.render(0, &pos, &mut out);
         let elapsed = t0.elapsed();
         assert!(elapsed.as_millis() < 5, "1000-pixel render took {}ms", elapsed.as_millis());
+    }
+
+    // ── ISOLATION (TD-030): scalars() never returns a value published into ANOTHER AudioShare ─
+    // TD-030 measured `scalars()` handing out a snapshot that only another, independent
+    // `AudioShare` instance had published (ArcSwap 1.9.1, tests running in parallel). Here K
+    // instances live at once, each with its own writer and reader. Instance `id` publishes
+    // `sample_rate = id` and marks `timestamp_ms = rms = bass = i`, `beat = i odd`. Every
+    // snapshot a reader sees must be the default or carry ITS id with coherent marks.
+    #[test]
+    fn audioshare_isolamento_entre_instancias() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        use std::thread;
+        let (instancias, publicacoes) = if cfg!(miri) { (2u32, 40u64) } else { (8u32, 10_000u64) };
+
+        let parar = Arc::new(AtomicBool::new(false));
+        let mut escritores = Vec::new();
+        let mut leitores = Vec::new();
+        for id in 1..=instancias {
+            let share = Arc::new(AudioShare::new());
+            let ws = share.clone();
+            escritores.push(thread::spawn(move || {
+                for i in 1..=publicacoes {
+                    ws.publish(&AudioFeatures {
+                        sample_rate: id,
+                        timestamp_ms: i,
+                        rms: i as f32,
+                        beat: i % 2 == 1,
+                        bass: i as f32,
+                        mid: 0.3,
+                        high: 0.1,
+                        spectrum: vec![0.0; 8],
+                        musical_section: None,
+                        instrument_class: None,
+                    });
+                }
+            }));
+            let rs = share.clone();
+            let st = parar.clone();
+            let violacoes = Arc::new(AtomicU32::new(0));
+            let rv = violacoes.clone();
+            leitores.push((id, violacoes, thread::spawn(move || {
+                let mut primeira: Option<AudioScalars> = None;
+                let mut leituras = 0u64;
+                while !st.load(Ordering::Relaxed) {
+                    leituras += 1;
+                    let sc = rs.scalars();
+                    if sc == AudioScalars::default() {
+                        continue;
+                    }
+                    let marca = sc.timestamp_ms as f32;
+                    let coerente = sc.sample_rate == id
+                        && sc.rms == marca
+                        && sc.bass == marca
+                        && sc.beat == (sc.timestamp_ms % 2 == 1);
+                    if !coerente {
+                        rv.fetch_add(1, Ordering::Relaxed);
+                        primeira.get_or_insert(sc);
+                    }
+                }
+                (primeira, leituras)
+            })));
+        }
+        for e in escritores {
+            e.join().unwrap();
+        }
+        parar.store(true, Ordering::Relaxed);
+        let mut falhas = Vec::new();
+        for (id, violacoes, leitor) in leitores {
+            let (primeira, leituras) = leitor.join().unwrap();
+            let v = violacoes.load(Ordering::Relaxed);
+            if v > 0 {
+                falhas.push(format!("instancia {id}: {v} snapshots alheias/incoerentes em {leituras} leituras; primeira={primeira:?}"));
+            }
+        }
+        assert!(falhas.is_empty(), "TD-030 isolamento violado: {}", falhas.join(" | "));
+    }
+}
+
+/// TD-030 (ronda 2, O5): o FALLBACK do `scalars()` não aloca, medido de forma determinística — `k = 0` vai direto ao
+/// fallback, sem contenção nem relógio. `scalars_com_tentativas` é privado, por isso o teste vive aqui e não no
+/// `tests/no_alloc_reativo.rs`.
+///
+/// O contador é o `#[global_allocator]` DESTE binário de testes unitários (D-r2-1, só sob `cfg(test)`): só delega para
+/// `System` e conta; a TLS tem init `const` (sem alocação nem reentrância no alocador) e só conta a thread marcada —
+/// a réplica mínima do TD-023 que está no `no_alloc_reativo.rs`. Fora do Miri e do loom, para não mudar essas medições.
+#[cfg(all(test, not(loom), not(miri)))]
+mod no_alloc_fallback {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    struct Contador;
+
+    thread_local! {
+        static MARCADA: Cell<bool> = const { Cell::new(false) };
+        static ALOCACOES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn contar() {
+        // `try_with`: durante a destruição da thread o TLS pode já não existir — não conta.
+        let _ = MARCADA.try_with(|m| {
+            if m.get() {
+                let _ = ALOCACOES.try_with(|a| a.set(a.get() + 1));
+            }
+        });
+    }
+
+    unsafe impl GlobalAlloc for Contador {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            contar();
+            unsafe { System.alloc(l) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            unsafe { System.dealloc(p, l) }
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            contar();
+            unsafe { System.alloc_zeroed(l) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+            contar();
+            unsafe { System.realloc(p, l, n) }
+        }
+    }
+
+    #[global_allocator]
+    static A: Contador = Contador;
+
+    /// Alocações feitas por ESTA thread durante `corpo`.
+    fn alocacoes_em(corpo: impl FnOnce()) -> usize {
+        let antes = ALOCACOES.with(|a| a.get());
+        MARCADA.with(|m| m.set(true));
+        corpo();
+        MARCADA.with(|m| m.set(false));
+        ALOCACOES.with(|a| a.get()) - antes
+    }
+
+    #[test]
+    fn fallback_forcado_nao_aloca() {
+        let share = AudioShare::new();
+        share.publish(&AudioFeatures {
+            sample_rate: 48_000, timestamp_ms: 5, rms: 0.5, beat: true, bass: 0.7, mid: 0.3, high: 0.1,
+            spectrum: vec![0.0; 8], musical_section: Some(MusicalSection::Drop), instrument_class: None,
+        });
+        // fora da contagem: uma leitura válida (fica como último válido desta thread) e um fallback de aquecimento
+        let valido = share.scalars();
+        assert_eq!(valido.timestamp_ms, 5);
+        assert_eq!(share.scalars_com_tentativas(0), valido);
+        let mut iguais = 0u32;
+        let n = alocacoes_em(|| {
+            for _ in 0..200 {
+                if share.scalars_com_tentativas(0) == valido {
+                    iguais += 1;
+                }
+            }
+        });
+        assert_eq!(share.fallbacks_do_leitor(), (201, 0), "cada chamada com k = 0 tem de passar pelo fallback");
+        assert_eq!(iguais, 200, "o fallback devolve o último válido desta instância");
+        assert_eq!(n, 0, "o fallback alocou {n} vez(es) em 200 chamadas");
+    }
+
+    /// Controlo negativo do próprio contador (KB-012): uma alocação plantada TEM de ser vista.
+    #[test]
+    fn o_contador_da_lib_ve_uma_alocacao_plantada() {
+        let n = alocacoes_em(|| {
+            let v: Vec<u8> = Vec::with_capacity(64);
+            std::hint::black_box(v);
+        });
+        assert!(n >= 1, "o contador não viu a alocação plantada");
     }
 }
