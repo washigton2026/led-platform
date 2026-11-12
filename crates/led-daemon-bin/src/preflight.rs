@@ -86,7 +86,7 @@ impl DevicePresence for ArtPollPresence {
 
 pub use medicao::Detalhe;
 pub use override_da_cli::AssumeNoWifi;
-pub use politica_rede::{decidir_rede, DecisaoRede, Fio, Sonda, Veredito};
+pub use politica_rede::{decidir_rede, fio_de, DecisaoRede, Fio, Sonda, Veredito};
 pub use relatorio::Preflight;
 
 /// **O override do operador como TOKEN (TD-029, R8.5 — NV10).**
@@ -201,6 +201,17 @@ pub mod politica_rede {
         }
     }
 
+    /// **Há fio a proteger?** (TD-029 R8.5b, X1/X10) «Só loopback» ⇔ TODOS os alvos são loopback
+    /// (`127.0.0.0/8`, `::1`). Multicast (v4/v6), link-local e qualquer outro endereço são rede, porque
+    /// atravessam uma interface. Lista vazia → rede (fecha na dúvida). Sem saída → `SemSaida`.
+    pub fn fio_de(alvos: Option<&[std::net::IpAddr]>) -> Fio {
+        match alvos {
+            None => Fio::SemSaida,
+            Some(a) if !a.is_empty() && a.iter().all(|ip| ip.is_loopback()) => Fio::SoLoopback,
+            Some(_) => Fio::Rede,
+        }
+    }
+
     /// **O único decisor.** Função pura e total sobre `Fio × Sonda × wifi_ativo × override`.
     ///
     /// - WiFi ativo → bloqueia SEMPRE, com ou sem override (ADR-0005).
@@ -239,6 +250,46 @@ pub mod politica_rede {
 pub mod medicao {
     use super::politica_rede::{DecisaoRede, Sonda};
     use led_hal::{NetworkGuard, NetworkPolicyError};
+
+    /// **A frase fixa de cada chave do journal — tabela ÚNICA (TD-029 R8.5b, X2–X5).** As marcas
+    /// `{…}` são substituídas pelo que a guarda disse. Mudar uma frase é mudar o que o operador lê
+    /// no journal; os testes comparam o TEXTO COMPLETO, escrito à mão, chave a chave.
+    pub const FRASES: [(&str, &str); 8] = [
+        ("preflight_vacuous", "sem --output: network_ok e devices_present sao VACUOSOS, nao ha saida a proteger"),
+        ("network_local", "{loopback} e loopback: nao atravessa interface, ADR-0005 nao se aplica"),
+        ("network_checked", "{nome}: sem WiFi ativo"),
+        ("network_override_unused", "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito"),
+        ("network_refused", "WiFi ATIVO em {interfaces} — ADR-0005 proibe show ao vivo"),
+        ("network_unverified", "NAO foi possivel verificar a rede ({razao}) — prosseguindo com aviso"),
+        (
+            "network_assumed_by_operator",
+            "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao ha WiFi ativo — NAO verificado",
+        ),
+        (
+            "network_probe_failed",
+            "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, --assume-no-wifi permite ao operador afirma-lo",
+        ),
+    ];
+
+    /// Substitui as marcas `{…}` do modelo numa só passagem. O texto que a guarda devolve nunca é
+    /// re-interpretado: um erro com `{error}` lá dentro sai literal, e não puxa outro valor.
+    fn preencher(modelo: &str, valores: &[(&str, &str)]) -> String {
+        let mut out = String::with_capacity(modelo.len() + 64);
+        let mut resto = modelo;
+        'fora: while !resto.is_empty() {
+            for (marca, v) in valores {
+                if let Some(depois) = resto.strip_prefix(marca) {
+                    out.push_str(v);
+                    resto = depois;
+                    continue 'fora;
+                }
+            }
+            let c = resto.chars().next().expect("não vazio");
+            out.push(c);
+            resto = &resto[c.len_utf8()..];
+        }
+        out
+    }
 
     /// O que a guarda disse (ou porque não foi consultada), opaco fora deste módulo.
     pub struct Detalhe {
@@ -284,36 +335,21 @@ pub mod medicao {
             };
             let nome = self.nome_guarda;
             let loopback = self.loopback.join(", ");
+            let valores: [(&str, &str); 6] = [
+                ("{nome}", nome),
+                ("{loopback}", &loopback),
+                ("{interfaces}", &interfaces),
+                ("{razao}", &razao),
+                ("{probe}", probe),
+                ("{error}", &error),
+            ];
             decisao
                 .veredito()
                 .chaves()
                 .iter()
                 .map(|&chave| {
-                    let detalhe = match chave {
-                        "preflight_vacuous" => "sem --output: network_ok e devices_present sao VACUOSOS, nao ha \
-                                                saida a proteger"
-                            .to_string(),
-                        "network_local" => {
-                            format!("{loopback} e loopback: nao atravessa interface, ADR-0005 nao se aplica")
-                        }
-                        "network_checked" => format!("{nome}: sem WiFi ativo"),
-                        "network_override_unused" => {
-                            "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".to_string()
-                        }
-                        "network_refused" => format!("WiFi ATIVO em {interfaces} — ADR-0005 proibe show ao vivo"),
-                        "network_unverified" => {
-                            format!("NAO foi possivel verificar a rede ({razao}) — prosseguindo com aviso")
-                        }
-                        "network_assumed_by_operator" => format!(
-                            "sonda {probe} FALHOU ({error}); --assume-no-wifi: o operador AFIRMA que nao ha \
-                             WiFi ativo — NAO verificado"
-                        ),
-                        "network_probe_failed" => format!(
-                            "sonda {probe} FALHOU ({error}) — output BLOQUEADO; se nao ha WiFi, \
-                             --assume-no-wifi permite ao operador afirma-lo"
-                        ),
-                        outra => format!("(sem texto para {outra})"),
-                    };
+                    let modelo = FRASES.iter().find(|(k, _)| *k == chave).map(|(_, f)| *f).unwrap_or("(sem texto)");
+                    let detalhe = preencher(modelo, &valores);
                     (chave, detalhe)
                 })
                 .collect()
@@ -388,16 +424,15 @@ pub fn preflight(
     // `todos_loopback`, nunca `any`: basta UM alvo de rede para haver fio a proteger (ADR-0029 §6).
     // TD-029 (R8.5): só a guarda MEDE (e só com fio); o texto fica no `Detalhe` opaco; o decisor
     // recebe o fio, a sonda sem payload e o token do override, e é o ÚNICO a produzir network_ok.
-    let (fio, sonda, wifi_ativo, detalhe) = match output {
-        None => (Fio::SemSaida, Sonda::NaoConsultada, false, Detalhe::sem_consulta(Vec::new())),
-        Some(cfg) if cfg.todos_loopback() => {
-            let quais = cfg.alvos.iter().map(|a| a.addr.ip().to_string()).collect();
-            (Fio::SoLoopback, Sonda::NaoConsultada, false, Detalhe::sem_consulta(quais))
+    let ips: Option<Vec<IpAddr>> = output.map(|c| c.alvos.iter().map(|a| a.addr.ip()).collect());
+    let fio = fio_de(ips.as_deref());
+    let (sonda, wifi_ativo, detalhe) = match fio {
+        Fio::SemSaida => (Sonda::NaoConsultada, false, Detalhe::sem_consulta(Vec::new())),
+        Fio::SoLoopback => {
+            let quais = ips.iter().flatten().map(|ip| ip.to_string()).collect();
+            (Sonda::NaoConsultada, false, Detalhe::sem_consulta(quais))
         }
-        Some(_) => {
-            let (sonda, wifi_ativo, detalhe) = medicao::medir(guard);
-            (Fio::Rede, sonda, wifi_ativo, detalhe)
-        }
+        Fio::Rede => medicao::medir(guard),
     };
     let decisao = decidir_rede(fio, sonda, wifi_ativo, override_da_cli);
     if decisao.override_usado() {
@@ -410,10 +445,10 @@ pub fn preflight(
     notices.extend(detalhe.notices(&decisao));
 
     // ── Controladores (RT-003: palco escuro sem erro) ────────────────────────
-    let devices_present = match output {
+    let devices_present = match (output, fio) {
         // Sem saída: vacuoso, e o `preflight_vacuous` acima já o diz para os dois campos.
-        None => true,
-        Some(cfg) if cfg.todos_loopback() => {
+        (None, _) => true,
+        (Some(_), Fio::SoLoopback) => {
             notices.push((
                 "devices_unverified",
                 "alvo de loopback: NAO ha controladores a descobrir — prosseguindo com aviso".into(),
@@ -422,7 +457,7 @@ pub fn preflight(
         }
         // **Um nó que declara não responder a descoberta não pode ser reprovado por não
         // responder** (dois presets do catálogo declaram `supports_discovery: false`).
-        Some(cfg) if !cfg.supports_discovery => {
+        (Some(cfg), _) if !cfg.supports_discovery => {
             notices.push((
                 "devices_unverified",
                 "o no declara supports_discovery:false — NAO foi sondado, e a sua ausencia nao seria \
@@ -431,7 +466,7 @@ pub fn preflight(
             ));
             true
         }
-        Some(cfg) => presenca_de_todos(cfg, presence, &mut notices),
+        (Some(cfg), _) => presenca_de_todos(cfg, presence, &mut notices),
     };
 
     Preflight::novo(integrity_verified, &decisao, devices_present, notices)
@@ -1264,6 +1299,10 @@ mod tests {
         assert!(ficheiros >= 5, "premissa: leu o src ({ficheiros})");
         assert_eq!(sondas, 1, "a guarda só é consultada em medicao::medir");
         assert_eq!(decisor, 2, "decidir_rede: 1 definição + 1 chamada (o preflight)");
+        let pre = sem_comentarios(include_str!("preflight.rs"));
+        let pre_prod: String = pre.split("mod tests {").next().unwrap().chars().filter(|c| !c.is_whitespace()).collect();
+        assert_eq!(pre_prod.matches("fio_de(").count(), 2, "fio_de: 1 definição + 1 chamada (X1/X10)");
+        assert_eq!(pre_prod.matches("todos_loopback").count(), 0, "o Fio vem só de fio_de (X1/X10)");
         assert_eq!((literais, all_clear, escritas), (1, 0, 0), "o PreflightReport só nasce em Preflight::novo (NV8)");
         assert_eq!((token_prod, token_main), (2, 1), "o token: 1 definição + 1 criação, no parser da CLI (NV10)");
 
@@ -1313,4 +1352,130 @@ mod tests {
         assert_eq!(err.matches(aviso).count(), 2, "o aviso COMPLETO, um POR pré-voo, em stderr:\n{err}");
         assert_eq!(out.matches("--assume-no-wifi").count(), 0, "nada do aviso no stdout (o journal):\n{out}");
     }
+
+    // ── R8.5b: Fio por todas as permutações, frases completas, texto da guarda literal ─────────
+
+    /// **X1/X10 — todas as sequências de 1 a 5 alvos** sobre 8 tipos de endereço (37 448 rigs). O esperado
+    /// vem de uma etiqueta escrita À MÃO por tipo (não de `is_loopback()`, que é o que está a ser testado).
+    #[test]
+    fn fio_de_todas_as_permutacoes_ate_5_alvos() {
+        let tipos: [(&str, bool); 8] = [
+            ("127.0.0.1", true),
+            ("127.42.0.9", true),
+            ("::1", true),
+            ("192.168.2.161", false),
+            ("239.255.0.1", false),
+            ("ff02::1", false),
+            ("169.254.1.1", false),
+            ("fe80::1", false),
+        ];
+        let mut casos = 0usize;
+        let mut seq: Vec<usize> = Vec::new();
+        fn passo(seq: &mut Vec<usize>, tipos: &[(&str, bool); 8], casos: &mut usize) {
+            if !seq.is_empty() {
+                let ips: Vec<IpAddr> = seq.iter().map(|&i| tipos[i].0.parse().unwrap()).collect();
+                let esperado = if seq.iter().all(|&i| tipos[i].1) { Fio::SoLoopback } else { Fio::Rede };
+                assert_eq!(fio_de(Some(&ips)), esperado, "{ips:?}");
+                *casos += 1;
+            }
+            if seq.len() == 5 {
+                return;
+            }
+            for i in 0..tipos.len() {
+                seq.push(i);
+                passo(seq, tipos, casos);
+                seq.pop();
+            }
+        }
+        passo(&mut seq, &tipos, &mut casos);
+        assert_eq!(casos, 8 + 64 + 512 + 4096 + 32768, "todas as sequências de 1 a 5 alvos");
+        assert_eq!(fio_de(None), Fio::SemSaida);
+        assert_eq!(fio_de(Some(&[])), Fio::Rede, "lista vazia fecha na dúvida");
+    }
+
+    /// O mesmo, pelo pré-voo real: um rig de 5 com o loopback em QUALQUER posição e um alvo de rede noutra
+    /// consulta a guarda (WiFi ativo bloqueia); só 5 loopbacks não a consultam.
+    #[test]
+    fn o_pre_voo_consulta_a_guarda_sempre_que_um_alvo_nao_e_loopback() {
+        let rede = ["192.168.2.161", "239.255.0.1", "ff02::1", "169.254.1.1", "fe80::1"];
+        for (posicao, r) in rede.iter().enumerate() {
+            for alvo_rede in 0..5 {
+                let mut cfg = rig_real(true);
+                for (i, a) in cfg.alvos.iter_mut().enumerate() {
+                    let ip = if i == alvo_rede { r.to_string() } else { format!("127.0.0.{}", i + 1) };
+                    let ip: IpAddr = ip.parse().unwrap();
+                    a.addr = std::net::SocketAddr::new(ip, 4048);
+                }
+                let pf = preflight(Integrity::AssumedByOperator, Some(&cfg),
+                    &GuardaNomeada(Err(E::WifiActive { interfaces: vec!["en0".into()] }), "g"),
+                    &SondaFalsa(Presence::AllPresent), None);
+                assert!(!pf.report().network_ok, "{r} na posição {alvo_rede} (caso {posicao}): o WiFi ativo tem de bloquear");
+            }
+        }
+    }
+
+    /// **X2–X5 — o TEXTO COMPLETO de cada chave, escrito à mão** (não gerado pela mesma tabela que testa).
+    #[test]
+    fn o_journal_tem_o_texto_completo_esperado_por_chave() {
+        let ok_nome = "WifiBlockGuard (WiFi-forbidden enforcement)";
+        type Caso<'a> = (Option<OutputConfig>, Result<(), E>, bool, Vec<(&'a str, String)>);
+        let casos: Vec<Caso> = vec![
+            (Some(saida()), Ok(()), false, vec![("network_checked", format!("{ok_nome}: sem WiFi ativo"))]),
+            (Some(saida()), Ok(()), true, vec![
+                ("network_checked", format!("{ok_nome}: sem WiFi ativo")),
+                ("network_override_unused", "--assume-no-wifi presente mas a sonda VERIFICOU: a flag nao teve efeito".into()),
+            ]),
+            (Some(saida()), Err(E::WifiActive { interfaces: vec!["en0".into(), "wlan0".into()] }), true, vec![
+                ("network_refused", "WiFi ATIVO em en0, wlan0 — ADR-0005 proibe show ao vivo".into()),
+            ]),
+            (Some(saida()), Err(E::ProbeUnavailable { reason: "unsupported platform 'haiku' — WiFi check not implemented".into() }), false, vec![
+                ("network_unverified", "NAO foi possivel verificar a rede (unsupported platform 'haiku' — WiFi check not implemented) — prosseguindo com aviso".into()),
+            ]),
+            (Some(saida()), Err(E::ProbeFailed { probe: "sysfs /sys/class/net", error: "estado WiFi indeterminado: wlan0=dormant".into() }), false, vec![
+                ("network_probe_failed", "sonda sysfs /sys/class/net FALHOU (estado WiFi indeterminado: wlan0=dormant) — output BLOQUEADO; se nao ha WiFi, --assume-no-wifi permite ao operador afirma-lo".into()),
+            ]),
+            (Some(saida()), Err(E::ProbeFailed { probe: "ifconfig", error: "estado WiFi indeterminado: en0=ifconfig com exit != 0".into() }), true, vec![
+                ("network_assumed_by_operator", "sonda ifconfig FALHOU (estado WiFi indeterminado: en0=ifconfig com exit != 0); --assume-no-wifi: o operador AFIRMA que nao ha WiFi ativo — NAO verificado".into()),
+            ]),
+            (None, Ok(()), false, vec![
+                ("preflight_vacuous", "sem --output: network_ok e devices_present sao VACUOSOS, nao ha saida a proteger".into()),
+            ]),
+        ];
+        for (out, r, ov, esperado) in casos {
+            let pf = preflight(Integrity::AssumedByOperator, out.as_ref(), &GuardaNomeada(r.clone(), ok_nome),
+                               &SondaFalsa(Presence::AllPresent), token(ov).as_ref());
+            let rede: Vec<(&str, String)> = pf.notices().iter()
+                .filter(|(k, _)| k.starts_with("network_") || *k == "preflight_vacuous")
+                .map(|(k, d)| (*k, d.clone())).collect();
+            assert_eq!(rede, esperado, "{r:?} ov={ov}");
+        }
+        let mut cfg = saida();
+        for (i, a) in cfg.alvos.iter_mut().enumerate() {
+            a.addr = format!("127.0.0.{}:4048", i + 1).parse().unwrap();
+        }
+        let pf = preflight(Integrity::AssumedByOperator, Some(&cfg), &GuardaNomeada(Ok(()), "g"), &SondaFalsa(Presence::AllPresent), None);
+        assert_eq!(pf.notices()[0], ("network_local", "127.0.0.1 e loopback: nao atravessa interface, ADR-0005 nao se aplica".to_string()));
+    }
+
+    /// O texto da guarda entra LITERAL: marcas `{…}` dentro dele não puxam outros valores.
+    #[test]
+    fn o_texto_da_guarda_nunca_e_reinterpretado_como_modelo() {
+        let pf = corre_com(Err(E::ProbeFailed { probe: "p", error: "{nome} {probe} {interfaces}".into() }), false);
+        assert_eq!(pf.notices()[0].1,
+            "sonda p FALHOU ({nome} {probe} {interfaces}) — output BLOQUEADO; se nao ha WiFi, --assume-no-wifi permite ao operador afirma-lo");
+    }
+
+    /// A tabela de frases tem exatamente uma frase por chave que um veredito pode emitir.
+    #[test]
+    fn a_tabela_de_frases_cobre_cada_chave_uma_vez() {
+        let mut todas: Vec<&str> = [Veredito::SemSaida, Veredito::Loopback, Veredito::Verificado, Veredito::VerificadoFlagSemEfeito,
+            Veredito::WifiAtivo, Veredito::NaoVerificado, Veredito::SondaFalhou, Veredito::AfirmadoPeloOperador]
+            .iter().flat_map(|v| v.chaves().iter().copied()).collect();
+        todas.sort();
+        todas.dedup();
+        let mut da_tabela: Vec<&str> = medicao::FRASES.iter().map(|(k, _)| *k).collect();
+        da_tabela.sort();
+        assert_eq!(da_tabela, todas);
+    }
+
 }

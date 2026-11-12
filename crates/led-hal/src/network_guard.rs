@@ -154,8 +154,52 @@ fn probe_wifi() -> Result<(), NetworkPolicyError> {
     });
 }
 
+// ── Estado de uma interface WiFi (TD-029, R8.5b — decisões do operador (a) e (b)) ─────────────
+//
+// Fail-closed: só estados RECONHECIDOS como «desligado» deixam passar. Tudo o que não se consegue
+// ler, ou não se reconhece, é INDETERMINADO — a classe «sonda falhada» (`ProbeFailed`): bloqueia por
+// omissão, e o operador pode afirmar com `--assume-no-wifi` (D2). Uma interface comprovadamente
+// ATIVA é `WifiActive`, que o override nunca desbloqueia (ADR-0005).
+
+/// O que a sonda conseguiu saber de UMA interface WiFi.
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EstadoWifi {
+    /// Comprovadamente ativa.
+    Ativa,
+    /// Comprovadamente desligada.
+    Desligada,
+    /// Não se sabe — tratada como possivelmente ligada.
+    Indeterminada,
+}
+
+/// Junta os estados das interfaces num veredito: ativa vence indeterminada, que vence desligada.
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn veredito_wifi(
+    sonda: &'static str,
+    estados: Vec<(String, EstadoWifi, String)>,
+) -> Result<(), NetworkPolicyError> {
+    let ativas: Vec<String> =
+        estados.iter().filter(|(_, e, _)| *e == EstadoWifi::Ativa).map(|(n, _, _)| n.clone()).collect();
+    if !ativas.is_empty() {
+        return Err(NetworkPolicyError::WifiActive { interfaces: ativas });
+    }
+    let indeterminadas: Vec<String> = estados
+        .iter()
+        .filter(|(_, e, _)| *e == EstadoWifi::Indeterminada)
+        .map(|(n, _, porque)| format!("{n}={porque}"))
+        .collect();
+    if !indeterminadas.is_empty() {
+        return Err(NetworkPolicyError::ProbeFailed {
+            probe: sonda,
+            error: format!("estado WiFi indeterminado: {}", indeterminadas.join(", ")),
+        });
+    }
+    Ok(())
+}
+
 /// macOS: enumerate hardware ports via `networksetup`, find Wi-Fi devices,
-/// then use `ifconfig` to check if the interface is UP and RUNNING.
+/// then read each one's `status:` from `ifconfig`.
 #[cfg(target_os = "macos")]
 fn probe_macos() -> Result<(), NetworkPolicyError> {
     use std::process::Command;
@@ -179,24 +223,18 @@ fn probe_macos() -> Result<(), NetworkPolicyError> {
     let ports_str = String::from_utf8_lossy(&ports_out.stdout);
     let wifi_ifaces = parse_macos_wifi_interfaces(&ports_str);
 
-    if wifi_ifaces.is_empty() {
-        // No Wi-Fi hardware found at all — policy satisfied
-        return Ok(());
-    }
-
-    // Step 2: for each Wi-Fi interface, check if it's UP and RUNNING via ifconfig
-    let mut active: Vec<String> = Vec::new();
-    for iface in &wifi_ifaces {
-        if is_interface_active_macos(iface) {
-            active.push(iface.clone());
-        }
-    }
-
-    if active.is_empty() {
-        Ok(())
-    } else {
-        Err(NetworkPolicyError::WifiActive { interfaces: active })
-    }
+    // Step 2: for each Wi-Fi interface, its state as `ifconfig` reports it. A failure to run,
+    // a non-zero exit or a missing `status:` line is INDETERMINATE — never "inactive".
+    let estados = wifi_ifaces
+        .into_iter()
+        .map(|iface| {
+            let out = Command::new("/sbin/ifconfig").arg(&iface).output().ok();
+            let texto = out.as_ref().map(|o| (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string()));
+            let (estado, porque) = estado_ifconfig(texto.as_ref().map(|(ok, t)| (*ok, t.as_str())));
+            (iface, estado, porque)
+        })
+        .collect();
+    veredito_wifi("ifconfig", estados)
 }
 
 /// Parse `networksetup -listallhardwareports` output to extract Wi-Fi interface names.
@@ -228,69 +266,93 @@ fn parse_macos_wifi_interfaces(output: &str) -> Vec<String> {
     ifaces
 }
 
-/// Check if a macOS network interface is active (UP + RUNNING) via `ifconfig`.
-#[cfg(target_os = "macos")]
-fn is_interface_active_macos(iface: &str) -> bool {
-    use std::process::Command;
-    let out = Command::new("/sbin/ifconfig")
-        .arg(iface)
-        .output()
-        .ok();
-    let Some(out) = out else { return false };
-    if !out.status.success() { return false }
-    let text = String::from_utf8_lossy(&out.stdout);
-    // ifconfig shows "status: active" when the interface is connected
-    text.contains("status: active")
+/// macOS: o estado de uma interface a partir do resultado do `ifconfig <iface>`.
+/// `None` = o `ifconfig` não correu; `Some((ok, stdout))` caso contrário.
+#[cfg(any(test, target_os = "macos"))]
+fn estado_ifconfig(saida: Option<(bool, &str)>) -> (EstadoWifi, String) {
+    let Some((ok, texto)) = saida else {
+        return (EstadoWifi::Indeterminada, "ifconfig nao correu".into());
+    };
+    if !ok {
+        return (EstadoWifi::Indeterminada, "ifconfig com exit != 0".into());
+    }
+    for linha in texto.lines() {
+        match linha.trim() {
+            "status: active" => return (EstadoWifi::Ativa, "status: active".into()),
+            "status: inactive" => return (EstadoWifi::Desligada, "status: inactive".into()),
+            _ => {}
+        }
+    }
+    (EstadoWifi::Indeterminada, "sem linha status: reconhecida".into())
 }
 
-/// Linux: check `/sys/class/net/` for wireless interfaces whose `operstate` is `up`.
-/// Wireless interfaces typically have a `wireless/` or `phy80211/` subdirectory.
-#[cfg(target_os = "linux")]
-fn probe_linux() -> Result<(), NetworkPolicyError> {
-    use std::fs;
-    use std::path::Path;
+/// Linux: os estados de `operstate` RECONHECIDOS como desligado. Só `up` é ativo.
+#[cfg(any(test, target_os = "linux"))]
+const OPERSTATE_DESLIGADO: [&str; 3] = ["down", "lowerlayerdown", "notpresent"];
 
-    let net_path = Path::new("/sys/class/net");
-    if !net_path.exists() {
-        return Err(NetworkPolicyError::ProbeFailed {
-            probe: "sysfs /sys/class/net",
-            error: "/sys/class/net not found".into(),
-        });
+/// Linux: o estado de uma interface WiFi a partir do `operstate` lido (`None` = ilegível).
+#[cfg(any(test, target_os = "linux"))]
+fn estado_operstate(lido: Option<&str>) -> (EstadoWifi, String) {
+    match lido.map(str::trim) {
+        None => (EstadoWifi::Indeterminada, "operstate ilegivel".into()),
+        Some("up") => (EstadoWifi::Ativa, "up".into()),
+        Some(s) if OPERSTATE_DESLIGADO.contains(&s) => (EstadoWifi::Desligada, s.into()),
+        Some(s) => (EstadoWifi::Indeterminada, s.into()),
     }
+}
 
-    let mut active: Vec<String> = Vec::new();
+/// Linux: a interface é WiFi? Basta UM sinal: `wireless/`, `phy80211/`, `DEVTYPE=wlan` no
+/// `uevent`, ou nome começado por `wl` (wlan*, wlp*, wlx*). Um `uevent` ilegível numa interface sem
+/// nenhum outro sinal é DÚVIDA — devolvida como `None`, e quem chama trata-a como indeterminada.
+#[cfg(any(test, target_os = "linux"))]
+fn e_wifi_linux(nome: &str, tem_wireless: bool, tem_phy80211: bool, uevent: Option<&str>) -> Option<bool> {
+    if tem_wireless || tem_phy80211 || nome.starts_with("wl") {
+        return Some(true);
+    }
+    uevent.map(|u| u.lines().any(|l| l.trim() == "DEVTYPE=wlan"))
+}
 
-    let entries = fs::read_dir(net_path).map_err(|e| NetworkPolicyError::ProbeFailed {
-        probe: "sysfs /sys/class/net",
+/// Linux: a regra inteira sobre um diretório com o formato de `/sys/class/net`. Função pura sobre o
+/// sistema de ficheiros — o `probe_linux` passa a raiz real; os testes passam um diretório temporário.
+#[cfg(any(test, target_os = "linux"))]
+fn probe_sysfs(raiz: &std::path::Path) -> Result<(), NetworkPolicyError> {
+    use std::fs;
+    const SONDA: &str = "sysfs /sys/class/net";
+
+    if !raiz.exists() {
+        return Err(NetworkPolicyError::ProbeFailed { probe: SONDA, error: format!("{} not found", raiz.display()) });
+    }
+    let entradas = fs::read_dir(raiz).map_err(|e| NetworkPolicyError::ProbeFailed {
+        probe: SONDA,
         error: format!("read_dir: {e}"),
     })?;
 
-    for entry in entries.flatten() {
-        let iface_path = entry.path();
-        let iface_name = entry.file_name().to_string_lossy().to_string();
-
-        // Wireless interfaces have a `wireless/` or `phy80211/` subdirectory
-        let is_wireless = iface_path.join("wireless").exists()
-            || iface_path.join("phy80211").exists();
-
-        if !is_wireless {
+    let mut estados = Vec::new();
+    for entrada in entradas {
+        // Uma entrada ilegível não pode desaparecer em silêncio: pode ser a interface WiFi.
+        let Ok(entrada) = entrada else {
+            estados.push(("?".to_string(), EstadoWifi::Indeterminada, "entrada de read_dir ilegivel".to_string()));
             continue;
-        }
-
-        // Check operstate
-        let operstate_path = iface_path.join("operstate");
-        if let Ok(state) = fs::read_to_string(&operstate_path) {
-            if state.trim() == "up" {
-                active.push(iface_name);
+        };
+        let p = entrada.path();
+        let nome = entrada.file_name().to_string_lossy().to_string();
+        let uevent = fs::read_to_string(p.join("uevent")).ok();
+        match e_wifi_linux(&nome, p.join("wireless").exists(), p.join("phy80211").exists(), uevent.as_deref()) {
+            Some(false) => continue,
+            None => estados.push((nome, EstadoWifi::Indeterminada, "uevent ilegivel".to_string())),
+            Some(true) => {
+                let (estado, porque) = estado_operstate(fs::read_to_string(p.join("operstate")).ok().as_deref());
+                estados.push((nome, estado, porque));
             }
         }
     }
+    veredito_wifi(SONDA, estados)
+}
 
-    if active.is_empty() {
-        Ok(())
-    } else {
-        Err(NetworkPolicyError::WifiActive { interfaces: active })
-    }
+/// Linux: a sonda real — `probe_sysfs` sobre `/sys/class/net`.
+#[cfg(target_os = "linux")]
+fn probe_linux() -> Result<(), NetworkPolicyError> {
+    probe_sysfs(std::path::Path::new("/sys/class/net"))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -298,6 +360,183 @@ fn probe_linux() -> Result<(), NetworkPolicyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── TD-029 R8.5b: estados por tabela (fail-closed) ───────────────────────
+
+    #[test]
+    fn operstate_por_tabela_so_up_e_ativo_e_so_tres_sao_desligados() {
+        use EstadoWifi::*;
+        let tabela: [(Option<&str>, EstadoWifi); 13] = [
+            (Some("up"), Ativa),
+            (Some("up\n"), Ativa),
+            (Some("down"), Desligada),
+            (Some("lowerlayerdown"), Desligada),
+            (Some("notpresent"), Desligada),
+            (Some("dormant"), Indeterminada),
+            (Some("unknown"), Indeterminada),
+            (Some("testing"), Indeterminada),
+            (Some("valor-inventado-pelo-kernel-2031"), Indeterminada),
+            (Some(""), Indeterminada),
+            (Some("UP"), Indeterminada),
+            (Some("down-ish"), Indeterminada),
+            (None, Indeterminada),
+        ];
+        for (lido, esperado) in tabela {
+            assert_eq!(estado_operstate(lido).0, esperado, "operstate {lido:?}");
+        }
+    }
+
+    #[test]
+    fn deteccao_de_wifi_quatro_sinais_isolados_e_combinados() {
+        // (nome, wireless/, phy80211/, uevent, esperado)
+        type Linha<'a> = (&'a str, bool, bool, Option<&'a str>, Option<bool>);
+        let tabela: [Linha; 14] = [
+            ("eth0", true, false, Some("INTERFACE=eth0\n"), Some(true)),
+            ("eth0", false, true, Some("INTERFACE=eth0\n"), Some(true)),
+            ("eth0", false, false, Some("DEVTYPE=wlan\nINTERFACE=eth0\n"), Some(true)),
+            ("wlan0", false, false, Some("INTERFACE=wlan0\n"), Some(true)),
+            ("wlp2s0", false, false, Some(""), Some(true)),
+            ("wlx00c0ca123456", false, false, None, Some(true)),
+            ("wlan0", true, true, Some("DEVTYPE=wlan\n"), Some(true)),
+            ("enp3s0", true, false, Some("DEVTYPE=wlan\n"), Some(true)),
+            ("eth0", false, false, Some("INTERFACE=eth0\n"), Some(false)),
+            ("en0", false, false, Some("INTERFACE=en0\n"), Some(false)),
+            ("enp3s0", false, false, Some("DEVTYPE=ethernet\n"), Some(false)),
+            ("eth1", false, false, Some("DEVTYPE=wlanx\n"), Some(false)),
+            ("lo", false, false, Some("INTERFACE=lo\n"), Some(false)),
+            ("eth0", false, false, None, None),
+        ];
+        for (nome, w, p, u, esperado) in tabela {
+            assert_eq!(e_wifi_linux(nome, w, p, u), esperado, "{nome} wireless={w} phy={p} uevent={u:?}");
+        }
+    }
+
+    /// (nome, wireless/, phy80211/, uevent, operstate) de uma interface no sysfs de teste.
+    type Iface<'a> = (&'a str, bool, bool, Option<&'a str>, Option<&'a str>);
+
+    /// Um diretório com o formato de /sys/class/net, construído a partir de uma lista de interfaces.
+    struct Sysfs(std::path::PathBuf);
+    impl Sysfs {
+        fn novo(ifaces: &[Iface]) -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let raiz = std::env::temp_dir()
+                .join(format!("lumyx-sysfs-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+            let _ = std::fs::remove_dir_all(&raiz);
+            for (nome, wireless, phy, uevent, operstate) in ifaces {
+                let d = raiz.join(nome);
+                std::fs::create_dir_all(&d).unwrap();
+                if *wireless { std::fs::create_dir_all(d.join("wireless")).unwrap(); }
+                if *phy { std::fs::create_dir_all(d.join("phy80211")).unwrap(); }
+                if let Some(u) = uevent { std::fs::write(d.join("uevent"), u).unwrap(); }
+                if let Some(o) = operstate { std::fs::write(d.join("operstate"), o).unwrap(); }
+            }
+            std::fs::create_dir_all(&raiz).unwrap();
+            Sysfs(raiz)
+        }
+    }
+    impl Drop for Sysfs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn classe(r: &Result<(), NetworkPolicyError>) -> &'static str {
+        match r {
+            Ok(()) => "ok",
+            Err(NetworkPolicyError::WifiActive { .. }) => "wifi_ativo",
+            Err(NetworkPolicyError::ProbeFailed { .. }) => "sonda_falhada",
+            Err(NetworkPolicyError::ProbeUnavailable { .. }) => "nao_suportada",
+        }
+    }
+
+    #[test]
+    fn probe_sysfs_por_operstate_numa_interface_wifi_real_em_disco() {
+        let eth = ("eth0", false, false, Some("INTERFACE=eth0\n"), Some("up\n"));
+        for (operstate, esperado) in [
+            (Some("up\n"), "wifi_ativo"),
+            (Some("down\n"), "ok"),
+            (Some("lowerlayerdown\n"), "ok"),
+            (Some("notpresent\n"), "ok"),
+            (Some("dormant\n"), "sonda_falhada"),
+            (Some("unknown\n"), "sonda_falhada"),
+            (Some("testing\n"), "sonda_falhada"),
+            (Some("inventado\n"), "sonda_falhada"),
+            (None, "sonda_falhada"),
+        ] {
+            let fs = Sysfs::novo(&[eth, ("wlan0", true, true, Some("DEVTYPE=wlan\n"), operstate)]);
+            let r = probe_sysfs(&fs.0);
+            assert_eq!(classe(&r), esperado, "wlan0 operstate={operstate:?} → {r:?}");
+            if esperado == "sonda_falhada" {
+                let Err(NetworkPolicyError::ProbeFailed { error, .. }) = &r else { unreachable!() };
+                assert!(error.contains("wlan0"), "a interface indeterminada é nomeada: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn probe_sysfs_cada_sinal_isolado_torna_a_interface_wifi() {
+        // Interface com nome de cabo e operstate dormant: só é bloqueada se for vista como WiFi.
+        for (nome, w, p, u, esperado) in [
+            ("eth0", true, false, Some("INTERFACE=eth0\n"), "sonda_falhada"),
+            ("eth0", false, true, Some("INTERFACE=eth0\n"), "sonda_falhada"),
+            ("eth0", false, false, Some("DEVTYPE=wlan\n"), "sonda_falhada"),
+            ("wlx00c0ca123456", false, false, Some("INTERFACE=x\n"), "sonda_falhada"),
+            ("eth0", false, false, Some("INTERFACE=eth0\n"), "ok"),
+            ("eth0", false, false, None, "sonda_falhada"), // dúvida → indeterminada
+        ] {
+            let fs = Sysfs::novo(&[(nome, w, p, u, Some("dormant\n"))]);
+            assert_eq!(classe(&probe_sysfs(&fs.0)), esperado, "{nome} w={w} p={p} u={u:?}");
+        }
+    }
+
+    #[test]
+    fn probe_sysfs_ativa_vence_indeterminada_e_cabo_ativo_nao_conta() {
+        let fs = Sysfs::novo(&[
+            ("wlan0", true, false, Some(""), Some("dormant\n")),
+            ("wlp2s0", false, true, Some(""), Some("up\n")),
+            ("eth0", false, false, Some("INTERFACE=eth0\n"), Some("up\n")),
+        ]);
+        match probe_sysfs(&fs.0) {
+            Err(NetworkPolicyError::WifiActive { interfaces }) => assert_eq!(interfaces, vec!["wlp2s0".to_string()]),
+            outro => panic!("WiFi comprovadamente ativo tem de ser WifiActive (o override nunca o desbloqueia): {outro:?}"),
+        }
+        let fs = Sysfs::novo(&[("eth0", false, false, Some("INTERFACE=eth0\n"), Some("up\n"))]);
+        assert_eq!(classe(&probe_sysfs(&fs.0)), "ok", "só cabo, ativo: não há WiFi");
+        let ausente = std::env::temp_dir().join("lumyx-sysfs-que-nao-existe");
+        assert_eq!(classe(&probe_sysfs(&ausente)), "sonda_falhada", "raiz ausente é sonda falhada (D3)");
+    }
+
+    #[test]
+    fn ifconfig_por_tabela_erro_nunca_e_desligado() {
+        use EstadoWifi::*;
+        let ativo = "en0: flags=8863<UP>\n\tstatus: active\n";
+        let inativo = "en0: flags=8822<BROADCAST>\n\tstatus: inactive\n";
+        let tabela: [(Option<(bool, &str)>, EstadoWifi); 7] = [
+            (Some((true, ativo)), Ativa),
+            (Some((true, inativo)), Desligada),
+            (Some((true, "en0: flags=8863<UP>\n")), Indeterminada),
+            (Some((true, "\tstatus: activeX\n")), Indeterminada),
+            (Some((false, ativo)), Indeterminada),
+            (Some((false, inativo)), Indeterminada),
+            (None, Indeterminada),
+        ];
+        for (saida, esperado) in tabela {
+            assert_eq!(estado_ifconfig(saida).0, esperado, "{saida:?}");
+        }
+    }
+
+    #[test]
+    fn veredito_ativa_vence_indeterminada_que_vence_desligada() {
+        use EstadoWifi::*;
+        let e = |v: &[(&str, EstadoWifi)]| {
+            classe(&veredito_wifi("t", v.iter().map(|(n, s)| (n.to_string(), *s, "x".to_string())).collect()))
+        };
+        assert_eq!(e(&[]), "ok");
+        assert_eq!(e(&[("a", Desligada)]), "ok");
+        assert_eq!(e(&[("a", Desligada), ("b", Indeterminada)]), "sonda_falhada");
+        assert_eq!(e(&[("a", Indeterminada), ("b", Ativa)]), "wifi_ativo");
+    }
 
     // ── PermissiveGuard ───────────────────────────────────────────────────────
 
