@@ -1588,7 +1588,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-10-05
 closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
-evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-08b.md
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-09.md
 required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
 source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml
