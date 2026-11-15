@@ -1833,7 +1833,7 @@ severity:  Critical
 severity_note: "Critical por decisão do operador (ordem F, 2026-10-11): a reprodução confirmou incoerência real e pior — scalars() devolve o snapshot de OUTRA instância de AudioShare. (Provisória High desde 2026-10-07.)"
 status:    open
 origin:    "PR #30 (R4.6, so a etiqueta da imagem macOS mudou), run 37585504571, job 112674573237 `test (macos-26)`, Image macos-26-arm64 20260907.0351.1 (a mesma do macos-latest): `panicked at crates/led-pixel-engine/src/reactive.rs:474:9: coherence violated 1 times: beat/timestamp_ms from different publishes`. Nao repetido (STOP, 2026-10-07). Unica ocorrencia conhecida; o teste passou em todas as runs anteriores lidas."
-source_files: crates/led-pixel-engine/src/reactive.rs
+source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs, crates/led-pixel-engine/tests/td030_estrutural.rs, crates/led-pixel-engine/tests/no_alloc_reativo.rs
 context: |
   Leitura (R5.1 passo A, origin/main bc7991f) — NENHUMA das hipoteses de defeito no codigo se confirma:
   H4 um so `load()` por `scalars()` (reactive.rs:101-103, `*self.scalars.load().as_ref()`);
@@ -1853,6 +1853,32 @@ required_fix_v2: |
   (contado), loom + Miri, teste novo audioshare_isolamento_entre_instancias (vermelho antes: 13/500 isolado, x86_64)
   e o teste original inalterado. Fecho: 0 violacoes em x86_64 E arm64 com N registado, nas condicoes intercaladas da
   medicao; fecha so por ordem do operador.
+required_fix_v3: |
+  Accept v3 (sha d62a24c8119b9afd848a80458aa1c01c394e3389cac711c797247e194198caa6; v2 arquivada, sha 714e43cc…87e4):
+  o latch passa a UM incremento por publicacao (o escritor escreve o slot que os leitores nao leem e so depois
+  avanca a sequencia; o leitor nao muda), mais 9 oraculos: modelo sequencial com as duas paridades, frescura e
+  monotonia, fallback sob contencao forcada, ids unicos, TENTATIVAS_DO_LEITOR == 16, scalars() nao espera pelos
+  locks, Escritor nao Clone/Copy, estruturais por AST no fecho de chamadas, no_alloc_reativo com todas as seccoes.
+  Ronda 2 (accept-r2, sha 29be6621…441c, aprovado com adenda sha f310f138…0879 a 2026-10-22): Leitor::ler devolve
+  Result<_, Esgotado> com as tentativas contadas (API privada do crate) e os oraculos O1, O2, O2-bis, O3 (loom),
+  O4 (lista de permitidos) e O5 (fallback sem alocacao). Commits 4374ba7, 3df0325, 4938316, 7aaea37.
+  Fecho: como no v2, e ainda G5 sem sobreviventes DENTRO e DR-6 (loom + Miri do seqlock) como check obrigatorio
+  na CI. Fecha so por ordem do operador.
+cronologia: |
+  FACTO: o commit f7530f0 (correcao por classe, protocolo de um incremento) foi criado a 2026-10-15 12:07 CEST.
+  O accept v3 foi aprovado pelo operador a 2026-10-21 ~00:07 CEST (DECISOES-2026-10-20.md, DR-1 (a)). O codigo
+  precedeu a aprovacao em 5 dias; a 2026-10-15 a mudanca de protocolo estava por confirmar (HANDOFF-ordemG.md).
+  A aprovacao posterior nao e autorizacao retroativa: fica registado como desvio.
+  FACTO: os commits da ronda 2 (2026-10-22 11:59–14:49 CEST) sao posteriores a aprovacao do accept-r2
+  (2026-10-22 08:08 CEST) e tocam so nos 3 ficheiros que a adenda autorizou.
+  FACTO: push do ramo para origin/fix/td-030-seqlock a 2026-11-12 12:49:40 -03:00 (reflog local). O operador
+  confirmou a 2026-11-15 que o autorizou (DECISOES-2026-11-15.md); nao ha registo escrito anterior a essa data.
+estado_ronda: |
+  Ronda 2 NAO passa. G5-r2 (2026-10-28): FALSE_GREEN, 9 sobreviventes DENTRO (N1, N2, N3, N4, N5, N6, N8, N10,
+  N11), relatorio sha 7514991a…2ddb. Verifier 2026-11-12 em 7aaea37 (x86_64): gates de codigo verdes, veredito FAIL
+  por este ledger descrever o v2. Falsifier 2026-11-12: FALSE_GREEN, 11 sobrevivem a todos os oraculos e 7 so o loom
+  apanha; o loom nao corre na CI. Ronda 3: so em rascunho, nao aprovada (accept-r3-RASCUNHO.md sha 01262c79…fc11 e
+  a v2 de 2026-11-14 sha 7919be6a…418c). Medicao de fecho N=3000 e arm64: NOT_MEASURED em 7aaea37.
 required_fix: |
   Medir primeiro (R5.1 passo B: o teste em ciclo, N=500, macos-26 arm64 · ubuntu-24.04 x86 · ubuntu-24.04-arm). Se a
   taxa > 0 em arm64 e 0 em x86 → incoerencia real → accept da correcao (contrato canonico + hot-path = area protegida)
@@ -1879,7 +1905,7 @@ measured: |
   led-pixel-engine): macos-26 arm64 29/1000 (producao 14/1000); ubuntu-24.04 x86_64 0/1000; ubuntu-24.04-arm 0/1000;
   macOS x86_64 local: ver a evidencia de fecho. → a causa esta no arc-swap 1.9.1 (estrategia por omissao), nao no uso
   do LUMYX; levantamento: o AudioShare.scalars e o UNICO uso de arc-swap no workspace.
-review_by: 2026-10-21
+review_by: 2026-11-30
 ```
 
 ---
