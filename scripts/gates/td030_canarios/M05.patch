@@ -1,0 +1,13 @@
+diff --git a/crates/led-pixel-engine/src/seqlock.rs b/crates/led-pixel-engine/src/seqlock.rs
+index 3f6cbca..2134dc1 100644
+--- a/crates/led-pixel-engine/src/seqlock.rs
++++ b/crates/led-pixel-engine/src/seqlock.rs
+@@ -84,7 +84,7 @@ impl<const W: usize> Leitor<W> {
+     /// Uma tentativa de leitura. `Some` se a versão não mudou durante a leitura. Sem lock, sem alocação.
+     pub(crate) fn tentar(&self) -> Option<[u64; W]> {
+         let l = &*self.latch;
+-        let s1 = l.seq.load(Ordering::Acquire);
++        let s1 = l.seq.load(Ordering::Relaxed);
+         let slot = &l.slots[(s1 & 1) as usize];
+         let mut palavras = [0u64; W];
+         for (p, a) in palavras.iter_mut().zip(slot.iter()) {
