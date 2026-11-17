@@ -6,7 +6,7 @@
 //! physical chaos runbook (cable pulls, switch reboots).
 
 use std::net::UdpSocket;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use integration_tests::{ProxyFaults, UdpChaosProxy};
 use led_core::{DeviceDriver, UniverseData};
@@ -114,6 +114,13 @@ fn latency_injection_delays_but_delivers() {
 
 #[test]
 fn same_seed_same_wire_drop_count() {
+    const ENVIAR: u64 = 200;
+    const LOTE: u64 = 20;
+    // Injected loss is deterministic per datagram the proxy *reads*. If the OS drops some
+    // before the proxy sees them (TD-034: a 200-datagram burst overflowed the receive
+    // buffer on ubuntu-24.04), the PRNG walks a shorter input and the counts diverge for a
+    // reason that has nothing to do with the seed. So the sender waits for the proxy to read
+    // each batch before the next, and a short input is reported as a broken precondition.
     let run = |seed: u64| -> u64 {
         let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
         let proxy = UdpChaosProxy::start(
@@ -122,11 +129,25 @@ fn same_seed_same_wire_drop_count() {
         )
         .unwrap();
         let dev = ArtNetDevice::unicast(5, proxy.addr()).unwrap();
-        send_frames(&dev, 200);
-        // Drain so the proxy finishes forwarding before we read the counter.
+        let mut enviados = 0;
+        while enviados < ENVIAR {
+            let n = LOTE.min(ENVIAR - enviados);
+            send_frames(&dev, n);
+            enviados += n;
+            let prazo = Instant::now() + Duration::from_secs(2);
+            while proxy.received() < enviados && Instant::now() < prazo {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         let _ = drain_artdmx(&rx);
-        let dropped = proxy.dropped();
+        let (recebidos, dropped) = (proxy.received(), proxy.dropped());
         proxy.stop();
+        assert_eq!(
+            recebidos, ENVIAR,
+            "pré-condição: o proxy leu {recebidos} de {ENVIAR} datagramas (seed {seed}); \
+             faltam antes do proxy (descarte do SO ou envio falhado), não por perda injetada — \
+             não é divergência de determinismo"
+        );
         dropped
     };
     assert_eq!(run(99), run(99), "deterministic chaos: same seed, same drops");
