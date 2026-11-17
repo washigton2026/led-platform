@@ -411,6 +411,50 @@ mod tests {
         assert_eq!(casos, 12);
     }
 
+    // ── TD-030 (O1, falsificador E01/E03): NaN NÃO canónicos — sinal, payload e sinalizador — por `to_bits()` ──
+    // `f32::NAN` é 0x7fc00000; o NaN que a aritmética dá em x86 SSE (`0.0 / 0.0`) é 0xffc00000. Um codec que
+    // canonicalize NaN passava o oráculo acima. A doc de `codificar` promete os BITS, por isso cada padrão abaixo tem
+    // de sobreviver em cada campo f32. O NaN da aritmética desta plataforma entra também (o valor não é afirmado).
+    #[test]
+    fn codec_preserva_nan_nao_canonico_em_cada_campo_f32() {
+        let aritmetico = std::hint::black_box(0.0f32) / std::hint::black_box(0.0f32);
+        assert!(aritmetico.is_nan());
+        let padroes: [u32; 7] = [
+            0xffc0_0000,              // −NaN silencioso: o que x86 SSE produz em 0/0
+            0x7fc0_0001,              // NaN silencioso com payload
+            0xffc0_0001,              // −NaN silencioso com payload
+            0x7fff_ffff,              // payload máximo
+            0xffff_ffff,
+            0x7fa0_0000,              // NaN sinalizador (bit silencioso a 0), payload ≠ 0
+            aritmetico.to_bits(),
+        ];
+        let normal = AudioScalars {
+            sample_rate: 48_000, timestamp_ms: 123_456, rms: 0.5, beat: true, bass: 0.25, mid: 0.125, high: 0.75,
+            musical_section: Some(MusicalSection::Chorus),
+        };
+        let bits = |s: &AudioScalars| [s.rms.to_bits(), s.bass.to_bits(), s.mid.to_bits(), s.high.to_bits()];
+        let mut casos = 0;
+        for campo in 0..4 {
+            for &b in &padroes {
+                let nan = f32::from_bits(b);
+                assert!(nan.is_nan(), "0x{b:08x} não é NaN");
+                let mut s = normal;
+                match campo {
+                    0 => s.rms = nan,
+                    1 => s.bass = nan,
+                    2 => s.mid = nan,
+                    _ => s.high = nan,
+                }
+                assert_eq!(bits(&s)[campo], b, "o próprio valor de entrada perdeu os bits 0x{b:08x}");
+                let d = descodificar(codificar(&s));
+                assert_eq!(bits(&d), bits(&s), "campo {campo}, NaN 0x{b:08x}: os bits têm de sobreviver ao codec");
+                casos += 1;
+            }
+        }
+        assert_eq!(casos, 28);
+        eprintln!("TD030_O1_NAN aritmetico=0x{:08x} casos={casos}", aritmetico.to_bits());
+    }
+
     // ── TD-030: o fallback nunca devolve a entrada de OUTRA instância ──
     #[test]
     fn fallback_so_aceita_a_entrada_desta_instancia() {
@@ -1101,6 +1145,39 @@ mod no_alloc_fallback {
         assert_eq!(share.fallbacks_do_leitor(), (201, 0), "cada chamada com k = 0 tem de passar pelo fallback");
         assert_eq!(iguais, 200, "o fallback devolve o último válido desta instância");
         assert_eq!(n, 0, "o fallback alocou {n} vez(es) em 200 chamadas");
+    }
+
+    /// O5, ramo «SEM snapshot» (falsificador D03): esta thread nunca leu ESTA instância com sucesso — só leu outra —
+    /// e a instância tem um valor publicado. Com `k = 0`, cada chamada vai ao fallback, não encontra entrada desta
+    /// instância e tem de: devolver `AudioScalars::default()` (nem o publicado, nem o da outra instância), contar
+    /// em `fallbacks_sem_snapshot`, e não alocar.
+    #[test]
+    fn fallback_sem_snapshot_nao_aloca() {
+        let outra = AudioShare::new();
+        outra.publish(&AudioFeatures {
+            sample_rate: 44_100, timestamp_ms: 77, rms: 0.9, beat: true, bass: 0.9, mid: 0.9, high: 0.9,
+            spectrum: vec![0.0; 8], musical_section: Some(MusicalSection::Intro), instrument_class: None,
+        });
+        assert_eq!(outra.scalars().timestamp_ms, 77); // a TLS desta thread fica com uma entrada de OUTRA instância
+        let share = AudioShare::new();
+        share.publish(&AudioFeatures {
+            sample_rate: 48_000, timestamp_ms: 5, rms: 0.5, beat: true, bass: 0.7, mid: 0.3, high: 0.1,
+            spectrum: vec![0.0; 8], musical_section: Some(MusicalSection::Drop), instrument_class: None,
+        });
+        // aquecimento fora da contagem: o mesmo ramo, uma vez
+        assert_eq!(share.scalars_com_tentativas(0), AudioScalars::default());
+        let mut defaults = 0u32;
+        let n = alocacoes_em(|| {
+            for _ in 0..200 {
+                if share.scalars_com_tentativas(0) == AudioScalars::default() {
+                    defaults += 1;
+                }
+            }
+        });
+        assert_eq!(share.fallbacks_do_leitor(), (201, 201), "cada chamada tem de passar pelo ramo sem snapshot");
+        assert_eq!(defaults, 200, "sem snapshot desta instância, o fallback devolve o default");
+        assert_eq!(n, 0, "o ramo sem snapshot do fallback alocou {n} vez(es) em 200 chamadas");
+        assert_eq!(outra.fallbacks_do_leitor(), (0, 0), "a outra instância não é tocada");
     }
 
     /// Controlo negativo do próprio contador (KB-012): uma alocação plantada TEM de ser vista.
