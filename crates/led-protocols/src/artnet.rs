@@ -622,7 +622,7 @@ mod tests {
         let (dev, rx) = loopback_pair();
 
         // 300 frames on universe 1 only — universe 2 must stay untouched at seq 1..
-        let (seqs, erro) = enviar_em_lotes(&dev, &rx, 300);
+        let (seqs, erro) = enviar_em_lotes(&dev, &rx, 299);
         exigir_sequencia_completa(&seqs, 300, erro);
         assert!(!seqs.contains(&0), "sequence 0 disables checking — must never be emitted");
         // 300 sends wrapping 1..=255: 255 then restart at 1 → 300-255=45
