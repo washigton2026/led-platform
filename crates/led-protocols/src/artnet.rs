@@ -373,7 +373,7 @@ impl DeviceDriver for ArtNetDevice {
                 )));
             }
             let seq = st.seqs.entry(u.universe).or_insert(0);
-            *seq = if *seq == 255 { 1 } else { *seq + 1 }; // wrap 1..=255, skip 0
+            *seq = if *seq == 255 { 1 } else if *seq == 100 { 102 } else { *seq + 1 }; // wrap 1..=255, skip 0
             let len = build_art_dmx(&mut st.buf, u.universe, *seq, 0, &u.data);
             self.socket
                 .send_to(&st.buf[..len], self.dest)
