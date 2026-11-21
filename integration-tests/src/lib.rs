@@ -26,6 +26,7 @@ pub struct ProxyFaults {
 /// `proxy.addr()` → datagrams are forwarded (or chaos-dropped) to `target`.
 pub struct UdpChaosProxy {
     addr: SocketAddr,
+    received: Arc<AtomicU64>,
     forwarded: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
     active: Arc<AtomicBool>,
@@ -41,13 +42,14 @@ impl UdpChaosProxy {
         let addr = sock.local_addr()?;
         let out = UdpSocket::bind("127.0.0.1:0")?;
 
+        let received = Arc::new(AtomicU64::new(0));
         let forwarded = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
         let active = Arc::new(AtomicBool::new(true));
         let stop = Arc::new(AtomicBool::new(false));
 
-        let (fwd, drp, act, stp) =
-            (forwarded.clone(), dropped.clone(), active.clone(), stop.clone());
+        let (rcv, fwd, drp, act, stp) =
+            (received.clone(), forwarded.clone(), dropped.clone(), active.clone(), stop.clone());
 
         let handle = std::thread::Builder::new()
             .name("udp-chaos-proxy".into())
@@ -69,6 +71,7 @@ impl UdpChaosProxy {
                         Ok((n, _)) => n,
                         Err(_) => continue, // timeout: check stop flag again
                     };
+                    rcv.fetch_add(1, Ordering::Relaxed);
                     let chaos_on = act.load(Ordering::Relaxed);
                     if chaos_on && faults.loss_pct > 0 && (next_rand() % 100) < faults.loss_pct as u64 {
                         drp.fetch_add(1, Ordering::Relaxed);
@@ -83,12 +86,18 @@ impl UdpChaosProxy {
                 }
             })?;
 
-        Ok(Self { addr, forwarded, dropped, active, stop, handle: Some(handle) })
+        Ok(Self { addr, received, forwarded, dropped, active, stop, handle: Some(handle) })
     }
 
     /// Where senders should point their datagrams.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Datagrams the proxy actually read from its socket. Anything the sender sent beyond
+    /// this never reached the proxy (OS discard or a failed send) — not injected loss (TD-034).
+    pub fn received(&self) -> u64 {
+        self.received.load(Ordering::Relaxed)
     }
 
     pub fn forwarded(&self) -> u64 {

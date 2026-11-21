@@ -1918,3 +1918,55 @@ falsification_required: |
   A mutação X7 (trocar `(false, _) => Missing` pela precedência inversa) tem de ficar vermelha.
 review_by: 2026-11-30
 ```
+
+## TD-034 — Dois testes UDP sobre loopback assumem que o SO entrega tudo: falharam no ubuntu-24.04 (causa provável: buffer de receção, não medida)
+
+```yaml
+td_id:     TD-034
+title:     "artnet_sequence_is_per_universe_and_wraps_skipping_zero e same_seed_same_wire_drop_count tratam a perda de datagramas pelo SO como defeito do código (o primeiro) ou como perda injetada (o segundo)"
+severity:  Medium
+status:    open
+origin:    "CI do PR #56 (fix/td-030-seqlock), job test (ubuntu-24.04). Run 43769313651/1 (63876ed, job 132981430242): os dois testes falham no mesmo job. Run 43769394091/1 (807949c, job 132981687706): falha só o do artnet; tentativa 2 (job 134261764965) verde. Registado em ~/lumyx-evidence/flakes.log: artnet 2 ocorrências (D-REP STOP), same_seed_same_wire_drop_count 1."
+source_files: crates/led-protocols/src/artnet.rs, integration-tests/tests/udp_chaos.rs, integration-tests/src/lib.rs
+context: |
+  (1) `led-protocols::artnet::tests::artnet_sequence_is_per_universe_and_wraps_skipping_zero` envia 300 datagramas
+  ArtDmx seguidos para um socket loopback e só depois lê 300 com `recv_from(..).unwrap()` e `read_timeout` de 500 ms
+  (`loopback_pair`, artnet.rs:537-538). As duas falhas são iguais: `Os { code: 11, kind: WouldBlock }` em
+  artnet.rs:577:49, ou seja, esgotou o timeout sem o datagrama seguinte.
+  (2) `integration-tests::udp_chaos::same_seed_same_wire_drop_count` envia 200 datagramas através do
+  `UdpChaosProxy` (40 % de perda, seed 99) duas vezes e compara `proxy.dropped()`: falhou com left 69, right 86
+  (udp_chaos.rs:132:5).
+  Causa (INFERÊNCIA, não medida no runner): o buffer de receção do socket (SO_RCVBUF por omissão do kernel) não
+  comporta uma rajada de 300 datagramas de ~530 bytes enviada antes de qualquer leitura. O kernel descarta o
+  excedente sem erro, e o teste lê menos do que enviou. No (1) isso aparece como WouldBlock no `unwrap()`. No (2) o
+  proxy recebe menos datagramas numa das execuções, a sequência do PRNG avança por um número diferente de entradas e
+  o total de `dropped` diverge, embora a perda injetada seja determinística por datagrama recebido. O teste não
+  distingue as duas origens de perda. Não é defeito do `ArtNetDevice` nem do proxy: o macOS-26 passou nos dois runs.
+  INFERÊNCIA: no Linux, um SO_RCVBUF pedido acima de `net.core.rmem_max` é limitado a esse teto sem devolver erro;
+  aumentar o buffer não garante, por si, que a rajada cabe num runner cujo teto desconhecemos.
+impact: |
+  Falsos vermelhos no job obrigatório test (ubuntu-24.04), que bloqueiam o merge e custam reruns. Pior: um rerun
+  verde esconde que o (1) afirma «a sequência envolve 1..=255» sobre dados que podem ter chegado incompletos, e que o
+  (2) mede ruído do SO como se fosse determinismo do caos. O `unwrap()` não diz quantos chegaram nem em que
+  sequência parou, por isso a falha não se distingue de uma regressão real.
+required_fix: |
+  (1) Primeira via: leitor concorrente. O receptor arranca numa thread ANTES da rajada e drena enquanto o emissor
+  envia; alternativa equivalente: enviar em lotes e drenar cada lote antes do seguinte. O teste continua a EXIGIR
+  os 300 datagramas e a sequência completa 1..=255 com envolvimento: nenhuma perda é tolerada.
+  (2) Trocar o `unwrap()` do `recv_from` por uma falha com diagnóstico: recebidos N de 300, última sequência vista,
+  primeira sequência em falta.
+  (3) No `same_seed_same_wire_drop_count`, separar as perdas do SO das perdas injetadas: o proxy conta o que
+  recebeu além do que descartou, a entrada é drenada de forma concorrente como em (1), e a asserção de determinismo
+  compara as perdas injetadas para a mesma sequência de entradas. Se o proxy não recebeu os 200, isso é falha de
+  pré-condição do teste, com o número, e não divergência de determinismo.
+  (4) Só se a primeira via não chegar: dimensionar SO_RCVBUF com `socket2` como dev-dependency (já no Cargo.lock
+  como transitiva, versão 0.6.4), lendo o tamanho efetivo concedido e falhando cedo, com o valor, se for
+  insuficiente. `libc` com `unsafe` está rejeitado.
+falsification_required: |
+  Controlo negativo: enviar 299 em vez de 300, e, noutra mutação, saltar uma sequência no emissor. Nos dois casos o
+  teste do artnet tem de reprovar com a mensagem de diagnóstico (recebidos/esperados, última sequência, primeira em
+  falta) e NÃO com pânico de `unwrap()`. No teste do chaos, entregar ao proxy 199 em vez de 200 tem de reprovar como
+  falha de pré-condição com o número recebido, e não como divergência de `dropped`. Reverter as mutações devolve o
+  verde. Corrido em ubuntu-24.04 (onde falhou) e em macos-26, com `uname -m` na região de prova.
+review_by: 2026-12-15
+```

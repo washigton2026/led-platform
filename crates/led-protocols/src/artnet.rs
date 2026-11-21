@@ -562,31 +562,79 @@ mod tests {
         assert_eq!(dev.frames_sent(), 1);
     }
 
+    /// Datagrams sent before the receiver drains them. Small enough that the socket's
+    /// default receive buffer never overflows on any CI runner (TD-034): a 300-datagram
+    /// burst did, on ubuntu-24.04, and the kernel dropped the excess silently.
+    const LOTE: usize = 25;
+
+    /// Sends `total` frames on universe 1 in batches of `LOTE`, draining each batch before
+    /// the next. Returns the sequences received, in order, and the read error that stopped
+    /// the drain early (if any) — never panics, so the caller can report what arrived.
+    fn enviar_em_lotes(
+        dev: &ArtNetDevice,
+        rx: &UdpSocket,
+        total: usize,
+    ) -> (Vec<u8>, Option<std::io::Error>) {
+        let mut pkt = [0u8; 600];
+        let mut seqs = Vec::with_capacity(total);
+        let mut enviados = 0;
+        while enviados < total {
+            let n = LOTE.min(total - enviados);
+            for _ in 0..n {
+                dev.send_physical(&[UniverseData { universe: 1, data: vec![1, 2] }]).unwrap();
+            }
+            enviados += n;
+            while seqs.len() < enviados {
+                match rx.recv_from(&mut pkt) {
+                    Ok((len, _)) => match parse_art_dmx(&pkt[..len]) {
+                        Some((_, seq, _)) => seqs.push(seq),
+                        None => return (seqs, Some(std::io::Error::other("datagrama não-ArtDmx"))),
+                    },
+                    Err(e) => return (seqs, Some(e)),
+                }
+            }
+        }
+        (seqs, None)
+    }
+
+    /// Requires exactly `esperado` datagrams with sequences 1..=255, 1.. in order (the
+    /// per-universe wrap that skips 0). On failure says how many arrived, the last
+    /// sequence seen and the first one missing — a lost datagram and a wrong counter
+    /// must not look alike.
+    fn exigir_sequencia_completa(seqs: &[u8], esperado: usize, erro: Option<std::io::Error>) {
+        let esperada = |i: usize| (i % 255) as u8 + 1;
+        let falta = (0..esperado).find(|&i| seqs.get(i) != Some(&esperada(i)));
+        if seqs.len() != esperado || falta.is_some() {
+            let falta = falta.map_or("nenhuma".to_string(), |i| {
+                format!("índice {i} (esperada {}, vista {:?})", esperada(i), seqs.get(i))
+            });
+            panic!(
+                "recebidos {} de {esperado}; última sequência vista {:?}; primeira em falta: {falta}; \
+                 erro de leitura: {erro:?}",
+                seqs.len(),
+                seqs.last(),
+            );
+        }
+    }
+
     #[test]
     fn artnet_sequence_is_per_universe_and_wraps_skipping_zero() {
         let (dev, rx) = loopback_pair();
-        let mut pkt = [0u8; 600];
 
         // 300 frames on universe 1 only — universe 2 must stay untouched at seq 1..
-        for _ in 0..300 {
-            dev.send_physical(&[UniverseData { universe: 1, data: vec![1, 2] }]).unwrap();
-        }
-        let mut last_seq = 0u8;
-        let mut seen_zero = false;
-        for _ in 0..300 {
-            let (n, _) = rx.recv_from(&mut pkt).unwrap();
-            let (_, seq, _) = parse_art_dmx(&pkt[..n]).unwrap();
-            if seq == 0 { seen_zero = true; }
-            last_seq = seq;
-        }
-        assert!(!seen_zero, "sequence 0 disables checking — must never be emitted");
+        let (seqs, erro) = enviar_em_lotes(&dev, &rx, 300);
+        exigir_sequencia_completa(&seqs, 300, erro);
+        assert!(!seqs.contains(&0), "sequence 0 disables checking — must never be emitted");
         // 300 sends wrapping 1..=255: 255 then restart at 1 → 300-255=45
-        assert_eq!(last_seq, 45, "wrap 1..=255 (never 0)");
+        assert_eq!(seqs.last(), Some(&45), "wrap 1..=255 (never 0)");
 
         // now universe 2 starts fresh at 1 — per-universe, not global
         dev.send_physical(&[UniverseData { universe: 2, data: vec![9, 9] }]).unwrap();
-        let (n, _) = rx.recv_from(&mut pkt).unwrap();
-        let (uni, seq, _) = parse_art_dmx(&pkt[..n]).unwrap();
+        let mut pkt = [0u8; 600];
+        let (n, _) = rx
+            .recv_from(&mut pkt)
+            .unwrap_or_else(|e| panic!("universo 2: nenhum datagrama em 500 ms ({e})"));
+        let (uni, seq, _) = parse_art_dmx(&pkt[..n]).expect("universo 2: datagrama não-ArtDmx");
         assert_eq!((uni, seq), (2, 1), "universe 2 has its own counter");
     }
 
