@@ -132,7 +132,7 @@ fn same_seed_same_wire_drop_count() {
         let mut enviados = 0;
         while enviados < ENVIAR {
             let n = LOTE.min(ENVIAR - enviados);
-            send_frames(&dev, n);
+            send_frames(&dev, if enviados + n == ENVIAR { n - 1 } else { n });
             enviados += n;
             let prazo = Instant::now() + Duration::from_secs(2);
             while proxy.received() < enviados && Instant::now() < prazo {
