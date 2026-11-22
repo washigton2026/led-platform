@@ -2002,7 +2002,11 @@ review_by: 2026-11-30
 td_id:     TD-034
 title:     "artnet_sequence_is_per_universe_and_wraps_skipping_zero e same_seed_same_wire_drop_count tratam a perda de datagramas pelo SO como defeito do código (o primeiro) ou como perda injetada (o segundo)"
 severity:  Medium
-status:    open
+status:    closed
+closed_on: 2026-11-21
+closed_by: "PR #57 (2267dbd), mergeado na main em 4692ae2: leitura em lotes com diagnóstico (recebidos/esperados, última sequência, primeira em falta) no teste do artnet; no udp_chaos, a pré-condição «o proxy leu os 200» separada da divergência de `dropped`. CI do #57 lida no log, por job: run 44160888889, tentativas 1–5, job test (ubuntu-24.04) 134314074716, 134356324435, 134358308070, 135579832822, 136867257680 — udp_chaos 5 passed; 0 failed e led_protocols lib 82 passed; 0 failed nas cinco."
+evidence_ref: docs/evidence/td-034-udp-loopback-2026-11-21.md
+required_test: artnet_sequence_is_per_universe_and_wraps_skipping_zero
 origin:    "CI do PR #56 (fix/td-030-seqlock), job test (ubuntu-24.04). Run 43769313651/1 (63876ed, job 132981430242): os dois testes falham no mesmo job. Run 43769394091/1 (807949c, job 132981687706): falha só o do artnet; tentativa 2 (job 134261764965) verde. Registado em ~/lumyx-evidence/flakes.log: artnet 2 ocorrências (D-REP STOP), same_seed_same_wire_drop_count 1."
 source_files: crates/led-protocols/src/artnet.rs, integration-tests/tests/udp_chaos.rs, integration-tests/src/lib.rs
 context: |
@@ -2045,5 +2049,23 @@ falsification_required: |
   falta) e NÃO com pânico de `unwrap()`. No teste do chaos, entregar ao proxy 199 em vez de 200 tem de reprovar como
   falha de pré-condição com o número recebido, e não como divergência de `dropped`. Reverter as mutações devolve o
   verde. Corrido em ubuntu-24.04 (onde falhou) e em macos-26, com `uname -m` na região de prova.
+negative_control: |
+  Três PR [NEG-CTL] (fechados sem merge), um por mutação, cada um com um só commit sobre 4692ae2 e sem tocar no
+  ci.yml. Lidos job a job pela API (/actions/jobs/<id>/logs); arquitetura = Runner Image do «Set up job» + triplo do
+  toolchain no passo de instalação do Rust. Os dois jobs com rustc 1.100.0 (0ef1bc386 2026-11-09). Excerto no
+  evidence_ref, sec. 2; logs em ~/lumyx-evidence/2026-11-21-td034-controlos-negativos/ci-negctl/ (SHA256SUMS).
+  N1-299 — PR #58, e6b59e5, `enviar_em_lotes(&dev, &rx, 299)`. Run 44958338412: job 137011339746 (ubuntu-24.04,
+  x86_64-unknown-linux-gnu) e job 137011339571 (macos-26-arm64, aarch64-apple-darwin), nos dois
+  «test artnet::tests::artnet_sequence_is_per_universe_and_wraps_skipping_zero ... FAILED» — «recebidos 299 de 300;
+  última sequência vista Some(44); primeira em falta: índice 299 (esperada 45, vista None)»; 81 passed; 1 failed.
+  N2-salto — PR #59, 89c9397, o emissor salta a sequência 101. Run 44958356888: job 137011395815 (ubuntu-24.04,
+  x86_64-unknown-linux-gnu) e job 137011395779 (macos-26-arm64, aarch64-apple-darwin), nos dois o mesmo teste
+  FAILED — «recebidos 300 de 300; ... primeira em falta: índice 100 (esperada 101, vista Some(102))»; 81 passed; 1 failed.
+  N3-199 — PR #60, badfcf9, o último lote chega ao proxy com n - 1. Run 44958376005: job 137011454533 (ubuntu-24.04,
+  x86_64-unknown-linux-gnu) e job 137011454564 (macos-26-arm64, aarch64-apple-darwin), nos dois
+  «test same_seed_same_wire_drop_count ... FAILED» — «pré-condição: o proxy leu 199 de 200 datagramas (seed 99)»;
+  4 passed; 1 failed. No job macOS falhou também o detetor do TD-030 (reactive.rs:488), fora da mutação.
+  Nos seis: mensagem de diagnóstico, nunca pânico de unwrap(); 0 `error[E`. Repostos (base 4692ae2, run 44160888889),
+  os dois testes passam.
 review_by: 2026-12-15
 ```
