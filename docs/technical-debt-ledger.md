@@ -1198,6 +1198,20 @@ pending_gate: |
   icone), num run da branch do fix. NAO fecha antes disso. Prazo de verificacao:
   2026-12-07 — passado esse dia sem o job lido verde, o TD volta a ser decisao do operador.
   O gnu NAO e o msvc do runner: o verde local e necessario, nao suficiente.
+  3.a CAMADA (2026-11-23) — 2.a FALHA DO JOB, lida no log: run 45276720871, job
+  138050310955 (sha f574ca2). O workspace COMPILA em msvc (as camadas 1 e 2 confirmadas no
+  runner); falha o teste `o_typescript_versionado_e_exatamente_o_gerado`
+  (led-console-bin/tests/contract_gate.rs): o checkout do runner tem core.autocrlf, o repo
+  nao tinha .gitattributes, e o `include_str!` do .ts versionado leva CRLF enquanto o gerador
+  emite LF. Nao e divergencia de conteudo. O diagnostico apontava a «linha 1», o que escondia
+  a causa (`.lines()` ignora o \r e o `unwrap_or(0)` caia na linha 1).
+  CORRECAO: (a) `.gitattributes` na raiz: `crates/led-console-bin/contract/*.ts text eol=lf`;
+  (b) o diagnostico desse teste diz «a diferenca esta so nos fins de linha (CRLF vs LF)» quando
+  todas as linhas coincidem por `.lines()`. A comparacao `gerado != TS_VERSIONADO` NAO mudou —
+  o gate continua byte a byte. Controlo negativo [VERIFICADO]: .ts convertido para CRLF
+  (278 linhas) -> o teste reprova com a mensagem nova (15 passed; 1 failed, exit 101);
+  restaurado, `git diff --exit-code` 0 (~/lumyx-evidence/2026-11-22-td021/ciclo4/).
+  Os restantes testes do job windows depois deste: NOT_MEASURED ate ao proximo run.
   HISTORICO (1.a camada, bc01fd6), mantido como registo:
   Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
   failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
