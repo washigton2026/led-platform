@@ -1186,8 +1186,19 @@ severity:  Medium
 status:    pending-verification
 fix_ref:   "branch fix/td-021-windows-consts (2026-11-22/23): modulo `led_daemon_bin::limits` SEM cfg, com MAX_LINE e REPLY_TIMEOUT; `server` reexporta-os (`pub use crate::limits::{MAX_LINE, REPLY_TIMEOUT}`), portanto `server::MAX_LINE` continua a ser o MESMO objeto; `led-console-bin/src/limits.rs` deriva de `limits::*`. Valores inalterados (64 KiB, 5 s). Evidencia em ~/lumyx-evidence/2026-11-22-td021/."
 pending_gate: |
-  O job `windows (allow-failure)` VERDE na CI, lido no log (nao no icone), num run da
-  branch do fix. NAO fecha antes disso.
+  2.a CAMADA (2026-11-23, decisao do CIO): fora de unix, `led-daemon` (exit 2, o mesmo da
+  recusa do `led-console`) e `ledctl` (exit 3 = «nao consigo falar com o socket», tabela
+  SAIDA do ledctl) RECUSAM arrancar: «requer unix (canal de controlo UDS, ADR-0014)». Zero
+  funcionalidade nova no Windows. `AJUDA` do led-console e o import de `SystemPacer` em
+  tests/e2e_output.rs levam `#[cfg(unix)]` (sem `allow`). Medido em x86_64-pc-windows-gnu:
+  `cargo check` e `cargo clippy -D warnings`, `--workspace --all-targets` -> exit 0, 0 erros,
+  0 avisos (~/lumyx-evidence/2026-11-22-td021/camada2/win-*-2.log). Unix: led-daemon-bin +
+  led-console-bin 330 passed / 0 failed (= baseline bc01fd6), clippy -D warnings exit 0.
+  CRITERIO DE FECHO: o job `windows (allow-failure)` VERDE na CI, lido no log (nao no
+  icone), num run da branch do fix. NAO fecha antes disso. Prazo de verificacao:
+  2026-12-07 — passado esse dia sem o job lido verde, o TD volta a ser decisao do operador.
+  O gnu NAO e o msvc do runner: o verde local e necessario, nao suficiente.
+  HISTORICO (1.a camada, bc01fd6), mantido como registo:
   Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
   failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
   crates\led-console-bin\src\limits.rs:8, :36, :47 — «could not compile `led-console-bin`
