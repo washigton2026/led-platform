@@ -3,7 +3,8 @@
     "deny": [
       "Bash(git push:*)",
       "Bash(git add -A:*)",
-      "Bash(git add .:*)",
+      "Bash(git add .)",
+      "Bash(git add . :*)",
       "Bash(git commit --amend:*)",
       "Bash(git rebase:*)",
       "Bash(git reset --hard:*)",
