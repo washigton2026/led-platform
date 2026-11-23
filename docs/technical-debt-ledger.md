@@ -1183,13 +1183,39 @@ review_by: "antes de qualquer trabalho que dependa de sincronizacao multi-no (ne
 td_id:     TD-021
 title:     "`limits.rs` deriva `MAX_BODY` e `BACKOFF_MAX` de `led_daemon_bin::server`, que so existe em unix (IPC sobre UDS) — E0433 no Windows"
 severity:  Medium
-status:    open
+status:    pending-verification
+fix_ref:   "branch fix/td-021-windows-consts (2026-11-22/23): modulo `led_daemon_bin::limits` SEM cfg, com MAX_LINE e REPLY_TIMEOUT; `server` reexporta-os (`pub use crate::limits::{MAX_LINE, REPLY_TIMEOUT}`), portanto `server::MAX_LINE` continua a ser o MESMO objeto; `led-console-bin/src/limits.rs` deriva de `limits::*`. Valores inalterados (64 KiB, 5 s). Evidencia em ~/lumyx-evidence/2026-11-22-td021/."
+pending_gate: |
+  O job `windows (allow-failure)` VERDE na CI, lido no log (nao no icone), num run da
+  branch do fix. NAO fecha antes disso.
+  Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
+  failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
+  crates\led-console-bin\src\limits.rs:8, :36, :47 — «could not compile `led-console-bin`
+  (lib) due to 3 previous errors». O verde e o mesmo job depois do fix.
+  RISCO CONHECIDO para este criterio [INFERIDO, medido em x86_64-pc-windows-gnu e nao em
+  msvc]: `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --keep-going`
+  sobre a arvore do fix compila o `led-console-bin` (0 erros) mas deixa 4 erros distintos no
+  `led-daemon-bin`, que o job windows (`cargo build --workspace --all-targets`) vai
+  encontrar a seguir, porque o run 44972169387 parou no primeiro crate:
+    - bin `led-daemon` (src/main.rs:236-245): E0433 `ControlPlane`, E0433 `Server`
+      (re-export `#[cfg(unix)]` em lib.rs:50), E0425 `run::run_with_control` (run.rs:477);
+    - bin `ledctl` (src/bin/ledctl.rs): E0601 sem `main` — o ficheiro e `#![cfg(unix)]`.
+  Mais 1 aviso `dead_code` (`AJUDA`, led-console-bin/src/main.rs:32) que o passo
+  `clippy -D warnings` do job tornaria erro. Sao a raiz ADR-0014 (UDS) descrita abaixo, nao
+  este fix — e nao foram corrigidos aqui (fora do accept). Log:
+  ~/lumyx-evidence/2026-11-22-td021/wincheck-keepgoing.log.
 origin:    "Observado no job `windows (allow-failure)` do PR #5, run 34683654404 (SHA 51d8241, 2026-09-12). NAO e regressao desse PR — ver PROVA DE ALHEAMENTO."
 context: |
   SINTOMA, lido do log da CI e nao inferido:
 
       error[E0433]: cannot find `server` in `led_daemon_bin`
       crates/led-console-bin/src/limits.rs:8, :36, :47
+
+  CAUSA (corrigida em 2026-11-23): o console derivava `MAX_BODY`, `BACKOFF_MAX` e
+  `http_timeout()` de `led_daemon_bin::server::{MAX_LINE, REPLY_TIMEOUT}`, e o modulo
+  `server` e `#[cfg(unix)]`. As constantes nao sao IPC sobre UDS — sao limites — mas viviam
+  dentro do modulo que o e. Fix: modulo `limits` sem cfg; o `server` reexporta.
+  O texto abaixo e o diagnostico original (2026-09-12), mantido como registo.
 
   CAUSA, lida no codigo. `crates/led-daemon-bin/src/lib.rs:37-38`:
 
@@ -1263,7 +1289,13 @@ context: |
   estes limites sejam **derivados** do daemon, *«nunca reescritos»* — o proprio gate
   `os_limites_sao_os_do_gs3_e_nao_copias` existe para impedir uma segunda copia. Qualquer
   saida tem de preservar isso.
-review_by: "antes de abrir trabalho no G5 (determinismo Linux/Windows) ou no D8 (empacotamento desktop) — o que vier primeiro. Nao bloqueia nada antes disso."
+  PRESERVADO pelo fix de 2026-11-23: nenhuma copia; o gate passou a comparar com
+  `led_daemon_bin::limits::*` (o caminho que tambem compila em Windows), e a identidade
+  com `server::*` e dada pelo `pub use`. Desvio do accept registado em
+  ~/lumyx-evidence/2026-11-22-td021/accept.md.
+# review_by retirado em 2026-11-23: era texto («antes de abrir trabalho no G5 ou no D8»), que
+# num pending-verification o audit_gate trata como Critical. Nenhum prazo novo foi decidido,
+# e nao se inventa uma data (precedente: TD-014).
 ```
 
 ---
