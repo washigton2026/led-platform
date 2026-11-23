@@ -158,6 +158,17 @@ root_cause:   |
      distinguem o fix — o gate correto é o de coerência com 10k frames que
      SÓ passa com snapshot coerente (tearing produziria ~5000 violações).
 
+  4. (2026-10-08, F1 do Parallel Gauntlet, PR #45) Gate de PERTENÇA sem universo real: o pg_check_plan
+     decidia «este owns toca área protegida?» por casamento textual de globs e por ficheiros que já
+     existiam. `crates/*/build.rs` (ficheiro novo em led-core) e `docs/ad?/0099-novo.md` passavam com
+     exit 0; o próprio plano escolhia a árvore (base_sha = árvore vazia → universo vazio); um rename
+     tirava um ficheiro protegido sem o diff o ver; e o `accept_sha` só tinha o FORMATO validado.
+     Os 28 testes corriam sempre com universo vazio, e ~14 mutações da ferramenta ficavam verdes. O
+     verifier deu PASS e foi o falsifier que o apanhou. Correção (F1b): gramática de owns decidível,
+     com falha na dúvida; base = origin/main lido pela ferramenta; diff --no-renames; accept verificado
+     pelo sha256 do conteúdo; testes de tabela com caminhos reais. 23 mutações → 23 vermelhas.
+     Regra que nasceu daqui: nenhum gate novo entra na main sem ≥ 1 ronda do falsifier contra ele.
+
   Forma canônica do bug: "o gate não tem controle negativo" — nenhum run
   concreto descrito que o reprovaria.
 
