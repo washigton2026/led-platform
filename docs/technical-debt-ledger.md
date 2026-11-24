@@ -1212,6 +1212,21 @@ pending_gate: |
   (278 linhas) -> o teste reprova com a mensagem nova (15 passed; 1 failed, exit 101);
   restaurado, `git diff --exit-code` 0 (~/lumyx-evidence/2026-11-22-td021/ciclo4/).
   Os restantes testes do job windows depois deste: NOT_MEASURED ate ao proximo run.
+  3.a FALHA DO JOB (2026-11-24), lida no log: run 45278965537, job 138058062748 (sha
+  683cda4; o run diz `success` so porque o job e continue-on-error). O contract_gate ja
+  nao aparece como falha. Reprova `output::tests::um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida`
+  (led-daemon-bin lib, output.rs:1072): «a condicao de no morto NAO foi estabelecida em
+  392091 envios: o alvo 1 (127.0.0.1:1) nunca acusou erro» — estado
+  [(…:57083, 392091, 0), (127.0.0.1:1, 392091, 0), (…:57085, 392091, 0)]. Binario
+  `led-daemon-bin` lib: 104 passed; 1 failed. A guarda de premissa do C0 (2026-08-17)
+  funcionou: no Windows o ICMP port-unreachable nao chega ao `send` como erro, e o teste
+  reprova em vez de passar vacuamente. A tabela de portabilidade do C0 media Ubuntu e
+  macOS, nunca Windows. NAO corrigido neste ciclo (a correcao e decisao: tecnica de no
+  morto para Windows ou gate de plataforma no teste). Medida desta ronda, so no job
+  windows do ci.yml: `cargo test --workspace --locked --no-fail-fast`, para o proximo run
+  listar TODAS as falhas Windows (o cargo parava no primeiro binario a reprovar; os
+  binarios a seguir ao led-daemon-bin lib = NOT_MEASURED neste run). Log:
+  ~/lumyx-evidence/2026-11-22-td021/ciclo5/job-138058062748-failed.log.
   HISTORICO (1.a camada, bc01fd6), mantido como registo:
   Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
   failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
@@ -1645,7 +1660,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-10-05
 closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
-evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-08b.md
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-11-24.md
 required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
 source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml
