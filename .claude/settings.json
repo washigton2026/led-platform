@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git add -A:*)",
+      "Bash(git add .)",
+      "Bash(git add . :*)",
+      "Bash(git commit --amend:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(gh pr merge:*)"
+    ],
+    "allow": [
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo build:*)",
+      "Bash(python3 scripts/audit_gate.py:*)",
+      "Bash(./scripts/tsc_gate.sh:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)"
+    ]
+  }
+}
