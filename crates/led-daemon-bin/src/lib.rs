@@ -24,6 +24,7 @@
 
 pub mod json;
 pub mod hwcheck;
+pub mod limits;
 pub mod journal;
 pub mod loader;
 pub mod output;

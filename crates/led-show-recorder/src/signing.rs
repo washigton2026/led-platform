@@ -8,7 +8,9 @@
 //! ## Invariants (lumyx-security-architect)
 //! - Signatures cover a **canonical byte encoding** of the manifest (version,
 //!   counts, aggregate hash, every frame hash) — not a debug format.
-//! - Key seeds come from the OS (`/dev/urandom`), never from a PRNG we roll.
+//! - Key seeds come from the OS CSPRNG via `getrandom` (getrandom(2)/getentropy on
+//!   unix, ProcessPrng on Windows), never from a PRNG we roll. Not `/dev/urandom`
+//!   directly: that file does not exist on Windows (TD-021).
 //! - Ed25519 signatures are deterministic: same key + same manifest ⇒ same
 //!   signature (replays stay reproducible end-to-end).
 //! - Verification failure is a value (`SignatureError`), never a panic.
@@ -66,11 +68,13 @@ impl ShowSigner {
         Self { key: SigningKey::from_bytes(&seed) }
     }
 
-    /// Fresh identity from OS entropy (`/dev/urandom`). std-only, no RNG crate.
+    /// Fresh identity from the OS CSPRNG (`getrandom::fill`), on every platform.
+    ///
+    /// A failure to obtain entropy is returned as the OS error — there is no fallback
+    /// seed (zeros, time, a PRNG): a key that is not random is worse than no key.
     pub fn generate() -> std::io::Result<Self> {
-        use std::io::Read;
         let mut seed = [0u8; 32];
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut seed)?;
+        getrandom::fill(&mut seed)?;
         Ok(Self::from_seed(seed))
     }
 
@@ -368,5 +372,82 @@ mod tests {
         assert_ne!(a.public_key(), b.public_key(), "distinct keys");
         let signed = a.sign_manifest(&manifest());
         assert_eq!(verify_manifest(&signed), Ok(()));
+    }
+
+    // ── Seed source (TD-021, N3) ────────────────────────────────────────────────
+    //
+    // Threat model: these tests catch ACCIDENTAL regressions — another entropy source
+    // (`/dev/urandom`, the clock, a PRNG, zeros), a weakened `from_seed`, a non-default
+    // `getrandom` backend, or `getrandom` dropped. Deliberate sabotage of this file by
+    // whoever edits it (a decoy `generate()` under `cfg(test)`, a local module named
+    // `getrandom`) is out of scope: PR review and the security-guardian cover it.
+
+    /// **Every seed byte reaches the key.** A `from_seed` that ignored or zeroed part of
+    /// the seed would still give distinct keys from random seeds — and keep the key
+    /// space at a fraction of 256 bits without any other test noticing.
+    #[test]
+    fn from_seed_depende_de_cada_byte_da_semente() {
+        let base = [0x5au8; 32];
+        let chave_base = ShowSigner::from_seed(base).public_key();
+        for i in 0..32 {
+            let mut semente = base;
+            semente[i] ^= 1;
+            assert_ne!(
+                ShowSigner::from_seed(semente).public_key(),
+                chave_base,
+                "o byte {i} da semente nao chega a chave"
+            );
+        }
+    }
+
+    /// **The OS backend of `getrandom`, never an override.** `--cfg getrandom_backend=…`
+    /// (in `RUSTFLAGS`, which reaches every crate, this one included) swaps where
+    /// `getrandom::fill` takes its bytes from — `custom` can be any function. The list is
+    /// the 9 values getrandom 0.3.4 declares in its own `check-cfg`.
+    #[test]
+    fn getrandom_usa_o_backend_por_omissao() {
+        let sobreposto = cfg!(any(
+            getrandom_backend = "custom",
+            getrandom_backend = "efi_rng",
+            getrandom_backend = "rdrand",
+            getrandom_backend = "rndr",
+            getrandom_backend = "linux_getrandom",
+            getrandom_backend = "linux_raw",
+            getrandom_backend = "wasm_js",
+            getrandom_backend = "windows_legacy",
+            getrandom_backend = "unsupported",
+        ));
+        assert!(
+            !sobreposto,
+            "o build sobrepoe o backend do getrandom (--cfg getrandom_backend): a semente \
+             das chaves deixa de vir do CSPRNG por omissao do SO (TD-021)"
+        );
+    }
+
+    /// **`generate()` asks `getrandom`, and production code has no `cfg`.** Deliberately
+    /// loose — it does not pin the body of `generate()`, so a refactor or `rustfmt` cannot
+    /// break it. Comment lines are excluded, otherwise the docs above would satisfy it.
+    #[test]
+    fn generate_usa_getrandom_e_nao_ha_cfg_em_producao() {
+        // CRLF normalised: a Windows checkout with `core.autocrlf` gives this file `\r\n`,
+        // and the `\n` in the cut below would never match (TD-021, F2 of round 3).
+        let fonte = include_str!("signing.rs").replace("\r\n", "\n");
+        // Built by concat so the needles do not occur in this test's own text.
+        let corte = ["#[cfg(test)]", "\nmod tests {"].concat();
+        assert_eq!(fonte.matches(corte.as_str()).count(), 1, "um so modulo de testes");
+        let codigo: Vec<&str> = fonte
+            .split(corte.as_str())
+            .next()
+            .expect("split devolve sempre um primeiro troco")
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//"))
+            .collect();
+        let conta = |agulha: &str| codigo.iter().filter(|l| l.contains(agulha)).count();
+        assert_eq!(conta(&["fn ", "generate("].concat()), 1, "uma so fn generate");
+        assert!(conta(&["getrandom", "::fill("].concat()) >= 1, "generate() deixou de chamar o getrandom");
+        let com_cfg: Vec<&&str> = codigo.iter().filter(|l| l.starts_with(&["#[", "cfg"].concat())).collect();
+        assert!(com_cfg.is_empty(), "atributo cfg em codigo de producao: {com_cfg:?}");
+        assert_eq!(conta(&["/dev", "/urandom"].concat()), 0, "a semente voltou a ler o ficheiro (nao existe no Windows)");
     }
 }

@@ -8,6 +8,16 @@ description = "Records LogicalFrame + AudioFeatures streams to a compact binary 
 [dependencies]
 # Ed25519 replay/snapshot signing (missão Production-Ready: replay assinado).
 # no_std-capable, pure-Rust, audited curve implementation; no RNG feature — key
-# seeds come from the OS via std (see signing.rs).
+# seeds come from the OS via `getrandom` below (see signing.rs).
 ed25519-dalek = { version = "2", default-features = false, features = ["fast"] }
+# OS CSPRNG for `ShowSigner::generate()` key seeds (TD-021): reading `/dev/urandom`
+# directly fails on Windows. Already in Cargo.lock (0.3.4) — no new package. `std`
+# only for its `From<getrandom::Error> for io::Error`, which keeps the OS errno.
+getrandom = { version = "0.3", features = ["std"] }
 led-core = { path = "../led-core" }
+
+# The 9 `getrandom_backend` values getrandom 0.3.4 declares, so the guard test in
+# signing.rs (`getrandom_usa_o_backend_por_omissao`) can name them without tripping
+# `unexpected_cfgs` under `-D warnings` (TD-021).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(getrandom_backend, values("custom", "efi_rng", "rdrand", "rndr", "linux_getrandom", "linux_raw", "wasm_js", "windows_legacy", "unsupported"))'] }

@@ -1183,13 +1183,112 @@ review_by: "antes de qualquer trabalho que dependa de sincronizacao multi-no (ne
 td_id:     TD-021
 title:     "`limits.rs` deriva `MAX_BODY` e `BACKOFF_MAX` de `led_daemon_bin::server`, que so existe em unix (IPC sobre UDS) — E0433 no Windows"
 severity:  Medium
-status:    open
+status:    pending-verification
+fix_ref:   "branch fix/td-021-windows-consts (2026-11-22/23): modulo `led_daemon_bin::limits` SEM cfg, com MAX_LINE e REPLY_TIMEOUT; `server` reexporta-os (`pub use crate::limits::{MAX_LINE, REPLY_TIMEOUT}`), portanto `server::MAX_LINE` continua a ser o MESMO objeto; `led-console-bin/src/limits.rs` deriva de `limits::*`. Valores inalterados (64 KiB, 5 s). Evidencia em ~/lumyx-evidence/2026-11-22-td021/."
+pending_gate: |
+  2.a CAMADA (2026-11-23, decisao do CIO): fora de unix, `led-daemon` (exit 2, o mesmo da
+  recusa do `led-console`) e `ledctl` (exit 3 = «nao consigo falar com o socket», tabela
+  SAIDA do ledctl) RECUSAM arrancar: «requer unix (canal de controlo UDS, ADR-0014)». Zero
+  funcionalidade nova no Windows. `AJUDA` do led-console e o import de `SystemPacer` em
+  tests/e2e_output.rs levam `#[cfg(unix)]` (sem `allow`). Medido em x86_64-pc-windows-gnu:
+  `cargo check` e `cargo clippy -D warnings`, `--workspace --all-targets` -> exit 0, 0 erros,
+  0 avisos (~/lumyx-evidence/2026-11-22-td021/camada2/win-*-2.log). Unix: led-daemon-bin +
+  led-console-bin 330 passed / 0 failed (= baseline bc01fd6), clippy -D warnings exit 0.
+  CRITERIO DE FECHO: o job `windows (allow-failure)` VERDE na CI, lido no log (nao no
+  icone), num run da branch do fix. NAO fecha antes disso. Prazo de verificacao:
+  2026-12-07 — passado esse dia sem o job lido verde, o TD volta a ser decisao do operador.
+  O gnu NAO e o msvc do runner: o verde local e necessario, nao suficiente.
+  3.a CAMADA (2026-11-23) — 2.a FALHA DO JOB, lida no log: run 45276720871, job
+  138050310955 (sha f574ca2). O workspace COMPILA em msvc (as camadas 1 e 2 confirmadas no
+  runner); falha o teste `o_typescript_versionado_e_exatamente_o_gerado`
+  (led-console-bin/tests/contract_gate.rs): o checkout do runner tem core.autocrlf, o repo
+  nao tinha .gitattributes, e o `include_str!` do .ts versionado leva CRLF enquanto o gerador
+  emite LF. Nao e divergencia de conteudo. O diagnostico apontava a «linha 1», o que escondia
+  a causa (`.lines()` ignora o \r e o `unwrap_or(0)` caia na linha 1).
+  CORRECAO: (a) `.gitattributes` na raiz: `crates/led-console-bin/contract/*.ts text eol=lf`;
+  (b) o diagnostico desse teste diz «a diferenca esta so nos fins de linha (CRLF vs LF)» quando
+  todas as linhas coincidem por `.lines()`. A comparacao `gerado != TS_VERSIONADO` NAO mudou —
+  o gate continua byte a byte. Controlo negativo [VERIFICADO]: .ts convertido para CRLF
+  (278 linhas) -> o teste reprova com a mensagem nova (15 passed; 1 failed, exit 101);
+  restaurado, `git diff --exit-code` 0 (~/lumyx-evidence/2026-11-22-td021/ciclo4/).
+  Os restantes testes do job windows depois deste: NOT_MEASURED ate ao proximo run.
+  3.a FALHA DO JOB (2026-11-24), lida no log: run 45278965537, job 138058062748 (sha
+  683cda4; o run diz `success` so porque o job e continue-on-error). O contract_gate ja
+  nao aparece como falha. Reprova `output::tests::um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida`
+  (led-daemon-bin lib, output.rs:1072): «a condicao de no morto NAO foi estabelecida em
+  392091 envios: o alvo 1 (127.0.0.1:1) nunca acusou erro» — estado
+  [(…:57083, 392091, 0), (127.0.0.1:1, 392091, 0), (…:57085, 392091, 0)]. Binario
+  `led-daemon-bin` lib: 104 passed; 1 failed. A guarda de premissa do C0 (2026-08-17)
+  funcionou: no Windows o ICMP port-unreachable nao chega ao `send` como erro, e o teste
+  reprova em vez de passar vacuamente. A tabela de portabilidade do C0 media Ubuntu e
+  macOS, nunca Windows. NAO corrigido neste ciclo (a correcao e decisao: tecnica de no
+  morto para Windows ou gate de plataforma no teste). Medida desta ronda, so no job
+  windows do ci.yml: `cargo test --workspace --locked --no-fail-fast`, para o proximo run
+  listar TODAS as falhas Windows (o cargo parava no primeiro binario a reprovar; os
+  binarios a seguir ao led-daemon-bin lib = NOT_MEASURED neste run). Log:
+  ~/lumyx-evidence/2026-11-22-td021/ciclo5/job-138058062748-failed.log.
+  4.a FALHA DO JOB (2026-11-24), lida no log com --no-fail-fast: run 45512667325, job
+  138864078249 (sha 09e8cd6): 105 binarios ok, 2 FAILED. Corrigidas neste ciclo (ciclo6):
+  (A) `output::tests::um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida`
+  (led-daemon-bin, output.rs): passa a `#[cfg(unix)]`, com os 2 helpers (`ALVO_MORTO`,
+  `enviar_ate_o_no_morrer`), cujo unico consumidor e esse teste. Decisao do CIO: a premissa
+  do no morto (C0) so foi medida em Ubuntu/macOS e o led-daemon recusa arrancar fora de
+  unix (f574ca2). PERDA DE COBERTURA REGISTADA: o isolamento por no (ADR-0029 §5) NAO e
+  exercitado no Windows. Os irmaos em tests/e2e_output.rs e tests/estado_por_alvo.rs ja
+  eram so-unix. Logica de producao intocada.
+  (B) `signing::tests::generate_produces_distinct_working_identities` (led-show-recorder):
+  DEFEITO DE PRODUCAO — `ShowSigner::generate()` lia `/dev/urandom`, que nao existe no
+  Windows. Passa a `getrandom::fill` (dep directa getrandom 0.3, feature `std`; o lock so
+  ganha a aresta, 0.3.4 ja la estava). Assinatura publica inalterada, sem fallback. Accept
+  N3 + emenda com modelo de ameaca: ~/lumyx-evidence/2026-11-22-td021/ciclo6/accept-B.md.
+  Testes novos: `from_seed_depende_de_cada_byte_da_semente`,
+  `getrandom_usa_o_backend_por_omissao` (check-cfg no [lints.rust] do crate),
+  `generate_usa_getrandom_e_nao_ha_cfg_em_producao` (normaliza CRLF — F2 da ronda 3).
+  Controlos negativos [VERIFICADOS], todos reprovam: M1 semente a zeros · M2 volta o
+  /dev/urandom · N1 from_seed zera seed[4..] · N2 RUSTFLAGS --cfg getrandom_backend="rdrand"
+  · N3/N3b atributo cfg em producao · ficheiro em CRLF sem a normalizacao. N4 (`? ;`) passa.
+  Gauntlet: 3 rondas N3; a 3.a nao fechou e o CIO escolheu commit com divida (opcao 3).
+  DIVIDA ABERTA (fugas DENTRO do modelo de ameaca, confirmadas por mutacao executada pelo
+  falsifier, ~/lumyx-evidence/2026-11-22-td021/ciclo6/falsifier-r3/E*.log, F1.log — os 15
+  testes do crate ficam verdes em cada uma):
+    E1 `getrandom::fill(&mut seed[..16])?` — so 128 bits da semente vem do SO.
+    E2 `if getrandom::fill(&mut seed).is_err() { seed[..16] = <relogio> }` — fallback ao relogio.
+    E3 `let _ = getrandom::fill(&mut seed);` — erro engolido, semente a zeros em silencio.
+    E4 `getrandom::fill(&mut seed)?` seguido de `seed[..16]` sobrescrito com o relogio.
+    F1 (falso vermelho) `use getrandom::fill;` + `fill(&mut seed)?` reprova o teste estrutural.
+  Fora do modelo (revisao do PR + security-guardian, nao testes): generate() isco sob
+  cfg(test), corpo isco em comentario, modulo local/alias chamado getrandom.
+  NOT_MEASURED: caminho de erro do getrandom (sem ponto de injeccao); Windows msvc ate ao
+  proximo run do job windows lido no log. Status continua pending-verification.
+  HISTORICO (1.a camada, bc01fd6), mantido como registo:
+  Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
+  failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
+  crates\led-console-bin\src\limits.rs:8, :36, :47 — «could not compile `led-console-bin`
+  (lib) due to 3 previous errors». O verde e o mesmo job depois do fix.
+  RISCO CONHECIDO para este criterio [INFERIDO, medido em x86_64-pc-windows-gnu e nao em
+  msvc]: `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --keep-going`
+  sobre a arvore do fix compila o `led-console-bin` (0 erros) mas deixa 4 erros distintos no
+  `led-daemon-bin`, que o job windows (`cargo build --workspace --all-targets`) vai
+  encontrar a seguir, porque o run 44972169387 parou no primeiro crate:
+    - bin `led-daemon` (src/main.rs:236-245): E0433 `ControlPlane`, E0433 `Server`
+      (re-export `#[cfg(unix)]` em lib.rs:50), E0425 `run::run_with_control` (run.rs:477);
+    - bin `ledctl` (src/bin/ledctl.rs): E0601 sem `main` — o ficheiro e `#![cfg(unix)]`.
+  Mais 1 aviso `dead_code` (`AJUDA`, led-console-bin/src/main.rs:32) que o passo
+  `clippy -D warnings` do job tornaria erro. Sao a raiz ADR-0014 (UDS) descrita abaixo, nao
+  este fix — e nao foram corrigidos aqui (fora do accept). Log:
+  ~/lumyx-evidence/2026-11-22-td021/wincheck-keepgoing.log.
 origin:    "Observado no job `windows (allow-failure)` do PR #5, run 34683654404 (SHA 51d8241, 2026-09-12). NAO e regressao desse PR — ver PROVA DE ALHEAMENTO."
 context: |
   SINTOMA, lido do log da CI e nao inferido:
 
       error[E0433]: cannot find `server` in `led_daemon_bin`
       crates/led-console-bin/src/limits.rs:8, :36, :47
+
+  CAUSA (corrigida em 2026-11-23): o console derivava `MAX_BODY`, `BACKOFF_MAX` e
+  `http_timeout()` de `led_daemon_bin::server::{MAX_LINE, REPLY_TIMEOUT}`, e o modulo
+  `server` e `#[cfg(unix)]`. As constantes nao sao IPC sobre UDS — sao limites — mas viviam
+  dentro do modulo que o e. Fix: modulo `limits` sem cfg; o `server` reexporta.
+  O texto abaixo e o diagnostico original (2026-09-12), mantido como registo.
 
   CAUSA, lida no codigo. `crates/led-daemon-bin/src/lib.rs:37-38`:
 
@@ -1263,7 +1362,13 @@ context: |
   estes limites sejam **derivados** do daemon, *«nunca reescritos»* — o proprio gate
   `os_limites_sao_os_do_gs3_e_nao_copias` existe para impedir uma segunda copia. Qualquer
   saida tem de preservar isso.
-review_by: "antes de abrir trabalho no G5 (determinismo Linux/Windows) ou no D8 (empacotamento desktop) — o que vier primeiro. Nao bloqueia nada antes disso."
+  PRESERVADO pelo fix de 2026-11-23: nenhuma copia; o gate passou a comparar com
+  `led_daemon_bin::limits::*` (o caminho que tambem compila em Windows), e a identidade
+  com `server::*` e dada pelo `pub use`. Desvio do accept registado em
+  ~/lumyx-evidence/2026-11-22-td021/accept.md.
+# review_by retirado em 2026-11-23: era texto («antes de abrir trabalho no G5 ou no D8»), que
+# num pending-verification o audit_gate trata como Critical. Nenhum prazo novo foi decidido,
+# e nao se inventa uma data (precedente: TD-014).
 ```
 
 ---
@@ -1588,7 +1693,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-10-05
 closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
-evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-10-08b.md
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-11-24.md
 required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
 source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml

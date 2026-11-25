@@ -1,13 +1,18 @@
 //! Ponto de entrada do daemon. Só CLI e cablagem — a lógica está na biblioteca, para que o
 //! laço seja testável sem processo, sem relógio e sem sinais.
 
+#[cfg(unix)]
 use led_daemon::{ShowId, ShowRuntime};
+#[cfg(unix)]
 use led_daemon_bin::{
     descriptor_from_path, run, Config, ExitReason, Integrity, Journal, SystemPacer,
 };
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
 use std::sync::Arc;
 
+#[cfg(unix)]
 const USAGE: &str = "\
 led-daemon — processo de transporte do LUMYX (GS2)
 
@@ -71,6 +76,7 @@ HEARTBEAT:
     a cada 800 ms. Nenhum caminho deste processo envia zeros.
 ";
 
+#[cfg(unix)]
 #[derive(Debug)]
 struct Args {
     show: Option<String>,
@@ -79,6 +85,7 @@ struct Args {
     log: Option<String>,
 }
 
+#[cfg(unix)]
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut show: Option<String> = None;
     let mut socket: Option<String> = None;
@@ -160,6 +167,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
 /// **EOF NÃO encerra**, de propósito: um daemon supervisionado corre frequentemente com o
 /// stdin fechado, e fazer o EOF encerrar mataria o processo à nascença quando o stdin fosse
 /// `/dev/null`.
+#[cfg(unix)]
 fn spawn_stdin_shutdown(flag: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         use std::io::BufRead;
@@ -178,6 +186,7 @@ fn spawn_stdin_shutdown(flag: Arc<AtomicBool>) {
     });
 }
 
+#[cfg(unix)]
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&argv) {
@@ -266,7 +275,17 @@ fn main() {
     });
 }
 
-#[cfg(test)]
+/// Fora de unix o daemon recusa arrancar (TD-021): o canal de controlo é UDS (ADR-0014) e
+/// `ControlPlane`/`Server`/`run_with_control` só existem em unix. Mesmo molde do
+/// `led-console` — o binário existe e recusa, em vez de não compilar — e o mesmo exit code
+/// da recusa dele (2, `led-console-bin/src/main.rs`).
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("led-daemon: requer unix (canal de controlo UDS, ADR-0014).");
+    std::process::exit(2);
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

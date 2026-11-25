@@ -402,5 +402,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
-      - run: cargo test --workspace --locked
+      # --no-fail-fast (TD-021): o primeiro binario que reprova nao pode esconder os
+      # seguintes — cada run deste job tem de mostrar TODAS as falhas Windows de uma vez.
+      - run: cargo test --workspace --locked --no-fail-fast
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings

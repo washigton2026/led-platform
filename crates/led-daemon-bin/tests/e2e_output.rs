@@ -8,8 +8,10 @@
 use led_core::PixelColor;
 use led_daemon::{ShowId, ShowRuntime, State};
 use led_daemon_bin::{
-    descriptor_from_path, run, Config, ExitReason, Integrity, Journal, Pacer, SystemPacer,
+    descriptor_from_path, run, Config, ExitReason, Integrity, Journal, Pacer,
 };
+#[cfg(unix)]
+use led_daemon_bin::SystemPacer;
 use led_show_recorder::{ShowRecord, ShowWriter};
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicBool;

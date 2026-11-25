@@ -3,12 +3,14 @@
 //! Fala o protocolo v1 sobre UDS. Faz o `hello` sozinho, envia um comando, imprime a
 //! resposta crua e sai com um código que um script consegue usar.
 
-#![cfg(unix)]
-
+#[cfg(unix)]
 use led_daemon_bin::json::parse;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
+#[cfg(unix)]
 const USAGE: &str = "\
 ledctl — cliente de controlo do led-daemon (protocolo v1, UDS)
 
@@ -34,6 +36,7 @@ COMANDOS:
 SAÍDA: 0 ok · 1 o daemon recusou · 2 erro de uso · 3 não consigo falar com o socket
 ";
 
+#[cfg(unix)]
 fn send(stream: &mut UnixStream, linha: &str) -> std::io::Result<()> {
     stream.write_all(linha.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -41,6 +44,7 @@ fn send(stream: &mut UnixStream, linha: &str) -> std::io::Result<()> {
 }
 
 /// Lê UMA resposta (ignora eventos assíncronos, que não têm `id`).
+#[cfg(unix)]
 fn read_reply(r: &mut impl BufRead) -> std::io::Result<String> {
     loop {
         let mut l = String::new();
@@ -59,6 +63,7 @@ fn read_reply(r: &mut impl BufRead) -> std::io::Result<String> {
     }
 }
 
+#[cfg(unix)]
 fn ok(linha: &str) -> bool {
     parse(linha)
         .ok()
@@ -67,6 +72,7 @@ fn ok(linha: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(unix)]
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut socket = None;
@@ -192,4 +198,15 @@ fn main() {
     }
 
     std::process::exit(if ok(&resposta) { 0 } else { 1 });
+}
+
+/// Fora de unix o `ledctl` recusa arrancar (TD-021): fala o IPC v1 sobre UDS (ADR-0014).
+/// Antes o ficheiro inteiro era `#![cfg(unix)]` e o bin ficava sem `main` (E0601).
+///
+/// Sai com **3**, não 2: na tabela SAÍDA acima, 2 é erro de uso e 3 é «não consigo falar com
+/// o socket» — que é exatamente o caso aqui, onde não há socket UDS com que falar.
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("ledctl: requer unix (canal de controlo UDS, ADR-0014).");
+    std::process::exit(3);
 }

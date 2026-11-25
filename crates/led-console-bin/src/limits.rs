@@ -5,7 +5,7 @@ use std::time::Duration;
 
 /// Corpo máximo aceite do browser. **É o mesmo `MAX_LINE` do GS3**, e pela mesma razão: sem
 /// um teto, um cliente que nunca feche o pedido faz o processo crescer sem limite.
-pub const MAX_BODY: usize = led_daemon_bin::server::MAX_LINE;
+pub const MAX_BODY: usize = led_daemon_bin::limits::MAX_LINE;
 
 /// Profundidade máxima de JSON. **É o mesmo `MAX_DEPTH` do GS3**: `[[[[[…` recursivo estoura
 /// a pilha, e um cliente derrubaria o processo com uma linha de texto.
@@ -33,7 +33,7 @@ pub const BACKOFF_INICIAL: Duration = Duration::from_millis(50);
 /// para responder não torna a religação mais provável — só atrasa o regresso do serviço
 /// depois de o daemon já estar de pé. E derivar em vez de escrever `5` impede os dois números
 /// de divergirem no dia em que um deles mudar.
-pub const BACKOFF_MAX: Duration = led_daemon_bin::server::REPLY_TIMEOUT;
+pub const BACKOFF_MAX: Duration = led_daemon_bin::limits::REPLY_TIMEOUT;
 
 /// O timeout HTTP do console — **derivado** do `REPLY_TIMEOUT` do daemon (ADR-0026 §12).
 ///
@@ -44,7 +44,7 @@ pub const BACKOFF_MAX: Duration = led_daemon_bin::server::REPLY_TIMEOUT;
 /// comando — e o operador veria o show mudar depois de a UI ter dito que não mudou. Escrever
 /// um segundo `Duration::from_secs(5)` aqui empataria os dois no dia em que um deles mudasse.
 pub fn http_timeout() -> Duration {
-    led_daemon_bin::server::REPLY_TIMEOUT + MARGEM_HTTP
+    led_daemon_bin::limits::REPLY_TIMEOUT + MARGEM_HTTP
 }
 
 /// **ADR-0026 §10 — loopback-only enquanto o `ClientRegistry` do ADR-0014 estiver vazio.**
@@ -71,7 +71,7 @@ mod tests {
     /// `REPLY_TIMEOUT` mudar, este teste é o que fica vermelho.
     #[test]
     fn o_timeout_http_e_estritamente_maior_que_o_do_daemon() {
-        let daemon = led_daemon_bin::server::REPLY_TIMEOUT;
+        let daemon = led_daemon_bin::limits::REPLY_TIMEOUT;
         assert!(
             http_timeout() > daemon,
             "HTTP {:?} tem de ser MAIOR que o REPLY_TIMEOUT {daemon:?}; caso contrario o \
@@ -85,7 +85,7 @@ mod tests {
     /// Os limites do GS3 são os mesmos objetos, não cópias com o mesmo valor.
     #[test]
     fn os_limites_sao_os_do_gs3_e_nao_copias() {
-        assert_eq!(MAX_BODY, led_daemon_bin::server::MAX_LINE);
+        assert_eq!(MAX_BODY, led_daemon_bin::limits::MAX_LINE);
         assert_eq!(MAX_JSON_DEPTH, led_daemon_bin::json::MAX_DEPTH);
         assert_eq!(MAX_BODY, 64 * 1024, "e o valor continua a ser o do GS3");
         assert_eq!(MAX_JSON_DEPTH, 16);
