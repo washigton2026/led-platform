@@ -1227,6 +1227,39 @@ pending_gate: |
   listar TODAS as falhas Windows (o cargo parava no primeiro binario a reprovar; os
   binarios a seguir ao led-daemon-bin lib = NOT_MEASURED neste run). Log:
   ~/lumyx-evidence/2026-11-22-td021/ciclo5/job-138058062748-failed.log.
+  4.a FALHA DO JOB (2026-11-24), lida no log com --no-fail-fast: run 45512667325, job
+  138864078249 (sha 09e8cd6): 105 binarios ok, 2 FAILED. Corrigidas neste ciclo (ciclo6):
+  (A) `output::tests::um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida`
+  (led-daemon-bin, output.rs): passa a `#[cfg(unix)]`, com os 2 helpers (`ALVO_MORTO`,
+  `enviar_ate_o_no_morrer`), cujo unico consumidor e esse teste. Decisao do CIO: a premissa
+  do no morto (C0) so foi medida em Ubuntu/macOS e o led-daemon recusa arrancar fora de
+  unix (f574ca2). PERDA DE COBERTURA REGISTADA: o isolamento por no (ADR-0029 §5) NAO e
+  exercitado no Windows. Os irmaos em tests/e2e_output.rs e tests/estado_por_alvo.rs ja
+  eram so-unix. Logica de producao intocada.
+  (B) `signing::tests::generate_produces_distinct_working_identities` (led-show-recorder):
+  DEFEITO DE PRODUCAO — `ShowSigner::generate()` lia `/dev/urandom`, que nao existe no
+  Windows. Passa a `getrandom::fill` (dep directa getrandom 0.3, feature `std`; o lock so
+  ganha a aresta, 0.3.4 ja la estava). Assinatura publica inalterada, sem fallback. Accept
+  N3 + emenda com modelo de ameaca: ~/lumyx-evidence/2026-11-22-td021/ciclo6/accept-B.md.
+  Testes novos: `from_seed_depende_de_cada_byte_da_semente`,
+  `getrandom_usa_o_backend_por_omissao` (check-cfg no [lints.rust] do crate),
+  `generate_usa_getrandom_e_nao_ha_cfg_em_producao` (normaliza CRLF — F2 da ronda 3).
+  Controlos negativos [VERIFICADOS], todos reprovam: M1 semente a zeros · M2 volta o
+  /dev/urandom · N1 from_seed zera seed[4..] · N2 RUSTFLAGS --cfg getrandom_backend="rdrand"
+  · N3/N3b atributo cfg em producao · ficheiro em CRLF sem a normalizacao. N4 (`? ;`) passa.
+  Gauntlet: 3 rondas N3; a 3.a nao fechou e o CIO escolheu commit com divida (opcao 3).
+  DIVIDA ABERTA (fugas DENTRO do modelo de ameaca, confirmadas por mutacao executada pelo
+  falsifier, ~/lumyx-evidence/2026-11-22-td021/ciclo6/falsifier-r3/E*.log, F1.log — os 15
+  testes do crate ficam verdes em cada uma):
+    E1 `getrandom::fill(&mut seed[..16])?` — so 128 bits da semente vem do SO.
+    E2 `if getrandom::fill(&mut seed).is_err() { seed[..16] = <relogio> }` — fallback ao relogio.
+    E3 `let _ = getrandom::fill(&mut seed);` — erro engolido, semente a zeros em silencio.
+    E4 `getrandom::fill(&mut seed)?` seguido de `seed[..16]` sobrescrito com o relogio.
+    F1 (falso vermelho) `use getrandom::fill;` + `fill(&mut seed)?` reprova o teste estrutural.
+  Fora do modelo (revisao do PR + security-guardian, nao testes): generate() isco sob
+  cfg(test), corpo isco em comentario, modulo local/alias chamado getrandom.
+  NOT_MEASURED: caminho de erro do getrandom (sem ponto de injeccao); Windows msvc ate ao
+  proximo run do job windows lido no log. Status continua pending-verification.
   HISTORICO (1.a camada, bc01fd6), mantido como registo:
   Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
   failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
