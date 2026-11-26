@@ -2331,8 +2331,7 @@ falsification_required: |
 td_id:     TD-037
 title:     "scripts/audit_gate.py não verifica a unicidade do td_id: o merge 8e64f68 (origin/main com o #64 em fix/td-035-fanout-tempo) deixou dois blocos td_id TD-035 no ledger e o pre-commit deu 34 entries, 0 Critical"
 severity:  Medium
-status:    closed
-closed_on: 2026-11-26
+status:    pending-verification
 origin:    "Renumeração TD-035 → TD-036 (2026-11-26): o #64 (3899dea) registou o TD-035 = fugas E1–E4 do ShowSigner e o ramo fix/td-035-fanout-tempo (bb38362) usava o mesmo número. O commit de merge 8e64f68 passou o hook com os dois blocos; só o grep -c manual apanhou a colisão (~/lumyx-evidence/2026-11-26-td-fanout/renumeracao/06-controlo-negativo.txt)."
 source_files: scripts/audit_gate.py, tests/test_audit_gate.py
 context: |
@@ -2344,7 +2343,14 @@ fix: |
   Regra 7 do gate: Gate.duplicados() corre sobre todas as entradas antes das verificações por TD; cada td_id com mais
   de uma entrada é Critical, seja qual for o status. Também pelo --check-td (filtra por id e mantém as duas).
   Fixture tests/fixtures/ledger_td_id_duplicado.md reproduz a forma real (open + pending-verification com o mesmo id).
-closed_by: "Ramo fix/td-037-td-id-duplicado (2026-11-26): regra 7 + test_td_id_duplicado_e_critical + controlo test_td_id_distintos_nao_disparam_a_regra. tests/test_audit_gate.py 36 passed; 0 failed."
+fix_ref:   "Ramo fix/td-037-td-id-duplicado (2026-11-26): regra 7 + test_td_id_duplicado_e_critical + controlo test_td_id_distintos_nao_disparam_a_regra. tests/test_audit_gate.py 36 passed; 0 failed (local). A regra só se prova na CI do PR."
+pending_gate: |
+  CI do PR deste ramo lida job a job: gate suite (audit_gate + hook) com «test test_td_id_duplicado_e_critical ... ok»,
+  «test test_td_id_distintos_nao_disparam_a_regra ... ok» e «test_audit_gate: 36 passed; 0 failed»; debt gate
+  (audit_gate.py) com «Result: 0 Critical». O fecho (status closed, closed_on, closed_by) vai num commit posterior,
+  depois dessa leitura (decisão do proprietário, 2026-11-26). evidence_ref, required_test e negative_control abaixo
+  são a evidência LOCAL e ficam para o fecho.
+review_by: 2026-12-15
 evidence_ref: docs/evidence/td-037-td-id-duplicado-2026-11-26.md
 required_test: test_td_id_duplicado_e_critical
 negative_control: |
