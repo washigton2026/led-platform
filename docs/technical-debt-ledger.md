@@ -2217,3 +2217,37 @@ negative_control: |
   os dois testes passam.
 review_by: 2026-12-15
 ```
+
+---
+
+## TD-035 — `custo_do_fanout` afirma uma razão de tempo de parede num teste da CI: reprovou no macos-26 sem mudança de código
+
+```yaml
+td_id:     TD-035
+title:     "o_custo_do_fanout_e_medido_e_nao_cresce_superlinearmente (led-daemon-bin) asserta razao_sem <= 8.0 sobre tempos de parede no binário de testes da CI: 9.20× no test (macos-26), verde na repetição"
+severity:  Medium
+status:    pending-verification
+fix_ref:   "branch fix/td-035-fanout-tempo (2026-11-26): o veredito de tempo sai do teste da CI para um gate de performance manual `#[ignore]` no mesmo ficheiro (o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente), no molde do TD-006; os asserts de alocação ficam iguais, no teste renomeado o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas. Os dois serializados por um Mutex (SERIE), como o ALLOC_GATE do led-hal."
+pending_gate: |
+  CI do PR desta branch lida job a job: test (macos-26) e test (ubuntu-24.04) com
+  «o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas ... ok» e
+  «o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente ... ignored». Fecha por ordem do operador.
+review_by: 2026-12-15
+related:   TD-006 (mesma classe: orçamento de tempo de parede num teste partilhado; resolvido com #[ignore] + execução manual), TD-024, TD-033
+origin:    "Ocorrência 1: run 45810176438/1, job 139875657757 `test (macos-26)` (macos-26-arm64), commit 453db9b, PR #56: «5 alvos custaram 9.20× um alvo (sem calibração), acima do limite de 8×» (custo_do_fanout.rs:257). Tentativa 2 (job 139880075073) verde. Registada em ~/lumyx-evidence/flakes.log (1.ª ocorrência, 1 repetição) e no TD-DRAFT ~/lumyx-evidence/2026-11-26-td030-fecho/TD-DRAFT-custo-do-fanout-tempo-de-parede.md."
+source_files: crates/led-daemon-bin/tests/custo_do_fanout.rs
+context: |
+  O teste mede 1 e 5 alvos, com e sem calibração, e assertava a razão 5:1 de ns/frame (mínimo de 5 rondas) <= 8×.
+  O próprio comentário registava 5.20× medido localmente e que um limite colado ao medido «reprova por carga da
+  máquina». O custo_do_fanout.rs não mudou entre 7aeec49 e 453db9b. NÃO medido: se os 9.20× foram carga do runner
+  ou desvio real.
+impact: |
+  Falsos vermelhos no job obrigatório test (macos-26), que custam reruns; com o D-REP, a 2.ª ocorrência é STOP.
+  Os asserts de alocação (exatos, sem ruído) são a parte do teste que tem de ficar na CI.
+required_fix: |
+  Tirar o assert de tempo do binário da CI para um gate de performance próprio (#[ignore] + execução manual, como o
+  TD-006); os asserts de alocação ficam iguais.
+falsification_required: |
+  O gate de tempo ainda sabe reprovar (LIMITE plantado a 1.0 → panicked); o de alocação também (5.0 → 4.0 →
+  panicked). O teste da CI corre com o de tempo em `ignored`. Evidência em ~/lumyx-evidence/2026-11-26-td-fanout/.
+```

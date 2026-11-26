@@ -17,11 +17,11 @@
 //! *fatias diferentes*, não *número de alvos*. Com **7500 px** os cinco levam exactamente
 //! 1500, que é o mesmo que o alvo único leva. A única variável passa a ser quantos são.
 //!
-//! ## Um só `#[test]`, de propósito
+//! ## Um só `#[test]` na CI, de propósito — o gate de tempo é `#[ignore]` (TD-035)
 //!
 //! O alocador é **global ao processo** e cada ficheiro de teste é um binário próprio. Um
-//! `#[test]` vizinho a alocar em paralelo tornaria a medição ruído — é a mesma razão que o
-//! `led-protocols/tests/no_alloc.rs` já regista.
+//! `#[test]` vizinho a alocar em paralelo tornaria a medição ruído (a razão do `led-protocols/
+//! tests/no_alloc.rs`); por isso o gate de tempo, manual, partilha o `SERIE` e nunca corre junto.
 
 use led_core::{LogicalFrame, PixelColor};
 use led_daemon_bin::output::Alvo;
@@ -166,7 +166,8 @@ fn medir(n: usize, gamma: f32) -> Medida {
 }
 
 #[test]
-fn o_custo_do_fanout_e_medido_e_nao_cresce_superlinearmente() {
+fn o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas() {
+    let _serie = SERIE.lock().unwrap_or_else(|e| e.into_inner());
     let um_sem = medir(1, 1.0);
     let um_com = medir(1, 2.2);
     let cinco_sem = medir(5, 1.0);
@@ -240,6 +241,37 @@ fn o_custo_do_fanout_e_medido_e_nao_cresce_superlinearmente() {
          ADR-0019 Emenda 1 foi violado: ela é aplicada uma vez, ANTES do fan-out"
     );
 
+    // O tempo é medido e impresso acima, mas o veredito de tempo NÃO é deste teste: saiu para
+    // `o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente` (`#[ignore]`, TD-035). Um
+    // limite de relógio de parede num binário que corre na CI reprova por carga do runner —
+    // 9.20× contra 8× no macos-26 (run 45810176438/1), verde na repetição.
+}
+
+/// Serializa os dois `#[test]` deste binário: o contador de alocações é global ao processo, e
+/// um `--include-ignored` corria-os em paralelo, com o de tempo a alocar dentro da janela do
+/// de alocações. Mesma solução do `ALLOC_GATE` do `led-hal/tests/no_alloc.rs`.
+static SERIE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// **Gate de performance manual (TD-035), no molde do TD-006** — fora da CI, porque é uma
+/// razão de tempo de parede. Correr num processo próprio, com a máquina parada:
+///
+/// `cargo test -p led-daemon-bin --test custo_do_fanout -- --ignored --exact o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente`
+#[test]
+#[ignore = "gate de performance manual (TD-035): razão de tempo de parede, fora da CI"]
+fn o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente() {
+    let _serie = SERIE.lock().unwrap_or_else(|e| e.into_inner());
+    let um_sem = medir(1, 1.0);
+    let um_com = medir(1, 2.2);
+    let cinco_sem = medir(5, 1.0);
+    let cinco_com = medir(5, 2.2);
+    let razao_sem = cinco_sem.ns_por_frame as f64 / um_sem.ns_por_frame.max(1) as f64;
+    let razao_com = cinco_com.ns_por_frame as f64 / um_com.ns_por_frame.max(1) as f64;
+    let perfil_build = if cfg!(debug_assertions) { "debug" } else { "release" };
+    println!(
+        "\n── TD-035 · razão 5:1 ({perfil_build}, {POR_NO} px por alvo, {FRAMES} frames × \
+         {RONDAS} rondas, mínimo): sem calibração {razao_sem:.2}× · com γ 2.2 {razao_com:.2}×\n"
+    );
+
     // ── O tempo: gate GENEROSO, e a razão está escrita ───────────────────────
     //
     // Medido nesta máquina (debug, mínimo de 5 rondas): **5.20× sem calibração** e **4.40×
@@ -249,10 +281,10 @@ fn o_custo_do_fanout_e_medido_e_nao_cresce_superlinearmente() {
     // calibração a razão **desce**, porque a calibração é custo fixo (aplicada uma vez) e
     // portanto engorda o denominador.
     //
-    // O limite fica em 8×: acima do estrutural com folga para o ruído de um runner
-    // partilhado, e muito abaixo do que uma regressão quadrática produziria (5 alvos em
-    // O(n²) dariam ~25×). Um limite colado aos 5.20 medidos seria um gate que reprova por
-    // carga da máquina em vez de por defeito — o erro que o TD-006 já nomeou.
+    // O limite fica em 8×: acima do estrutural com folga para o ruído, e muito abaixo do que
+    // uma regressão quadrática produziria (5 alvos em O(n²) dariam ~25×). Mesmo com 8×, num
+    // runner partilhado deu 9.20× e passou na repetição sem mudança de código (TD-035) — por
+    // isso este gate é manual e não corre na CI, como o TD-006.
     const LIMITE: f64 = 8.0;
     assert!(
         razao_sem <= LIMITE,
