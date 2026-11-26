@@ -1,0 +1,12 @@
+diff --git a/crates/led-pixel-engine/src/seqlock.rs b/crates/led-pixel-engine/src/seqlock.rs
+index 3f6cbca..49ecdc7 100644
+--- a/crates/led-pixel-engine/src/seqlock.rs
++++ b/crates/led-pixel-engine/src/seqlock.rs
+@@ -90,7 +90,6 @@ impl<const W: usize> Leitor<W> {
+         for (p, a) in palavras.iter_mut().zip(slot.iter()) {
+             *p = a.load(Ordering::Relaxed);
+         }
+-        fence(Ordering::Acquire);
+         let s2 = l.seq.load(Ordering::Relaxed);
+         (s1 == s2).then_some(palavras)
+     }

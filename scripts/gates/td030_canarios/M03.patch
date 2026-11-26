@@ -1,0 +1,16 @@
+diff --git a/crates/led-pixel-engine/src/seqlock.rs b/crates/led-pixel-engine/src/seqlock.rs
+index 3f6cbca..5029437 100644
+--- a/crates/led-pixel-engine/src/seqlock.rs
++++ b/crates/led-pixel-engine/src/seqlock.rs
+@@ -72,10 +72,10 @@ impl<const W: usize> Escritor<W> {
+     pub(crate) fn escrever(&mut self, palavras: [u64; W]) {
+         let l = &*self.latch;
+         let s = l.seq.load(Ordering::Relaxed); // só este escritor a altera
+-        fence(Ordering::Release);
+         for (a, v) in l.slots[(s.wrapping_add(1) & 1) as usize].iter().zip(palavras) {
+             a.store(v, Ordering::Relaxed);
+         }
++        fence(Ordering::Release);
+         l.seq.store(s.wrapping_add(1), Ordering::Release);
+     }
+ }

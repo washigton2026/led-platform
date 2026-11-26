@@ -389,6 +389,37 @@ jobs:
           fi
           echo "miri audio-core: ${executado}/${esperado} testes (piso ${PISO}), exit ${code}"
 
+  # ── Bloqueante: TD-030 — o latch de sequência sob loom, com N>0 e canários ───
+  #
+  # Job próprio, e não um step da matriz `test`: o loom exige `RUSTFLAGS="--cfg loom"`, que recompila o grafo
+  # inteiro com outra configuração; enxertá-lo na matriz mudaria o `cargo test` dela (mesma razão do job `miri`).
+  # Um só runner: o loom é um verificador de modelos — explora as intercalações e o modelo de memória C11 que ele
+  # próprio simula, por isso o veredito não depende da arquitetura do runner (x86 TSO não esconde nada aqui).
+  #
+  # O passo é o script versionado, igual em local e na CI (não YAML inline): o veredito não depende de onde corre.
+  # O script prova três coisas (ver o cabeçalho dele):
+  #   A. os oráculos std do TD-030 executam como `ok` (0 `#[ignore]`; nomes obrigatórios) — R02;
+  #   B. o loom executa N == N_listado >= 2 testes e o O3 é não-vácuo — R01, R03, R04 (KB-012);
+  #   C. 7 canários (M01–M03, M05–M07, M09) são mortos por CADA teste loom — o gate sabe reprovar.
+  loom-td030:
+    name: loom (TD-030 seqlock)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Chave própria: `--cfg loom` produz outro grafo de compilação (target/loom).
+          key: loom-td030
+      - name: Toolchain efetivo (evidência, não suposição)
+        run: rustc --version && cargo --version
+      - name: TD-030 gate (oráculos std + loom N>0 + canários)
+        shell: bash
+        env:
+          CARGO_TARGET_DIR_LOOM: target/loom
+        run: scripts/gates/td030_loom_gate.sh
+
   # ── Não-bloqueante: Windows é suportado, mas não conduz o design ─────────────
   windows:
     name: windows (allow-failure)

@@ -1,0 +1,13 @@
+diff --git a/crates/led-pixel-engine/src/seqlock.rs b/crates/led-pixel-engine/src/seqlock.rs
+index 3f6cbca..6d56574 100644
+--- a/crates/led-pixel-engine/src/seqlock.rs
++++ b/crates/led-pixel-engine/src/seqlock.rs
+@@ -76,7 +76,7 @@ impl<const W: usize> Escritor<W> {
+         for (a, v) in l.slots[(s.wrapping_add(1) & 1) as usize].iter().zip(palavras) {
+             a.store(v, Ordering::Relaxed);
+         }
+-        l.seq.store(s.wrapping_add(1), Ordering::Release);
++        l.seq.store(s.wrapping_add(1), Ordering::Relaxed);
+     }
+ }
+ 
