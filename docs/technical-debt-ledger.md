@@ -2281,10 +2281,10 @@ review_by: 2026-12-31
 
 ---
 
-## TD-035 — `custo_do_fanout` afirma uma razão de tempo de parede num teste da CI: reprovou no macos-26 sem mudança de código
+## TD-036 — `custo_do_fanout` afirma uma razão de tempo de parede num teste da CI: reprovou no macos-26 sem mudança de código
 
 ```yaml
-td_id:     TD-035
+td_id:     TD-036
 title:     "o_custo_do_fanout_e_medido_e_nao_cresce_superlinearmente (led-daemon-bin) asserta razao_sem <= 8.0 sobre tempos de parede no binário de testes da CI: 9.20× no test (macos-26), verde na repetição"
 severity:  Medium
 status:    pending-verification
