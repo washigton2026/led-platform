@@ -508,6 +508,47 @@ jobs:
             exit 1
           fi
           echo "miri seqlock: ${executado}/${esperado} testes (piso ${PISO}), exit ${code}"
+      - name: Miri — canários do seqlock (o gate sabe reprovar)
+        # Controlo negativo DENTRO do job (decisão do proprietário, 2026-11-26; molde do td030_loom_gate.sh): M01
+        # (`w-sem-fence-release`) e M05 (`r-s1-relaxed`) de scripts/gates/td030_canarios/ aplicados ao HEAD, o MESMO
+        # comando Miri com o MESMO toolchain e MIRIFLAGS="". Cada canário TEM de reprovar com «panicked at» em
+        # src/seqlock.rs e com 0 «error[E». Um canário que passa, que não aplica ou que não compila reprova o job. No
+        # fim a árvore tem de estar reposta. Não se exige «Compiling»: o cargo-miri relê o crate da FONTE ao correr
+        # (medido: M05 sem «Compiling» panica nas linhas do M05). Se correr código não mutado, o canário passa e o job
+        # reprova — o erro cai sempre do lado seguro.
+        shell: bash
+        run: |
+          set -euo pipefail
+          SEQ=crates/led-pixel-engine/src/seqlock.rs
+          FILTRO='seqlock::tests::'
+          OUT="${RUNNER_TEMP:-$(mktemp -d)}"
+          export MIRIFLAGS=""
+          [ -z "${RUSTFLAGS:-}${CARGO_ENCODED_RUSTFLAGS:-}" ] || { echo "::error::RUSTFLAGS definido — canários recusados."; exit 1; }
+          git diff --quiet || { echo "::error::a árvore tem alterações antes dos canários; aplicam-se sobre o HEAD."; exit 1; }
+          reverter() { git checkout -q -- "$SEQ"; }
+          trap reverter EXIT
+          for id in M01 M05; do
+            p=scripts/gates/td030_canarios/$id.patch
+            [ -f "$p" ] || { echo "::error::canário $id: $p não existe."; exit 1; }
+            git apply --check "$p" 2>/dev/null || { echo "::error::canário $id já não aplica ao código atual — atualizar o canário com o código."; exit 1; }
+            git apply "$p"
+            log="$OUT/miri-seqlock-canario-$id.txt"
+            set +e
+            cargo +nightly-2026-06-02 miri test -p led-pixel-engine --locked --lib "$FILTRO" > "$log" 2>&1
+            code=$?
+            set -e
+            reverter
+            if grep -aqE '^error\[E[0-9]+\]' "$log"; then
+              cat "$log"; echo "::error::canário $id não compilou — não prova nada."; exit 1
+            fi
+            if [ "$code" -eq 0 ] || ! grep -aqE "panicked at $SEQ:[0-9]+" "$log"; then
+              cat "$log"; echo "::error::canário $id sobreviveu (exit $code) — o Miri do seqlock deixou de detetar este erro de ordering."; exit 1
+            fi
+            echo "canário $id morto: $(grep -aoE "panicked at $SEQ:[0-9]+:[0-9]+" "$log" | head -1) · $(grep -aE 'test result:' "$log" | head -1)"
+          done
+          trap - EXIT
+          git diff --exit-code || { echo "::error::a árvore não ficou reposta depois dos canários."; exit 1; }
+          echo "miri seqlock: 2 canários mortos (M01, M05), árvore reposta."
 
   # ── Bloqueante: TD-030 — o latch de sequência sob loom, com N>0 e canários ───
   #
