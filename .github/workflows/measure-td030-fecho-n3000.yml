@@ -1,0 +1,53 @@
+# [MEDICAO] TD-030 fecho N=3000 — NÃO FAZER MERGE. Ramo descartável measure/td030-fecho-n3000 sobre 7aeec49
+# (fix/td-030-seqlock). D7 do dossier, opção B. Método do #53 (measure-td030-fix.yml), só N muda: 1000 → 3000.
+# F = led-pixel-engine do seqlock (7aeec49); C = pré-correção 28be05e (ArcSwap + teste de isolamento) = controlo.
+# Regra de saída fixada antes de medir: ~/lumyx-evidence/2026-11-25-td030-medicao/accept.md
+#   0 violações em F nas três arquiteturas → manter o seqlock; ≥1 em qualquer uma → PARAR, abrir std::RwLock. Sem ronda 3.
+# Não toca no ci.yml (vigiado pelo TD-027).
+name: measure-td030-fecho-n3000
+
+on:
+  pull_request:
+
+jobs:
+  fecho:
+    name: fecho N=3000 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # #53: N=1000 levou ~40 min no ubuntu-24.04-arm (o mais lento) → ~120 min a N=3000; folga até ao teto de 360.
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build de F (seqlock 7aeec49) e C (pré-correção 28be05e)
+        shell: bash {0}
+        run: |
+          pick() { python3 -c 'import json,sys
+          for l in open(sys.argv[1]):
+              try: m=json.loads(l)
+              except: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="led_pixel_engine" and m["profile"]["test"]: print(m["executable"])' "$1" | head -1; }
+          git log --oneline -1 7aeec49; git log --oneline -1 28be05e
+          cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > build-f.json 2> build-f.err; echo "build_f_exit=$?"
+          git worktree add ../pre 28be05e
+          (cd ../pre && CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../t-pre cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > $GITHUB_WORKSPACE/build-c.json 2> $GITHUB_WORKSPACE/build-c.err); echo "build_c_exit=$?"
+          F=$(pick build-f.json); C=$(pick build-c.json)
+          [ -n "$F" ] && [ -n "$C" ] || { echo "::error::binário F ou C não encontrado — medição inválida"; exit 1; }
+          echo "F=$F" >> $GITHUB_ENV; echo "C=$C" >> $GITHUB_ENV; echo "F=$F C=$C"
+          echo "arc_swap em C: $(grep -c arc_swap build-c.json || true) · em F: $(grep -c arc_swap build-f.json || true)"
+      - name: N=3000 intercalado
+        shell: bash {0}
+        run: |
+          uname -m; sysctl -n machdep.cpu.brand_string 2>/dev/null || grep -m1 'model name' /proc/cpuinfo || true
+          bash .github/measure-td030-fecho-n3000/intercalado-fecho.sh "$F" "$C" 3000 out
+          echo "== F: pânicos (primeiros 10)"; grep -ah 'panicked at\|violated\|violado' out/F/it-*.out | head -10
+          echo "== C: pânicos (primeiros 10)"; grep -ah 'coherence violated\|isolamento violado' out/C/it-*.out | head -10 | cut -c1-300
+          echo "RESULTADO td030-fecho-n3000 os=${{ matrix.os }} arch=$(uname -m) $(tr '\n' ' ' < out/RESUMO.txt)"
