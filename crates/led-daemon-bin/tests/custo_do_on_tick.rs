@@ -81,7 +81,7 @@ static A: Contador = Contador;
 // ── Parâmetros ───────────────────────────────────────────────────────────────
 
 /// O `max_pixels` do preset: **um** alvo com offset 0 é o caminho rápido que o
-/// `custo_do_fanout.rs:214` fixa em zero alocações no `send`. Assim, o que este ficheiro
+/// `custo_do_fanout.rs:215` fixa em zero alocações no `send`. Assim, o que este ficheiro
 /// medir a mais que zero vem do **resto** do tick, não do fan-out.
 const PX: u32 = 1500;
 /// 40 Hz — a cadência real do daemon, não um número de conveniência.
