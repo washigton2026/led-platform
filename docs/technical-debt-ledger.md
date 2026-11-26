@@ -195,9 +195,19 @@ td_id:     TD-002
 alias:     TD-010 (registrado em 2026-06-18 antes de reconciliação)
 title:     "AudioShare scalars() adquiria lock no render hot-path por frame; atomics violavam coerência"
 severity:  High
-status:    open
+status:    closed
 first_closed_on: 2026-06-19 (commit 94c42e4 — ArcSwap)
 reopened_on: 2026-10-11
+closed_on: 2026-11-26
+closed_by: "Decisao do proprietario (2026-11-26): fecha com o TD-030 e com a mesma evidencia (docs/evidence/td-030-fecho-2026-11-26.md). Medicao de fecho N=3000 (PR #65 [MEDICAO], run 45738144174): o seqlock de fix/td-030-seqlock (7aeec49, PR #56) da 0/3000 violacoes em ubuntu-24.04 x86_64, macos-26 arm64 e ubuntu-24.04-arm aarch64. Fecha COM OS MESMOS DESVIOS do TD-030 (ver desvios_fecho): o criterio do accept v3 NAO foi cumprido."
+evidence_ref: docs/evidence/td-030-fecho-2026-11-26.md
+required_test: audioshare_scalars_beat_timestamp_coherent_under_concurrency
+source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs, crates/led-pixel-engine/tests/td030_estrutural.rs, crates/led-pixel-engine/tests/no_alloc_reativo.rs
+fix_substituido: |
+  ArcSwap -> seqlock. O fix do primeiro fecho (ArcSwap<AudioScalars>, arc-swap 1.9.1; campos fix_original e
+  verified_original abaixo, mantidos como historico) foi substituido pelo latch de sequencia proprio do TD-030
+  (crates/led-pixel-engine/src/seqlock.rs, sem unsafe); o arc-swap saiu do workspace. Referencia cruzada: TD-030
+  (required_fix_v2/v3, measured, negative_control, desvios_fecho).
 reopen_reason: |
   REABERTO (ordem F, 1a): o fecho assentou em «ArcSwap = 0 violações» medido numa execução ISOLADA do teste de
   coerência (evidence_ref abaixo: 1 passed, 45 filtered out). O TD-030 contradiz essa evidência: com outros testes em
@@ -211,7 +221,9 @@ history: |
     (beat e timestamp_ms podiam vir de publishes diferentes, quebrando BeatFlash).
   Commit 57f7722: volta para RwLock<AudioScalars> — coerente mas lock ainda presente.
   Commit final: ArcSwap<AudioScalars> — lock-free E coerente. Ambas as propriedades.
-fix: |
+  (2026-10-11: a coerencia do ArcSwap foi desmentida pelo TD-030; 2026-11-26: substituido pelo seqlock.)
+fix_original: |
+  HISTORICO (substituido, ver fix_substituido).
   led-pixel-engine/src/reactive.rs + Cargo.toml: dep arc-swap = "1" adicionada.
 
   AudioShare:
@@ -226,7 +238,8 @@ fix: |
 reproduce: |
   grep -n 'read()\|write()\|lock()\|borrow()' crates/led-pixel-engine/src/reactive.rs
   → ZERO dentro de scalars(). Só spectrum.write() e spectrum.read() fora do render path.
-verified: |
+verified_original: |
+  HISTORICO (primeiro fecho, ArcSwap; a evidencia era docs/evidence/td-002-arcswap.txt).
   49 led-pixel-engine tests pass incluindo:
     - audioshare_concurrent_publish_read_no_deadlock (8 threads)
     - audioshare_scalars_beat_timestamp_coherent_under_concurrency (10k frames,
@@ -237,12 +250,18 @@ verified: |
     runner). Zero unsafe em reactive.rs — arc-swap encapsula o seu próprio unsafe.
     triple.rs (o único unsafe em led-pixel-engine) permanece Miri-clean (24 seeds, prev).
   KB-011 criado: regra permanente "AudioFeatures cross-thread = snapshot coerente inteiro".
-evidence_ref:     docs/evidence/td-002-arcswap.txt
 negative_control: |
-  Para RT-LOCK-RENDER-001: grep -n 'read()\|lock()' reactive.rs dentro de scalars()
-  deve retornar ZERO linhas. Qualquer linha retornada REPROVA (detector regride).
-  Para coerência: com per-field atomics, audioshare_scalars_beat_timestamp_coherent_under_concurrency
-  retornaria ~5000 violações em 10k frames. ArcSwap = 0 violações. Teste reprova se > 0.
+  O mesmo do TD-030 (evidence_ref, sec. 3): NEG-1 — o ArcSwap pre-correcao (28be05e), intercalado com o seqlock na
+  medicao de fecho, da 68/3000 iteracoes com violacao em macos-26 arm64 (run 45738144174, job 139636284296), onde o
+  seqlock da 0/3000. NEG-2 — as mutacoes M01, M02, M03, M05, M06, M07, M09 do protocolo do seqlock sao mortas pelo
+  loom (run 44972169387, job 137054117026: «7 canarios mortos»).
+  Historico (primeiro fecho): com per-field atomics o teste de coerencia dava ~5000 violacoes em 10k frames.
+desvios_fecho: |
+  Os mesmos do TD-030, aprovados pelo proprietario a 2026-11-26; o criterio do accept v3 NAO foi cumprido.
+  (a) Sobreviventes que ficam como divida de forca dos testes: M04 (provavelmente equivalente, a confirmar) e
+  S02, S03, S04 — evasões deliberadas ao oráculo estrutural O4; o reforço desse oráculo é decisão pendente.
+  (b) DR-6 incompleto: o loom corre na CI mas nao e check obrigatorio da main; o Miri do seqlock nao esta na CI.
+  Detalhe no evidence_ref, sec. 4.
 ```
 
 ---
@@ -1936,7 +1955,11 @@ td_id:     TD-030
 title:     "audioshare_scalars_beat_timestamp_coherent_under_concurrency (o detetor do TD-002, closed) reprovou uma vez no runner macos-26-arm64: uma snapshot de AudioShare::scalars() com beat e timestamp_ms incoerentes"
 severity:  Critical
 severity_note: "Critical por decisão do operador (ordem F, 2026-10-11): a reprodução confirmou incoerência real e pior — scalars() devolve o snapshot de OUTRA instância de AudioShare. (Provisória High desde 2026-10-07.)"
-status:    open
+status:    closed
+closed_on: 2026-11-26
+closed_by: "Decisao do proprietario (2026-11-26): aceitou o resultado da medicao de fecho N=3000 (PR #65 [MEDICAO], fechado sem merge; run 45738144174, jobs 139636283990, 139636284296, 139636284481, lidos no log pela API) e o caminho de fecho. F = fix/td-030-seqlock @ 7aeec49 (PR #56): 0/3000 violacoes em ubuntu-24.04 x86_64, macos-26 arm64 e ubuntu-24.04-arm aarch64, com 12 testes em 3000 iteracoes nas tres. Regra de saida do accept da medicao: manter o seqlock. Fecha COM DESVIOS ao criterio do accept v3 (ver desvios_fecho): o criterio v3 NAO foi cumprido."
+evidence_ref: docs/evidence/td-030-fecho-2026-11-26.md
+required_test: audioshare_scalars_beat_timestamp_coherent_under_concurrency
 origin:    "PR #30 (R4.6, so a etiqueta da imagem macOS mudou), run 37585504571, job 112674573237 `test (macos-26)`, Image macos-26-arm64 20260907.0351.1 (a mesma do macos-latest): `panicked at crates/led-pixel-engine/src/reactive.rs:474:9: coherence violated 1 times: beat/timestamp_ms from different publishes`. Nao repetido (STOP, 2026-10-07). Unica ocorrencia conhecida; o teste passou em todas as runs anteriores lidas."
 source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs, crates/led-pixel-engine/tests/td030_estrutural.rs, crates/led-pixel-engine/tests/no_alloc_reativo.rs
 context: |
@@ -2010,6 +2033,26 @@ measured: |
   led-pixel-engine): macos-26 arm64 29/1000 (producao 14/1000); ubuntu-24.04 x86_64 0/1000; ubuntu-24.04-arm 0/1000;
   macOS x86_64 local: ver a evidencia de fecho. → a causa esta no arc-swap 1.9.1 (estrategia por omissao), nao no uso
   do LUMYX; levantamento: o AudioShare.scalars e o UNICO uso de arc-swap no workspace.
+  FECHO N=3000 (D7, opcao B; PR #65 [MEDICAO], fechado sem merge; run 45738144174, 2026-11-26): F = seqlock @ 7aeec49,
+  C = ArcSwap @ 28be05e, intercalados, 12 testes de reactive::adversarial_tests em 3000 iteracoes por arquitetura.
+  F: 0/3000 em ubuntu-24.04 x86_64, macos-26 arm64 e ubuntu-24.04-arm aarch64 (outros=[] nas tres).
+  C: 0/3000 em x86_64 e aarch64; 68/3000 em macos-26 arm64 (coerencia_original=1, isolamento=67).
+negative_control: |
+  NEG-1 — o controlo C da mesma medicao (run 45738144174, job 139636284296, macos-26 arm64): o ArcSwap pre-correcao
+  (28be05e), intercalado com F no mesmo runner, da 68/3000 iteracoes com violacao (coerencia_original=1,
+  isolamento=67), onde F da 0/3000. Em x86_64 e aarch64 Linux C da 0/3000: so o macos-26 arm64 discrimina.
+  NEG-2 — mutacoes do protocolo do seqlock apanhadas pelo loom: M01, M02, M03, M05, M06, M07, M09. Na CI sobre
+  7aeec49 (run 44972169387, job 137054117026 `loom (TD-030 seqlock)`): «TD-030 gate: OK — std 14 oraculos, loom
+  2/2, 7 canarios mortos», cada um por panico de assercao em seqlock.rs:238/239 (e :265/266), 0 `error[E`.
+  Localmente (falsifier 2026-11-12, 7aaea37, seqlock.rs byte-identico): as sete com pkg exit=0 e loom exit=101.
+  Excertos no evidence_ref, sec. 3.
+desvios_fecho: |
+  Desvios ao criterio de fecho do accept v3, aprovados pelo proprietario a 2026-11-26. O criterio v3 (G5 sem
+  sobreviventes DENTRO e DR-6 como check obrigatorio) NAO foi cumprido.
+  (a) Sobreviventes que ficam como divida de forca dos testes: M04 (w-slots-release-sem-fence; provavelmente
+  equivalente, a confirmar) e S02, S03, S04 — evasões deliberadas ao oráculo estrutural O4; o reforço desse oráculo é decisão pendente.
+  (b) DR-6 incompleto: o loom corre na CI mas nao e check obrigatorio da main; o Miri do seqlock nao esta na CI.
+  Detalhe no evidence_ref, sec. 4.
 review_by: 2026-11-30
 ```
 
