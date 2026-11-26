@@ -1210,7 +1210,27 @@ review_by: "antes de qualquer trabalho que dependa de sincronizacao multi-no (ne
 td_id:     TD-021
 title:     "`limits.rs` deriva `MAX_BODY` e `BACKOFF_MAX` de `led_daemon_bin::server`, que so existe em unix (IPC sobre UDS) — E0433 no Windows"
 severity:  Medium
-status:    pending-verification
+status:    closed
+closed_on: 2026-11-25
+closed_by: "PR #63 (fix/td-021-windows-consts, head 331914e), mergeado na main por squash em 6ce4ade. CI do #63 lida no log, job a job: run 45631768474 (331914e), job windows (allow-failure) 139266575158 — build sem erros, `cargo test --workspace --locked --no-fail-fast` 107 binários · 1078 passed; 0 failed; 9 ignored, clippy -D warnings sem erros; os 6 obrigatórios verdes no mesmo run (ubuntu-24.04 1186/0/9, macos-26 1190/0/9, miri, debt gate, gate suite, contrato TS)."
+evidence_ref: docs/evidence/td-021-windows-2026-11-25.md
+required_test: generate_produces_distinct_working_identities
+source_files: crates/led-daemon-bin/src/limits.rs, crates/led-console-bin/src/limits.rs, crates/led-show-recorder/src/signing.rs
+negative_control: |
+  O mesmo job windows (allow-failure) vermelho antes de cada camada da correção, lido no log job a job:
+  camada 1 — run 44972169387, job 137054117029 (7aeec49): 3x error[E0433] «cannot find `server` in
+  `led_daemon_bin`» em led-console-bin/src/limits.rs:8, :36, :47.
+  camada 2 — run 45276720871, job 138050310955 (f574ca2): o_typescript_versionado_e_exatamente_o_gerado
+  (CRLF no checkout, sem .gitattributes).
+  camada 3 — run 45278965537, job 138058062748 (683cda4): um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida
+  (nó morto 127.0.0.1:1 sem erro no send UDP do Windows).
+  camada 4 — run 45512667325, job 138864078249 (09e8cd6, --no-fail-fast): o required_test
+  `generate_produces_distinct_working_identities` FAILED em signing.rs:366 com «os entropy: Os { code: 3,
+  kind: NotFound }» (62 passed; 1 failed), mesma imagem windows-2025-vs2026 e rustc 1.100.0 do verde.
+  Controlos locais da correção B (M1, M2, N1, N2, N3/N3b, CRLF), todos vermelhos: registados pelo
+  operador em ~/lumyx-evidence/2026-11-22-td021/ciclo6/. Excertos no evidence_ref, secção 2.
+# As fugas E1–E4 e o falso vermelho F1 (Gauntlet ronda 3 da correção B) passaram para o TD-035 (open),
+# para continuarem vigiadas pelo audit_gate depois deste fecho.
 fix_ref:   "branch fix/td-021-windows-consts (2026-11-22/23): modulo `led_daemon_bin::limits` SEM cfg, com MAX_LINE e REPLY_TIMEOUT; `server` reexporta-os (`pub use crate::limits::{MAX_LINE, REPLY_TIMEOUT}`), portanto `server::MAX_LINE` continua a ser o MESMO objeto; `led-console-bin/src/limits.rs` deriva de `limits::*`. Valores inalterados (64 KiB, 5 s). Evidencia em ~/lumyx-evidence/2026-11-22-td021/."
 pending_gate: |
   2.a CAMADA (2026-11-23, decisao do CIO): fora de unix, `led-daemon` (exit 2, o mesmo da
@@ -1287,6 +1307,9 @@ pending_gate: |
   cfg(test), corpo isco em comentario, modulo local/alias chamado getrandom.
   NOT_MEASURED: caminho de erro do getrandom (sem ponto de injeccao); Windows msvc ate ao
   proximo run do job windows lido no log. Status continua pending-verification.
+  FECHO (2026-11-25): run 45631768474, job 139266575158 (331914e) — o job windows VERDE, lido
+  no log: build sem erros, 107 binarios 1078 passed / 0 failed / 9 ignored, clippy sem erros.
+  PR #63 mergeado em 6ce4ade. E1–E4 e F1 movidos para o TD-035.
   HISTORICO (1.a camada, bc01fd6), mantido como registo:
   Controlo negativo ja registado: run 44972169387 (sha 7aeec49), job 137054117029 =
   failure com 3x error[E0433] «cannot find `server` in `led_daemon_bin`» em
@@ -2216,6 +2239,44 @@ negative_control: |
   Nos seis: mensagem de diagnóstico, nunca pânico de unwrap(); 0 `error[E`. Repostos (base 4692ae2, run 44160888889),
   os dois testes passam.
 review_by: 2026-12-15
+```
+
+---
+
+## TD-035 — `ShowSigner::generate()` usa o getrandom, mas quatro maneiras acidentais de enfraquecer a semente passam os testes
+
+```yaml
+td_id:     TD-035
+title:     "Os testes de generate() (led-show-recorder/src/signing.rs) não apanham E1–E4: semente parcial (128 bits), fallback ao relógio, erro do getrandom engolido e semente sobrescrita depois do fill; e o teste estrutural tem um falso vermelho (F1)"
+severity:  Medium
+status:    open
+origin:    "Gauntlet N3 da correção B do TD-021 (ciclo6, 2026-11-24/25): ronda 3 do falsifier, dentro do modelo de ameaça escrito no accept (regressões ACIDENTAIS). Cada fuga foi confirmada por mutação executada, com os 15 testes do crate verdes. Logs do operador: ~/lumyx-evidence/2026-11-22-td021/ciclo6/falsifier-r3/E*.log e F1.log. O CIO escolheu o commit com dívida (opção 3); a correção entrou no PR #63 (6ce4ade)."
+source_files: crates/led-show-recorder/src/signing.rs
+context: |
+  A correção do TD-021 trocou /dev/urandom por `getrandom::fill(&mut seed)?` e acrescentou três testes:
+  `from_seed_depende_de_cada_byte_da_semente`, `getrandom_usa_o_backend_por_omissao` e
+  `generate_usa_getrandom_e_nao_ha_cfg_em_producao` (estrutural). Nenhum deles mede o que sai do getrandom
+  para dentro da semente. Fugas confirmadas:
+    E1 `getrandom::fill(&mut seed[..16])?` — só 128 bits da semente vêm do SO.
+    E2 `if getrandom::fill(&mut seed).is_err() { seed[..16] = <relógio> }` — fallback ao relógio.
+    E3 `let _ = getrandom::fill(&mut seed);` — erro engolido; a semente fica a zeros em silêncio.
+    E4 `getrandom::fill(&mut seed)?` seguido de `seed[..16]` sobrescrito com o relógio.
+    F1 (falso vermelho) `use getrandom::fill;` + `fill(&mut seed)?` reprova o teste estrutural, embora correto.
+  Fora do modelo (revisão do PR + security-guardian, não testes): generate() falso sob cfg(test), corpo em
+  comentário, módulo local ou alias com o nome getrandom.
+impact: |
+  Sem consequência hoje: o código atual está certo. Uma regressão destas passaria a CI e produziria chaves de
+  assinatura previsíveis — E3 com o getrandom a falhar dá sempre a mesma chave —, o que anula a garantia do
+  ADR-0004 (autenticidade do show assinado). Medium e não High: exige uma regressão; não é defeito ativo.
+required_fix: |
+  Separar a origem da entropia do resto de generate(): uma função interna que recebe a fonte (o getrandom em
+  produção, uma fonte de teste nos testes) e devolve a semente inteira ou o erro. Testes de comportamento sobre
+  ela: (a) os 32 bytes vêm todos da fonte (E1, E4); (b) uma fonte que falha devolve Err e nunca uma chave (E2, E3).
+  O teste estrutural passa a aceitar `fill` importado (F1). Assinatura pública de generate() inalterada.
+falsification_required: |
+  As mutações E1, E2, E3 e E4 têm de ficar vermelhas, e a F1 verde. A M1 (semente a zeros) e a M2 (volta o
+  /dev/urandom) do TD-021 continuam vermelhas.
+review_by: 2026-12-31
 ```
 
 ---
