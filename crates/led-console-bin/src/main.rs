@@ -29,6 +29,7 @@ use led_console_bin::http::{serve, Config};
 #[cfg(unix)]
 use std::net::SocketAddr;
 
+#[cfg(unix)]
 const AJUDA: &str = "\
 led-console — a fronteira HTTP/SSE entre o browser e o daemon (ADR-0026)
 

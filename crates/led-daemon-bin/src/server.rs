@@ -28,18 +28,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
-/// Tamanho máximo de uma linha de pedido. Sem isto, um cliente que nunca envie `\n` faz o
-/// daemon crescer sem limite — negação de serviço com um byte por segundo.
-pub const MAX_LINE: usize = 64 * 1024;
-
-/// Quanto tempo uma ligação espera pela resposta do laço antes de desistir.
-///
-/// **Público desde o ADR-0026** para que o `led-console-bin` possa *derivar* dele o seu
-/// timeout HTTP em vez de escrever um segundo número. Se os dois empatassem, o browser
-/// receberia "falhou" enquanto o daemon ainda aplicaria o comando.
-pub const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Definidos em [`crate::limits`] (sem `cfg`, TD-021); reexportados para que os caminhos
+/// `server::MAX_LINE` e `server::REPLY_TIMEOUT` continuem válidos.
+pub use crate::limits::{MAX_LINE, REPLY_TIMEOUT};
 
 /// Snapshot que o laço publica e o `status` lê. Consultar não compete com comandar.
 ///

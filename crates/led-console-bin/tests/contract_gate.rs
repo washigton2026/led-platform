@@ -105,9 +105,16 @@ fn o_typescript_versionado_e_exatamente_o_gerado() {
     if gerado != TS_VERSIONADO {
         let g: Vec<&str> = gerado.lines().collect();
         let v: Vec<&str> = TS_VERSIONADO.lines().collect();
-        let primeira = (0..g.len().max(v.len()))
-            .find(|&i| g.get(i) != v.get(i))
-            .unwrap_or(0);
+        // `.lines()` aceita `\n` e `\r\n`: se nenhuma linha diverge, a diferença está só nos
+        // fins de linha — o checkout com autocrlf no Windows (TD-021), não o conteúdo.
+        let Some(primeira) = (0..g.len().max(v.len())).find(|&i| g.get(i) != v.get(i)) else {
+            panic!(
+                "o contrato versionado DIVERGE do Rust, mas a diferença está só nos fins de \
+                 linha (CRLF vs LF).\n  \
+                 O conteúdo coincide linha a linha. Causa provável: checkout com autocrlf; o \
+                 .gitattributes fixa `crates/led-console-bin/contract/*.ts text eol=lf`."
+            );
+        };
         panic!(
             "o contrato versionado DIVERGE do Rust.\n\
              \n  primeira diferenca na linha {}:\n\

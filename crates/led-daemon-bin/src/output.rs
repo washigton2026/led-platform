@@ -1038,6 +1038,11 @@ mod tests {
     /// **30/30** tentativas em Ubuntu e macOS, erro em ≤ 76 µs, e um alvo **vivo** nunca
     /// falha dentro do prazo. Foi a única técnica encontrada que serve nos dois sistemas sem
     /// privilégios, sem rota e sem broadcast/multicast.
+    ///
+    /// `#[cfg(unix)]`: o único consumidor é um teste só-unix (ver
+    /// `um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida`); fora de unix seria
+    /// `dead_code`, e o `clippy -D warnings` do job windows reprovaria.
+    #[cfg(unix)]
     pub(super) const ALVO_MORTO: &str = "127.0.0.1:1";
 
     /// Envia até o alvo `indice` acusar erro, e devolve **quantos envios** foram precisos.
@@ -1052,6 +1057,7 @@ mod tests {
     ///
     /// **Entra em pânico se a premissa não se estabelecer.** Se alguém puser um serviço na
     /// porta 1 do runner, o nó deixa de morrer — e isso não pode virar um verde silencioso.
+    #[cfg(unix)] // mesmo gate e mesma razão do `ALVO_MORTO`
     pub(super) fn enviar_ate_o_no_morrer(
         mgr: &OutputManager,
         pixels: &[led_core::PixelColor],
@@ -1307,6 +1313,17 @@ mod tests {
     ///
     /// A versão anterior usava `255.255.255.255:1`, que só funciona em macOS: em Linux é o
     /// **`connect`** que falha, o que rebenta o `open()` e nunca chega a exercitar o §5.
+    ///
+    /// ## Só unix (TD-021)
+    ///
+    /// A premissa do C0 foi medida **só em Ubuntu e macOS**. No Windows o ICMP
+    /// port-unreachable não chega ao `send` UDP como erro: o run 45278965537 (job
+    /// 138058062748) mediu 392 091 envios sem um único erro no alvo morto, e a guarda de
+    /// premissa reprovou — como devia, em vez de passar vacuamente. Não há hoje técnica de nó
+    /// morto medida no Windows, e o `led-daemon` recusa arrancar fora de unix desde `f574ca2`;
+    /// por isso o teste é gated em vez de adaptado. **Perda de cobertura registada no TD-021**:
+    /// o isolamento por nó (ADR-0029 §5) não é exercitado no Windows.
+    #[cfg(unix)]
     #[test]
     fn um_no_em_falha_nao_derruba_os_outros_e_a_perda_e_atribuida() {
         use std::net::UdpSocket;
