@@ -389,6 +389,126 @@ jobs:
           fi
           echo "miri audio-core: ${executado}/${esperado} testes (piso ${PISO}), exit ${code}"
 
+  # ── Bloqueante (depois do merge e por ordem do proprietário): Miri do seqlock — DR-6, a metade que faltava ──
+  #
+  # Accept: ~/lumyx-evidence/2026-11-26-dr6-miri-seqlock/accept.md (sha256 ffd9b100…c471e), §2–§6.
+  # `crates/led-pixel-engine/src/seqlock.rs` NÃO tem `unsafe`: aqui o Miri não procura UB de ponteiros, explora
+  # intercalações e o modelo de memória fraco dos atómicos, para que os oráculos dos testes reprovem uma ordenação
+  # errada. Controlo negativo medido ANTES deste job (local, x86_64, o mesmo pino, `MIRIFLAGS=""`, 1 semente):
+  # M01 (`w-sem-fence-release`) e M05 (`r-s1-relaxed`) reprovam em `frescura_concorrente_monotonica_por_leitor`
+  # com «snapshot misturado»; a base dá 3/3 (~/lumyx-evidence/2026-11-26-dr6-miri-seqlock/negctl/RESULTADO.txt).
+  #
+  # Job próprio, e não passos dentro do `miri (led-triple)`: o nome desse job deixaria de dizer o que cobre, e
+  # renomeá-lo parte um check obrigatório. Mesmo pino, mesmas guardas de ambiente que o passo audio-core (TD-027/W4).
+  # Sem `libasound2-dev`: o `led-pixel-engine` não puxa `cpal`.
+  miri-seqlock:
+    name: miri (seqlock)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust nightly PINADO + miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-02
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Chave própria: outro crate e outro conjunto de testes sob o mesmo toolchain do `miri`.
+          key: miri-seqlock
+      - name: Toolchain efetivo (evidência, não suposição)
+        run: rustc --version && cargo miri --version
+      - name: Miri — seqlock (led-pixel-engine)
+        # Regras (accept §3): N_esperado vem de `-- --list` com o MESMO toolchain e filtro; N_executado vem do
+        # resumo, em ficheiro (KB-013); N_executado == N_esperado e N_esperado >= 3 (o valor medido); o teste
+        # concorrente tem de aparecer pelo nome; `#[ignore]`, `cfg!(miri)` novo e `include!`/`#[path` no
+        # `seqlock.rs` reprovam.
+        shell: bash
+        run: |
+          set -euo pipefail
+          MOD=crates/led-pixel-engine/src/seqlock.rs
+          FILTRO='seqlock::tests::'
+          PISO=3
+          OUT="${RUNNER_TEMP:-$(mktemp -d)}"
+          [ -f "$MOD" ] || { echo "::error::$MOD não existe — a guarda seria vácua."; exit 1; }
+          if grep -nE '#\[ignore|cfg_attr\(.*miri.*ignore' "$MOD"; then
+            echo "::error::$MOD tem testes ignorados — o gate do seqlock não aceita cobertura retirada em silêncio."
+            exit 1
+          fi
+          # Configuração de fora manda no próprio Miri (W4 do TD-027): fixa-se o ambiente e recusa-se o que o sobrepõe.
+          export MIRIFLAGS=""
+          cfgs=$(find . "${CARGO_HOME:-$HOME/.cargo}" -maxdepth 3 -path ./target -prune -o \
+                   \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' -o -name config -path "${CARGO_HOME:-$HOME/.cargo}/*" -o -name config.toml -path "${CARGO_HOME:-$HOME/.cargo}/*" \) -print 2>/dev/null || true)
+          for c in $cfgs; do
+            if grep -nE '^\s*\[env\]|rustflags|MIRIFLAGS|RUSTFLAGS' "$c"; then
+              echo "::error::$c pode alterar o Miri (env/rustflags) — o gate do seqlock recusa correr sob configuração externa."
+              exit 1
+            fi
+          done
+          echo "ambiente efetivo: MIRIFLAGS='${MIRIFLAGS}' RUSTFLAGS='${RUSTFLAGS:-}' CARGO_ENCODED_RUSTFLAGS='${CARGO_ENCODED_RUSTFLAGS:-}'"
+          if [ -n "${RUSTFLAGS:-}${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+            echo "::error::RUSTFLAGS definido — o gate do seqlock corre sem flags externas."
+            exit 1
+          fi
+          # Só estas 3 linhas, comparadas INTEIRAS, podem mencionar miri no seqlock.rs (reduzem trabalho sob o
+          # interpretador; accept §3.6). Comentários `//` não executam e ficam de fora.
+          ALLOW1='        let casos = if cfg!(miri) { 4 } else { 512 };'
+          ALLOW2='        let n: u64 = if cfg!(miri) { 60 } else { 200_000 };'
+          ALLOW3='        for _ in 0..if cfg!(miri) { 1 } else { 3 } {'
+          mencoes=$(grep -nia 'miri' "$MOD" | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+          outras=$(printf '%s\n' "$mencoes" | awk -v a="$ALLOW1" -v b="$ALLOW2" -v c="$ALLOW3" 'NF { ln=$0;
+                     sub(/^[0-9]+:/, "", ln); if (ln != a && ln != b && ln != c) print $0 }')
+          if [ -n "$outras" ]; then
+            echo "$outras"
+            echo "::error::$MOD menciona miri fora das 3 linhas permitidas — o gate do seqlock não aceita código condicionado ao Miri."
+            exit 1
+          fi
+          # As 3 linhas têm de existir: a ausência é sinal de que o ficheiro deixou de ser lido como se espera.
+          for a in "$ALLOW1" "$ALLOW2" "$ALLOW3"; do
+            if ! printf '%s\n' "$mencoes" | awk -v a="$a" '{ ln=$0; sub(/^[0-9]+:/, "", ln); if (ln == a) ok=1 } END { exit !ok }'; then
+              echo "::error::linha permitida não encontrada em $MOD: $a"
+              exit 1
+            fi
+          done
+          if grep -naE 'include!\(|#\[path' "$MOD"; then
+            echo "::error::$MOD usa include!/#[path] — código de fora escaparia à guarda."
+            exit 1
+          fi
+
+          set +e
+          cargo +nightly-2026-06-02 miri test -p led-pixel-engine --locked --lib "$FILTRO" -- --list > "$OUT/miri-seqlock-list.txt" 2>&1
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then cat "$OUT/miri-seqlock-list.txt"; echo "::error::listagem falhou (exit $code)"; exit "$code"; fi
+          esperado=$(grep -c ': test$' "$OUT/miri-seqlock-list.txt" || true)
+
+          set +e
+          cargo +nightly-2026-06-02 miri test -p led-pixel-engine --locked --lib "$FILTRO" > "$OUT/miri-seqlock.txt" 2>&1
+          code=$?
+          set -e
+          cat "$OUT/miri-seqlock.txt"
+          if [ "$code" -ne 0 ]; then
+            set +o pipefail
+            grep -aoE 'Undefined Behavior: [^\n]+|panicked at [^\n]+' "$OUT/miri-seqlock.txt" | head -5 | \
+              while IFS= read -r m; do printf '::error::%s\n' "$m"; done
+            exit "$code"
+          fi
+          executado=$(grep -aoE 'test result: ok\. [0-9]+ passed' "$OUT/miri-seqlock.txt" \
+                      | grep -aoE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          if [ "$esperado" -lt "$PISO" ]; then
+            echo "::error::Miri seqlock: ${esperado} testes listados, piso ${PISO} (KB-012)."
+            exit 1
+          fi
+          if [ "$executado" -ne "$esperado" ]; then
+            echo "::error::Miri seqlock: ${executado} executados, ${esperado} esperados (KB-012)."
+            exit 1
+          fi
+          # O teste com threads é o que exercita a ordenação; tem de constar como executado, pelo nome.
+          if ! grep -q 'seqlock::tests::frescura_concorrente_monotonica_por_leitor \.\.\. ok' "$OUT/miri-seqlock.txt"; then
+            echo "::error::o teste concorrente do seqlock não executou sob Miri."
+            exit 1
+          fi
+          echo "miri seqlock: ${executado}/${esperado} testes (piso ${PISO}), exit ${code}"
+
   # ── Bloqueante: TD-030 — o latch de sequência sob loom, com N>0 e canários ───
   #
   # Job próprio, e não um step da matriz `test`: o loom exige `RUSTFLAGS="--cfg loom"`, que recompila o grafo
