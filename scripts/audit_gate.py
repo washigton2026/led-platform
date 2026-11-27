@@ -27,6 +27,10 @@ Enforces the closure schema for Technical Debt entries:
      outside the region counts (negative controls, prose, quotes live there by construction).
      A closed TD WITHOUT required_test keeps the older, weaker rule: any `N passed; 0 failed`
      line anywhere in the evidence (N>0) — there is no named test to prove.
+  7. A td_id that appears in more than one entry is Critical, whatever the status of each
+     (TD-037). Two branches can each register «the next free number» and both pass alone; after
+     the merge every finding, evidence_ref and commit that cites that id points at two debts.
+     The check runs over every entry before the per-TD checks, so no status can skip it.
 
 Exit codes:
   0 — gate passes (no Critical findings)
@@ -385,8 +389,21 @@ class Gate:
             f"closed — {n_passed} tests passed, negative_control present"
             + (f", required_test '{required_test}' found" if required_test else ""))
 
+    def duplicados(self, tds: list[dict]) -> None:
+        """TD-037: o mesmo td_id em duas entradas é Critical, seja qual for o status de cada uma."""
+        vezes: dict[str, int] = {}
+        for td in tds:
+            td_id = td.get('td_id', '?').strip()
+            vezes[td_id] = vezes.get(td_id, 0) + 1
+        for td_id, n in sorted(vezes.items()):
+            if n > 1:
+                self.report(CRITICAL, td_id,
+                    f"td_id duplicado: {n} entradas no ledger com o mesmo id (TD-037). "
+                    f"Renumerar a mais recente para o próximo id livre.")
+
     def run(self, tds: list[dict]) -> int:
         print(f"\nLUMYX Audit Gate (KB-012) — {len(tds)} TD entries\n")
+        self.duplicados(tds)
         for td in tds:
             self.check(td)
         criticals = [f for f in self.findings if f[0] == CRITICAL]

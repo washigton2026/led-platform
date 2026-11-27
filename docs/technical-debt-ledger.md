@@ -1743,7 +1743,7 @@ severity:  Medium
 status:    closed
 closed_on: 2026-10-05
 closed_by: "PR #17 (4a43167 + 035159f), mergeado na main em 7f1ec01: o job `miri (led-triple)` corre `ring_buffer::tests::` do audio-core sob o nightly pinado (6bdf43094) com piso N == 5. CI da main lida no log: run 37268736600 (7f1ec01) e run 37268800503 (79e52e2), 5 passed; 0 failed nas duas."
-evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-11-26d.md
+evidence_ref: docs/evidence/td-027-miri-ring-buffer-2026-11-27.md
 required_test: spsc_stress_no_loss_or_reorder_under_threads
 origin:    "Lacuna de cobertura registada em 2026-09-20 (CLAUDE.md, contagem de unsafe) e confirmada em 2026-09-29."
 source_files: crates/audio-core/src/ring_buffer.rs, .github/workflows/ci.yml
@@ -2287,7 +2287,17 @@ review_by: 2026-12-31
 td_id:     TD-036
 title:     "o_custo_do_fanout_e_medido_e_nao_cresce_superlinearmente (led-daemon-bin) asserta razao_sem <= 8.0 sobre tempos de parede no binário de testes da CI: 9.20× no test (macos-26), verde na repetição"
 severity:  Medium
-status:    pending-verification
+status:    closed
+closed_on: 2026-11-26
+closed_by: "PR #66 (671daa8, mergeado em b4c3b7a). pending_gate cumprido e lido no log, job a job: test (ubuntu-24.04) e test (macos-26) do PR (run 45874287754, jobs 140097324488/140097324368) e do push na main (run 45874977001 tentativa 1, jobs 140099654455/140099654632) — nos 4, «o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas ... ok» e «o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente ... ignored». O windows (allow-failure) da main falhou na tentativa 1 por outro teste (TD-038) e passou na 2; o critério 8/8 da main foi substituído por decisão do proprietário (2026-11-26). Fecho por ordem do operador."
+evidence_ref: docs/evidence/td-036-custo-do-fanout-2026-11-26.md
+required_test: o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas
+negative_control: |
+  Locais, sobre cópia (macOS arm64, ~/lumyx-evidence/2026-11-26-td-fanout/): (A) gate de tempo com LIMITE plantado
+  a 1.0 → «o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente ... FAILED», «5 alvos custaram 4.04× um alvo …
+  acima do limite de 1×», exit 101 (04-neg-a-tempo); (B) assert de alocação 5.0 → 4.0 →
+  «o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas ... FAILED», left 5.0 right 4.0, exit 101 (05-neg-b-aloc).
+  Repostos, os dois voltam ao verde. Excertos na secção 2 do evidence_ref.
 fix_ref:   "branch fix/td-035-fanout-tempo (2026-11-26): o veredito de tempo sai do teste da CI para um gate de performance manual `#[ignore]` no mesmo ficheiro (o_custo_do_fanout_em_tempo_nao_cresce_superlinearmente), no molde do TD-006; os asserts de alocação ficam iguais, no teste renomeado o_custo_do_fanout_e_medido_e_as_alocacoes_sao_exactas. Os dois serializados por um Mutex (SERIE), como o ALLOC_GATE do led-hal."
 pending_gate: |
   CI do PR desta branch lida job a job: test (macos-26) e test (ubuntu-24.04) com
@@ -2311,4 +2321,74 @@ required_fix: |
 falsification_required: |
   O gate de tempo ainda sabe reprovar (LIMITE plantado a 1.0 → panicked); o de alocação também (5.0 → 4.0 →
   panicked). O teste da CI corre com o de tempo em `ignored`. Evidência em ~/lumyx-evidence/2026-11-26-td-fanout/.
+```
+
+---
+
+## TD-037 — O audit_gate não deteta td_id duplicados: dois TD-035 entraram na árvore com «0 Critical»
+
+```yaml
+td_id:     TD-037
+title:     "scripts/audit_gate.py não verifica a unicidade do td_id: o merge 8e64f68 (origin/main com o #64 em fix/td-035-fanout-tempo) deixou dois blocos td_id TD-035 no ledger e o pre-commit deu 34 entries, 0 Critical"
+severity:  Medium
+status:    closed
+closed_on: 2026-11-27
+closed_by: "PR #67 (7191494). pending_gate cumprido e lido no log, job a job (run 45986300010; leitura em ~/lumyx-evidence/2026-11-26-td037/ci-7191494/, TABELA.txt + SHA256SUMS): gate suite (audit_gate + hook), job 140462685770 — «test test_td_id_duplicado_e_critical ... ok», «test test_td_id_distintos_nao_disparam_a_regra ... ok», «test_audit_gate: 36 passed; 0 failed» e «gate-suite: exit 0 · 36 passed · 0 failed · esperados 36» (36 = N_GATE); debt gate (audit_gate.py), job 140462685726 — «Result: 0 Critical, 0 Warning, 23 OK · 11 open · 2 wontfix». Os 8 jobs do run em success. Leitura verificada pelo CIO; fecho por ordem do operador (2026-11-27). Secção 3 do evidence_ref."
+origin:    "Renumeração TD-035 → TD-036 (2026-11-26): o #64 (3899dea) registou o TD-035 = fugas E1–E4 do ShowSigner e o ramo fix/td-035-fanout-tempo (bb38362) usava o mesmo número. O commit de merge 8e64f68 passou o hook com os dois blocos; só o grep -c manual apanhou a colisão (~/lumyx-evidence/2026-11-26-td-fanout/renumeracao/06-controlo-negativo.txt)."
+source_files: scripts/audit_gate.py, tests/test_audit_gate.py
+context: |
+  O gate verificava cada entrada isoladamente. Dois ramos podem escolher «o próximo número livre» e cada um passa
+  sozinho; depois do merge, todos os achados, evidence_ref e commits que citam o id apontam para duas dívidas.
+impact: |
+  Ambiguidade de rastreio: o fecho de uma dívida podia ser lido como fecho da outra, e o gate (KB-012) não o via.
+fix: |
+  Regra 7 do gate: Gate.duplicados() corre sobre todas as entradas antes das verificações por TD; cada td_id com mais
+  de uma entrada é Critical, seja qual for o status. Também pelo --check-td (filtra por id e mantém as duas).
+  Fixture tests/fixtures/ledger_td_id_duplicado.md reproduz a forma real (open + pending-verification com o mesmo id).
+fix_ref:   "Ramo fix/td-037-td-id-duplicado (2026-11-26): regra 7 + test_td_id_duplicado_e_critical + controlo test_td_id_distintos_nao_disparam_a_regra. tests/test_audit_gate.py 36 passed; 0 failed (local). A regra só se prova na CI do PR."
+pending_gate: |
+  CI do PR deste ramo lida job a job: gate suite (audit_gate + hook) com «test test_td_id_duplicado_e_critical ... ok»,
+  «test test_td_id_distintos_nao_disparam_a_regra ... ok» e «test_audit_gate: 36 passed; 0 failed»; debt gate
+  (audit_gate.py) com «Result: 0 Critical». O fecho (status closed, closed_on, closed_by) vai num commit posterior,
+  depois dessa leitura (decisão do proprietário, 2026-11-26). evidence_ref, required_test e negative_control abaixo
+  são a evidência LOCAL e ficam para o fecho.
+review_by: 2026-12-15
+evidence_ref: docs/evidence/td-037-td-id-duplicado-2026-11-26.md
+required_test: test_td_id_duplicado_e_critical
+negative_control: |
+  Os mesmos testes contra o audit_gate.py de b4c3b7a (cópia por git archive): «test test_td_id_duplicado_e_critical
+  ... FAILED» com «GATE BROKEN: td_id duplicado passou (exit 0): []». E o controlo do lado oposto: o mesmo ledger com o
+  segundo id renumerado passa no gate novo (exit 0, sem achado «duplicado»). Secção 2 do evidence_ref.
+```
+
+---
+
+## TD-038 — fallbacks_medidos_com_escritor_continuo não garante que a leitora arranca; com leituras=0 as asserções de coerência não correm
+
+```yaml
+td_id:     TD-038
+title:     "reactive::tests::fallbacks_medidos_com_escritor_continuo (led-pixel-engine) lança a thread leitora e publica 50 000 vezes sem barreira de arranque: no windows (allow-failure) de b4c3b7a deu leituras=0 e reprovou em assert!(leituras > 0)"
+severity:  Medium
+status:    open
+area:      TD-030 (seqlock do AudioShare)
+origin:    "Ocorrência 1: run 45874977001/1, job 140099654308 windows (allow-failure), windows-2025-vs2026, commit b4c3b7a (push na main, merge do #66): «TD030_FALLBACKS publicacoes=50000 leituras=0 k=16 esgotadas=0 sem_snapshot=0», panicked at crates\\led-pixel-engine\\src\\reactive.rs:687:9 «assertion failed: leituras > 0». Repetição D-REP (tentativa 2, job 140106749132) verde. Registado em ~/lumyx-evidence/flakes.log; a 2.ª ocorrência em qualquer job é STOP."
+source_files: crates/led-pixel-engine/src/reactive.rs
+context: |
+  O teste lança a leitora com std::thread::spawn e começa logo a publicar; a leitora só lê enquanto `parar` for false.
+  Nada garante que a leitora faz uma leitura antes de o escritor terminar as 50 000 publicações e ligar `parar`.
+  Com leituras=0 o laço da leitora não corre, e as três asserções de coerência (sample_rate 4242, bass == timestamp,
+  beat == timestamp ímpar) não exercitam nada: o teste passa a medir o escalonador. O assert!(leituras > 0) apanhou-o.
+  NÃO medido: a distribuição de leituras por SO na CI. Os logs de jobs verdes não trazem a linha TD030_FALLBACKS
+  (o libtest só mostra o stderr de testes que falham); a única amostra de CI é a falha do windows.
+impact: |
+  Falso vermelho no job windows (allow-failure); e, mais sério, uma execução verde com poucas leituras dá pouca
+  cobertura de coerência sem que nada o diga. O D11 depende deste TD (nota do proprietário, 2026-11-26).
+required_fix: |
+  Barreira de arranque: o escritor só publica depois de a leitora ter feito pelo menos uma leitura (sinal atómico ou
+  Barrier); o assert passa a exigir leituras durante a janela de publicação. Accept escrito ANTES do código:
+  ~/lumyx-evidence/2026-11-26-td038/accept.md (área do TD-030, N3).
+falsification_required: |
+  Controlo negativo determinístico: um atraso forçado no arranque da leitora reproduz leituras=0 (e o vermelho) na
+  versão antiga e não na nova. Medição das leituras por SO antes e depois.
+review_by: 2026-12-31
 ```
