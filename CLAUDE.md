@@ -105,7 +105,7 @@ cargo test --workspace                  # all suites (1190 macOS · 1186 Linux �
 
 Miri clean (contagens = **testes**, não construções `unsafe`): `audio-core/ring_buffer` (5 testes), **`led-triple`** (7 testes, 0 UB — o crate que hoje detém o `unsafe` do triple buffer; 24 scheduler seeds numa sessão anterior), `led-bridge/adapter` (6 testes, 1M iter — **histórico**: o `led-bridge` já não tem `unsafe` em `src/`).
 Miri **corre na CI**: job `miri (led-triple)`, ubuntu-latest, `nightly-2026-06-02` pinado, **bloqueante** (promovido depois de observado a passar). Cobre as **5 construções `unsafe`** do `led-triple` (3 `unsafe impl` + 2 blocos `unsafe {}`). O step **exige `N > 0`** testes executados — `test result: ok` sozinho é satisfeito por `0 passed; N filtered out`, e sem essa exigência um filtro errado daria verde sem correr nada (KB-012). Execução observada **já com o job bloqueante** (run 35536724237, `2e603c9`): **7 passed · 0 failed · 0 ignored · 0 UB**, 203,77 s, com `miri: 7 testes executados, exit 0` no log. **O que NÃO está coberto** (medido em 2026-09-20 com `rg -n 'unsafe (impl|fn)|unsafe \{' crates/`, triado `src/` vs `tests/`): em produção havia **12 construções `unsafe`** no workspace e **há agora 8** — `led-triple` **5**, `audio-core` **3** (`ring_buffer.rs:24,55,75`). O `led-hal` tinha **4** (`metrics.rs:183,184` + `shared_clock.rs:117,118`, todas `unsafe impl Send/Sync`) e passou a **0**: eram redundantes (os campos já são `Send + Sync`, o compilador deriva-os) e tapavam o `assert_send_sync` dos próprios ficheiros. O mesmo `rg` ainda devolve 12 linhas, porque apanha 4 comentários do `led-hal` que citam o `unsafe impl` — a contagem de construções é 8. Destas, **as 8 têm gate de CI**: as 5 do `led-triple` e as 3 do `audio-core`. O `audio-core` corre na CI: job `miri (led-triple)`, passo `Miri — audio-core`, **5/5** testes (run 42604624412, `de45103`, lido no log). O `led-hal` deixou de ter `unsafe` próprio, logo não precisa de Miri por essa razão. `led-bridge` **não tem `unsafe`** (nem em `src/` nem em `tests/`). `led-pixel-engine` **não tem `unsafe` em código de produção**: as suas construções são alocadores contadores `GlobalAlloc` — em `tests/no_alloc.rs`, `tests/no_alloc_reativo.rs` e, desde o TD-030, o do O5 em `src/reactive.rs`, sob `#[cfg(all(test, not(loom), not(miri)))]`. Esse último vive em `src/` mas só compila no `cargo test`, por isso não altera a contagem de **8** construções em produção (`CLAUDE.md:107`), e fica fora do Miri por construção (`not(miri)`), como os alocadores de `tests/`.
-Governance: `scripts/audit_gate.py` (KB-012) — medido localmente sobre a árvore deste PR (2026-11-26, com a main em 315de5e já integrada — fecho do TD-030 e do TD-002 pelo #56), depois do fecho do TD-021 e do registo do TD-035: **33 TD entries · 21 OK** (20 closed + TD-014 `pending-verification`) · 10 open · 2 wontfix, exit 0. Na CI, o último debt gate lido no log é o do run 45631768474 (331914e, antes deste fecho): 31 TD · 20 OK · 9 open · 2 wontfix. `tests/test_audit_gate.py` **34/34** e `tests/test_pre_commit_hook.sh` **4/4** — medido em 42ebb90 (2026-10-08), job `gate suite` (#27). Regras do gate: docstring de `scripts/audit_gate.py` (desde o R4.1, `watched:` por conteúdo + região de prova). `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) correm só quando o e2e é corrido à mão — **a CI não corre o e2e**.
+Governance: `scripts/audit_gate.py` (KB-012) — medido localmente sobre a árvore do ramo `fix/td-037-td-id-duplicado` (2026-11-27, com o fecho do TD-037): **36 TD entries · 23 OK** (22 closed + TD-014 `pending-verification`) · 11 open · 2 wontfix, exit 0. Na CI, o último debt gate lido no log é o do run 45986300010 (`7191494`, PR #67, ainda com o TD-037 `pending-verification`): 36 TD · 23 OK · 11 open · 2 wontfix. `tests/test_audit_gate.py` **36/36** e `tests/test_pre_commit_hook.sh` **4/4** — job `gate suite` do mesmo run (`esperados 36` = `N_GATE`). Regras do gate: docstring de `scripts/audit_gate.py` (desde o R4.1, `watched:` por conteúdo + região de prova; desde o TD-037, regra 7: `td_id` duplicado é Critical). `lumyx-e2e.sh` Phase 5b + Phase 7 (Engineering Council gates C1–C11) correm só quando o e2e é corrido à mão — **a CI não corre o e2e**.
 
 | Crate | Status |
 |---|---|
@@ -146,6 +146,26 @@ Newest first. One entry per session (`/changelog`): Done · Invariants verified 
 > estão registradas como ADRs em [`docs/adr/`](./docs/adr/README.md) no formato
 > MADR. Uma decisão nova de peso ganha um ADR; correções e features aditivas
 > continuam aqui no changelog.
+
+### 2026-11-26 — TD-037: o audit_gate reprova td_id duplicado (pending-verification); fecho do TD-036; registo do TD-038
+
+**Done.** Regra 7 do `audit_gate.py` (`Gate.duplicados`): cada `td_id` com mais de uma entrada é Critical, seja qual
+for o status, também pelo `--check-td`. Origem: o merge `8e64f68` deixou dois TD-035 no ledger e o hook deu
+«0 Critical». Fixture `tests/fixtures/ledger_td_id_duplicado.md` (forma real: open + pending-verification) e dois
+testes: `test_td_id_duplicado_e_critical` e o controlo `test_td_id_distintos_nao_disparam_a_regra`. O TD-037 fica
+`pending-verification` até a CI do PR (gate suite + debt gate) ser lida job a job; o fecho vai num commit posterior.
+**TD-036 fechado**
+com os 4 jobs lidos no log (ubuntu/macOS do PR #66 e do push na main). **TD-038 registado** (open, área do TD-030): o
+teste `fallbacks_medidos_com_escritor_continuo` não garante que a leitora arranca; accept sem código em
+`~/lumyx-evidence/2026-11-26-td038/accept.md`.
+
+**Invariants verified.** `test_audit_gate.py` 36/36; gate do ledger exit 0 (36 TD, 23 OK). Controlo negativo: o teste
+novo reprova contra o gate de `b4c3b7a` e contra a regra mutada (`n > 99`). As evidências do TD-026/028 foram
+regeneradas no mesmo commit, porque o gate se vigia a si próprio.
+
+**Pending.** O critério 8/8 da main foi substituído por decisão do proprietário: o windows (allow-failure) de
+`b4c3b7a` falhou na tentativa 1 pelo teste do TD-038 e passou na 2 (ocorrência 1 no `flakes.log`). A linha
+`TD030_FALLBACKS` não aparece em jobs verdes; a medição por SO é NOT_MEASURED até ao accept do TD-038.
 
 ### 2026-10-07 — TD-029 (parcial): sonda de rede FALHADA numa plataforma suportada passa a bloquear
 

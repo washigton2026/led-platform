@@ -270,6 +270,59 @@ def test_open_and_wontfix_are_visible_not_ok():
         tmp.unlink()
 
 
+# ── TD-037: o mesmo td_id em duas entradas ─────────────────────────────────────
+
+DUPLICADO = WORKSPACE / 'tests/fixtures/ledger_td_id_duplicado.md'
+
+
+def test_td_id_duplicado_e_critical():
+    """TD-037: duas entradas com o mesmo td_id reprovam, embora cada uma passe sozinha.
+
+    Forma real (8e64f68): TD-035 open + TD-035 pending-verification depois do merge do #64;
+    o gate antigo deu «0 Critical» e o commit entrou. Também pelo --check-td, que filtra por
+    id e por isso mantém as duas entradas: nenhum caminho do main() salta a regra.
+    """
+    import io, contextlib
+    tds = audit_gate.parse_ledger(DUPLICADO)
+    assert [t['td_id'] for t in tds] == ['TD-DUP-A', 'TD-DUP-A'], f"fixture mal lida: {tds}"
+    for td in tds:  # cada entrada, sozinha, passa: é a colisão que tem de reprovar
+        g1 = audit_gate.Gate(WORKSPACE)
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert g1.run([td]) == 0, f"a entrada sozinha devia passar: {td}"
+    g = audit_gate.Gate(WORKSPACE)
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = g.run(tds)
+    criticals = [f for f in g.findings if f[0] == audit_gate.CRITICAL]
+    assert code == 1, f"GATE BROKEN: td_id duplicado passou (exit {code}): {g.findings}"
+    assert len(criticals) == 1 and criticals[0][1] == 'TD-DUP-A' and 'duplicado' in criticals[0][2], \
+        f"esperava UM Critical «duplicado» para TD-DUP-A, veio: {criticals}"
+    with contextlib.redirect_stdout(io.StringIO()):
+        via_main = audit_gate.main(['--workspace', str(WORKSPACE), '--ledger', str(DUPLICADO),
+                                    '--check-td', 'TD-DUP-A'])
+    assert via_main == 1, f"--check-td saltou a regra do duplicado (exit {via_main})"
+    print("✅ test_td_id_duplicado_e_critical: PASS")
+
+
+def test_td_id_distintos_nao_disparam_a_regra():
+    """Controlo negativo do TD-037: o MESMO ledger com o segundo id renumerado passa (exit 0)
+    e não tem achado «duplicado» — a regra reage à colisão, não ao conteúdo das entradas."""
+    import io, contextlib
+    texto = DUPLICADO.read_text()
+    i = texto.rindex('td_id:     TD-DUP-A')
+    tmp = make_ledger(texto[:i] + 'td_id:     TD-DUP-B' + texto[i + len('td_id:     TD-DUP-A'):])
+    try:
+        g = audit_gate.Gate(WORKSPACE)
+        tds = audit_gate.parse_ledger(tmp)
+        assert [t['td_id'] for t in tds] == ['TD-DUP-A', 'TD-DUP-B'], f"renumeração falhou: {tds}"
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = g.run(tds)
+        assert code == 0, f"ids distintos não podem reprovar (exit {code}): {g.findings}"
+        assert not any('duplicado' in f[2] for f in g.findings), f"falso duplicado: {g.findings}"
+        print("✅ test_td_id_distintos_nao_disparam_a_regra: PASS")
+    finally:
+        tmp.unlink()
+
+
 
 # ── R4.1: required_test estruturado + stale por CONTEÚDO (TD-028) sem git (TD-026) ────
 
@@ -655,6 +708,8 @@ TESTS = [
     test_r41_nome_com_metacaracteres_e_literal,
     test_r41_watched_dentro_de_html_multilinha_nao_fixa,
     test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao,
+    test_td_id_duplicado_e_critical,
+    test_td_id_distintos_nao_disparam_a_regra,
     test_gate_accepts_good_ledger,  # last — depends on real ledger state
 ]
 

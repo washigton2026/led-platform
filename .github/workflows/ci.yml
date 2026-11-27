@@ -171,7 +171,7 @@ jobs:
     name: gate suite (audit_gate + hook)
     runs-on: ubuntu-24.04
     env:
-      N_GATE: 34
+      N_GATE: 36
       N_HOOK: 4
     steps:
       - uses: actions/checkout@v7

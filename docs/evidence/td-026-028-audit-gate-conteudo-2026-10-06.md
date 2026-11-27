@@ -1,8 +1,9 @@
 # TD-026 + TD-028 — o detector de stale do audit_gate passa a julgar CONTEÚDO, sem git
-git-hash: 89c7603
-watched: scripts/audit_gate.py sha256:867476220a91d9b0aae2448d5cdb51fbffdf37bbf5bde57d7dd53852a0d22a24
-watched: tests/test_audit_gate.py sha256:fabd50f348eff6139a66790dc66dfba773396dfae5f8133c2e0b3b9ebe4d03b5
+git-hash: b4c3b7a
+watched: scripts/audit_gate.py sha256:a7095570c8d75f753796eb726778767bd2815263cb1cd59127967085c9ecaa53
+watched: tests/test_audit_gate.py sha256:4aeded2cc850da4b291e870083fbfb0318ad2590336b660d5f0bd83d0170f4f6
 data: 2026-10-06
+regenerada: 2026-11-26 — o gate e os seus testes mudaram com o TD-037 (regra 7, td_id duplicado)
 
 # PORQUE EXISTE
 #
@@ -14,7 +15,8 @@ data: 2026-10-06
 # do commit candidato). Sem git; ficheiro vigiado ilegível/inexistente/diretório é Critical.
 # Após 4 rondas do falsificador, o required_test só conta dentro da REGIÃO DE PROVA declarada
 # (lista positiva) — a secção 2, contra o gate antigo, fica fora por construção.
-# git-hash = commit anterior (informativo). Regenerada por regenerar-evidencia-td026-028.sh.
+# git-hash = commit anterior (informativo). Regenerada por
+# ~/lumyx-evidence/2026-11-26-td037/regenerar-evidencias-gate.py (molde: regenerar-evidencia-td026-028.sh).
 
 ## 1. Gate novo — python3 tests/test_audit_gate.py (run real, no repo), exit 0
 --- prova ---
@@ -51,12 +53,14 @@ test test_r41_harness_estrito ... ok
 test test_r41_nome_com_metacaracteres_e_literal ... ok
 test test_r41_watched_dentro_de_html_multilinha_nao_fixa ... ok
 test test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao ... ok
+test test_td_id_duplicado_e_critical ... ok
+test test_td_id_distintos_nao_disparam_a_regra ... ok
 test test_gate_accepts_good_ledger ... ok
-test_audit_gate: 34 passed; 0 failed
+test_audit_gate: 36 passed; 0 failed
 --- fim da prova ---
 
 ## 2. Os MESMOS testes contra o audit_gate.py ANTIGO (git show f318c97:scripts/audit_gate.py), exit 1
-# 19 FAILED, entre eles os dois que estes TD nomeiam (TD-028: história sem mudança de
+# 20 FAILED, entre eles os dois que estes TD nomeiam (TD-028: história sem mudança de
 # conteúdo; TD-026: clone raso).
 NEG: test test_r41_vigiado_alterado_sem_evidencia_nova_e_stale ... FAILED
 NEG: test test_r41_vigiado_inexistente_e_critical_nao_verificavel ... FAILED
@@ -77,4 +81,5 @@ NEG: test test_r41_linhas_que_nao_sao_resultado_nao_provam ... FAILED
 NEG: test test_r41_harness_estrito ... FAILED
 NEG: test test_r41_watched_dentro_de_html_multilinha_nao_fixa ... FAILED
 NEG: test test_r41_ronda4_exigencias_da_regiao_cada_uma_com_a_sua_assercao ... FAILED
-NEG: test_audit_gate: 15 passed; 19 failed
+NEG: test test_td_id_duplicado_e_critical ... FAILED
+NEG: test_audit_gate: 15 passed; 21 failed
