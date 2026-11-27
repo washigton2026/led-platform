@@ -2331,7 +2331,9 @@ falsification_required: |
 td_id:     TD-037
 title:     "scripts/audit_gate.py não verifica a unicidade do td_id: o merge 8e64f68 (origin/main com o #64 em fix/td-035-fanout-tempo) deixou dois blocos td_id TD-035 no ledger e o pre-commit deu 34 entries, 0 Critical"
 severity:  Medium
-status:    pending-verification
+status:    closed
+closed_on: 2026-11-27
+closed_by: "PR #67 (7191494). pending_gate cumprido e lido no log, job a job (run 45986300010; leitura em ~/lumyx-evidence/2026-11-26-td037/ci-7191494/, TABELA.txt + SHA256SUMS): gate suite (audit_gate + hook), job 140462685770 — «test test_td_id_duplicado_e_critical ... ok», «test test_td_id_distintos_nao_disparam_a_regra ... ok», «test_audit_gate: 36 passed; 0 failed» e «gate-suite: exit 0 · 36 passed · 0 failed · esperados 36» (36 = N_GATE); debt gate (audit_gate.py), job 140462685726 — «Result: 0 Critical, 0 Warning, 23 OK · 11 open · 2 wontfix». Os 8 jobs do run em success. Leitura verificada pelo CIO; fecho por ordem do operador (2026-11-27). Secção 3 do evidence_ref."
 origin:    "Renumeração TD-035 → TD-036 (2026-11-26): o #64 (3899dea) registou o TD-035 = fugas E1–E4 do ShowSigner e o ramo fix/td-035-fanout-tempo (bb38362) usava o mesmo número. O commit de merge 8e64f68 passou o hook com os dois blocos; só o grep -c manual apanhou a colisão (~/lumyx-evidence/2026-11-26-td-fanout/renumeracao/06-controlo-negativo.txt)."
 source_files: scripts/audit_gate.py, tests/test_audit_gate.py
 context: |

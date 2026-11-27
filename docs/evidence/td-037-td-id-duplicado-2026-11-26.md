@@ -61,3 +61,16 @@ NEG: test test_td_id_duplicado_e_critical ... FAILED
 NEG: test test_td_id_distintos_nao_disparam_a_regra ... ok
 NEG: test_audit_gate: 34 passed; 2 failed
 NEG: GATE BROKEN: td_id duplicado passou (exit 0): []
+
+## 3. CI do PR #67 @ 7191494 — run 45986300010, lida no log job a job (2026-11-27)
+# Leitura completa (8 jobs, todos success) em ~/lumyx-evidence/2026-11-26-td037/ci-7191494/:
+# TABELA.txt sha256:6ba656e73e590e09f4a7e129cabc4915aaec39009c0c111d9d79360944e2a833
+# SHA256SUMS sha256:bfde02c3d193b3fa0024e7a2aaeafe6d5c1cf7a80bf3933ff2011331b85c312f
+# Linhas citadas do log (prefixo CI: <job_id> L<linha>); fora da região de prova, não contam para o gate.
+CI: 140462685770 L52   N_GATE: 36
+CI: 140462685770 L844  test test_td_id_duplicado_e_critical ... ok
+CI: 140462685770 L846  test test_td_id_distintos_nao_disparam_a_regra ... ok
+CI: 140462685770 L904  test_audit_gate: 36 passed; 0 failed
+CI: 140462685770 L905  gate-suite: exit 0 · 36 passed · 0 failed · esperados 36
+CI: 140462685726 L249  ✅ [OK]      TD-037: pending-verification (valid)
+CI: 140462685726 L257  Result: 0 Critical, 0 Warning, 23 OK · 11 open · 2 wontfix
