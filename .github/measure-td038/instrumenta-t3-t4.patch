@@ -1,0 +1,20 @@
+diff --git a/crates/led-pixel-engine/src/reactive.rs b/crates/led-pixel-engine/src/reactive.rs
+index 7912094..6bdb4f9 100644
+--- a/crates/led-pixel-engine/src/reactive.rs
++++ b/crates/led-pixel-engine/src/reactive.rs
+@@ -958,6 +958,7 @@ mod adversarial_tests {
+         let (primeira, iteracoes) = reader.join().unwrap();
+ 
+         let v = violations.load(Ordering::Relaxed);
++        eprintln!("TD038_T3 leituras={iteracoes} violacoes={v}");
+         assert_eq!(
+             v,
+             0,
+@@ -1057,6 +1058,7 @@ mod adversarial_tests {
+         for (id, violacoes, leitor) in leitores {
+             let (primeira, leituras) = leitor.join().unwrap();
+             let v = violacoes.load(Ordering::Relaxed);
++            eprintln!("TD038_T4 instancia={id} leituras={leituras} violacoes={v}");
+             if v > 0 {
+                 falhas.push(format!("instancia {id}: {v} snapshots alheias/incoerentes em {leituras} leituras; primeira={primeira:?}"));
+             }

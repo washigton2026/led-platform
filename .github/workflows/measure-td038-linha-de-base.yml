@@ -7,7 +7,9 @@
 # para o flakes.log, sem STOP.
 # Um FAILED aqui é DADO da linha de base, não falha do job: o job só reprova se a medição for inválida
 # (binário não encontrado, N listado ≠ 1, iterações ≠ N, ok+FAILED ≠ N).
-# Não toca no ci.yml (vigiado pelo TD-027). Windows = windows-latest, a mesma etiqueta do job windows (allow-failure).
+# T3/T4 (Q1 do accept v3): o contador é impresso por um patch aplicado AQUI, no runner (git apply, como os canários do
+# miri (seqlock)); o reactive.rs deste ramo é o da main, sem commit de instrumentação.
+# Não toca no ci.yml (vigiado pelo TD-027). runs-on do windows = o do job windows (allow-failure) do ci.yml: windows-latest.
 name: measure-td038-linha-de-base
 
 on:
@@ -24,6 +26,15 @@ jobs:
         os: [ubuntu-24.04, macos-26, windows-latest]
     steps:
       - uses: actions/checkout@v7
+      - name: Instrumentação de T3/T4 (patch em runtime, sem commit)
+        shell: bash {0}
+        run: |
+          P=.github/measure-td038/instrumenta-t3-t4.patch
+          git apply --check "$P" || { echo "::error::o patch de instrumentação já não aplica ao reactive.rs — medição inválida"; exit 1; }
+          git apply "$P"; echo "apply_exit=$?"
+          git diff --stat
+          n=$(grep -c 'TD038_T[34]' crates/led-pixel-engine/src/reactive.rs)
+          [ "$(git diff --name-only)" = crates/led-pixel-engine/src/reactive.rs ] && [ "$n" -eq 2 ] || { echo "::error::instrumentação inesperada (ficheiros: $(git diff --name-only | tr '\n' ' '), marcas: $n)"; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
       - name: Deps de áudio (Linux)
         if: runner.os == 'Linux'

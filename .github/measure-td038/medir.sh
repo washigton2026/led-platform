@@ -5,11 +5,12 @@
 # Accept: ~/lumyx-evidence/2026-11-26-td038/accept-v2.md (§2).
 set -u
 BIN="$1"; N="$2"; OUT="$3"
-# id|teste|marca impressa num verde (vazio = o código não imprime o contador num verde → contagem NOT_MEASURED)
+# id|teste|marca com o contador. T3/T4 não o imprimem no código da main: as marcas TD038_T3/TD038_T4 vêm do patch
+# .github/measure-td038/instrumenta-t3-t4.patch, aplicado em runtime pelo workflow (sem commit ao reactive.rs).
 TESTES='T1|reactive::tests::frescura_pelo_scalars_e_monotonia_por_leitor|TD030_FRESCURA
 T2|reactive::tests::fallbacks_medidos_com_escritor_continuo|TD030_FALLBACKS
-T3|reactive::adversarial_tests::audioshare_scalars_beat_timestamp_coherent_under_concurrency|
-T4|reactive::adversarial_tests::audioshare_isolamento_entre_instancias|
+T3|reactive::adversarial_tests::audioshare_scalars_beat_timestamp_coherent_under_concurrency|TD038_T3
+T4|reactive::adversarial_tests::audioshare_isolamento_entre_instancias|TD038_T4
 T5|seqlock::tests::frescura_concorrente_monotonica_por_leitor|SEQLOCK_FRESCURA'
 mkdir -p "$OUT"; : > "$OUT/RESUMO.txt"; invalida=0
 while IFS='|' read -r id T marca; do
@@ -28,15 +29,15 @@ while IFS='|' read -r id T marca; do
   if [ -n "$marca" ]; then
     echo "-- linhas $marca"; grep -ah "$marca" "$d"/it-*.out
     nlin=$(grep -ah "$marca" "$d"/it-*.out | wc -l | tr -d ' ')
-    zeros=$(grep -ah "$marca" "$d"/it-*.out | grep -c ' leituras=0 ')
+    zeros=$(grep -ah "$marca" "$d"/it-*.out | grep -cE ' leituras=0( |$)')
+    # uma execução ok sem a marca = contador não lido (patch não aplicado ou marca mudou) → medição inválida
+    ok_sem_marca=$(for f in $(grep -l "^test $T \.\.\. ok$" "$d"/it-*.out); do grep -q "$marca" "$f" || echo "$f"; done | wc -l | tr -d ' ')
     stats=$(grep -ah "$marca" "$d"/it-*.out | grep -aoE 'leituras=[0-9]+' | cut -d= -f2 | sort -n | awk '{a[NR]=$1} END{if(NR) printf "min=%s mediana=%s max=%s", a[1], a[int((NR+1)/2)], a[NR]}')
-    cont="linhas_${marca}=$nlin leituras_0=$zeros leituras[$stats]"
-  else
-    cont="contagem=NOT_MEASURED (o código não imprime o contador num verde)"
+    cont="linhas_${marca}=$nlin leituras_0=$zeros ok_sem_marca=$ok_sem_marca leituras[$stats]"
   fi
   echo "-- pânicos"; grep -ah 'panicked at\|assertion failed\|leitor não leu nada' "$d"/it-*.out || echo "(nenhum)"
   linha="$id N=$N iteracoes=$its com_1_teste=$um ok=$ok FAILED=$falhou $cont"
   echo "$linha" | tee -a "$OUT/RESUMO.txt"
-  [ "$its" -eq "$N" ] && [ "$um" -eq "$N" ] && [ $((ok + falhou)) -eq "$N" ] || { echo "::error::$id: medição inválida (iterações, «running 1 test» ou ok+FAILED ≠ N)"; invalida=1; }
+  [ "$its" -eq "$N" ] && [ "$um" -eq "$N" ] && [ $((ok + falhou)) -eq "$N" ] && [ "$ok_sem_marca" -eq 0 ] || { echo "::error::$id: medição inválida (iterações, «running 1 test», ok+FAILED ≠ N, ou execução ok sem a marca $marca)"; invalida=1; }
 done <<< "$TESTES"
 exit $invalida
