@@ -1,0 +1,65 @@
+# [MEDICAO] TD-038 §2, medição do «depois» (critério 5 do accept v3) — NÃO FAZER MERGE. Ramo descartável
+# measure/td038-depois sobre origin/main 1975984 (merge do PR #70, a correção). O PR é de medição e fecha sem merge.
+# Accept: ~/lumyx-evidence/2026-11-26-td038/accept-v3.md (§2, §5.5). Mesmo método do «antes» (PR #69, cd5809d): os 5
+# testes da classe (T1–T5) com --exact --nocapture, N=30 por SO, o mesmo .github/measure-td038/medir.sh (byte a byte),
+# a mesma matriz e o mesmo build. Um FAILED aqui é DADO, não falha do job: o job só reprova se a medição for inválida
+# (binário não encontrado, N listado ≠ 1, iterações ≠ N, ok+FAILED ≠ N, execução ok sem a marca).
+# T3/T4 — patch de instrumentação DISPENSADO (accept v3 §2: «se a correção já imprimir o contador, o patch é ajustado ou
+# dispensado, e isso fica escrito»; decisão do proprietário, 2026-11-28): o reactive.rs da correção já imprime
+# «TD038_T3 leituras={iteracoes} violacoes={v}» e «TD038_T4 instancia={id} leituras={leituras} violacoes={v}», o mesmo
+# texto que o patch do #69 acrescentava, no mesmo sítio (depois do join, antes dos asserts). Reaplicar duplicava as
+# marcas. O passo abaixo verifica em vez de aplicar: árvore limpa e exatamente essas 2 linhas no reactive.rs.
+# Não toca no ci.yml (vigiado pelo TD-027). runs-on do windows = o do job windows (allow-failure) do ci.yml: windows-latest.
+name: measure-td038-depois
+
+on:
+  pull_request:
+
+jobs:
+  depois:
+    name: TD-038 depois (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Instrumentação de T3/T4 (patch dispensado — verificar as marcas do código)
+        shell: bash {0}
+        run: |
+          R=crates/led-pixel-engine/src/reactive.rs
+          git diff --stat
+          n=$(grep -c 'TD038_T[34]' "$R")
+          t3=$(grep -cF 'eprintln!("TD038_T3 leituras={iteracoes} violacoes={v}");' "$R")
+          t4=$(grep -cF 'eprintln!("TD038_T4 instancia={id} leituras={leituras} violacoes={v}");' "$R")
+          echo "marcas=$n t3=$t3 t4=$t4"
+          [ -z "$(git status --porcelain)" ] && [ "$n" -eq 2 ] && [ "$t3" -eq 1 ] && [ "$t4" -eq 1 ] || { echo "::error::instrumentação inesperada (árvore: $(git status --porcelain | tr '\n' ' '), marcas: $n, t3: $t3, t4: $t4) — medição inválida"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps de áudio (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build do binário de teste do led-pixel-engine (--lib)
+        shell: bash {0}
+        run: |
+          rustc --version; git log --oneline -1
+          cargo test -p led-pixel-engine --lib --locked --no-run --message-format=json > build.json 2> build.err; code=$?
+          echo "build_exit=$code"; [ "$code" -eq 0 ] || { cat build.err; exit 1; }
+          PY=$(command -v python3 || command -v python); echo "PY=$PY"
+          BIN=$("$PY" -c 'import json,sys
+          for l in open(sys.argv[1]):
+              try: m=json.loads(l)
+              except Exception: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="led_pixel_engine" and m["profile"]["test"]: print(m["executable"])' build.json | tr -d '\r' | head -1)
+          [ -n "$BIN" ] || { echo "::error::binário de teste do led_pixel_engine não encontrado — medição inválida"; exit 1; }
+          [ "$RUNNER_OS" = Windows ] && BIN=$(cygpath -u "$BIN")
+          echo "BIN=$BIN" >> $GITHUB_ENV; echo "BIN=$BIN"
+      - name: T1–T5, N=30 execuções cada, --exact --nocapture
+        shell: bash {0}
+        run: |
+          uname -m; uname -s
+          bash .github/measure-td038/medir.sh "$BIN" 30 out
+          code=$?
+          echo "RESULTADO td038-depois os=${{ matrix.os }} arch=$(uname -m) $(tr '\n' ' ' < out/RESUMO.txt 2>/dev/null)"
+          exit $code
