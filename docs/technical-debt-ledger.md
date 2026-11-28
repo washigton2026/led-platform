@@ -2369,7 +2369,9 @@ negative_control: |
 td_id:     TD-038
 title:     "Classe (decisão do proprietário 2026-11-27): testes de concorrência do led-pixel-engine em que a leitora é lançada com spawn em `while !parar` e o escritor não espera por ela — a leitora pode não fazer nenhuma iteração. T1/T2/T5 reprovavam por `> 0` (2 ocorrências reais no windows); T3/T4 davam VERDE com 0 leituras"
 severity:  Medium
-status:    pending-verification
+status:    closed
+closed_on: 2026-11-28
+closed_by: "PR #70 (c3b9dd0, mergeado em 1975984). pending_gate cumprido e lido no log, job a job: (1) CI do PR, run 46137292750, 9/9 success — T1–T5 «... ok» em test (ubuntu-24.04), test (macos-26) e windows (allow-failure); miri (seqlock) 3/3 com M01/M05 mortos e árvore reposta; loom «TD-030 gate: OK — std 14 oráculos, loom 2/2, 7 canários mortos»; (2) medição «depois» PR #71 (28df81c, fechado sem merge), runs 46138787130/46138787137: N=30, T1–T5 ok 30/30 e leituras=0 em 0 nos 3 SO, patch de instrumentação dispensado (accept v3 §2), lado a lado com o «antes» do #69; aceite pelo CIO (2026-11-28); (3) CI da main 1975984, run 46138069440, 9/9 success, os mesmos números. Leituras em ~/lumyx-evidence/2026-11-27-td038-fix/ci-c3b9dd0/, ci-main-19759840/ e ~/lumyx-evidence/2026-11-28-td038-depois/ci-28df81c/ (TABELA.txt + SHA256SUMS). Secção 4 do evidence_ref, com os sha256 das TABELAS. Fecho por ordem do operador."
 area:      TD-030 (seqlock do AudioShare)
 origin:    "Ocorrência 1: run 45874977001/1, job 140099654308 windows (allow-failure), b4c3b7a — fallbacks_medidos_com_escritor_continuo, «TD030_FALLBACKS … leituras=0», reactive.rs:687:9 «assertion failed: leituras > 0»; repetição D-REP verde. Ocorrência 2 (outro teste, mesma classe): run 46082339639/1, job 140783924395 windows (allow-failure), ef0f1f2 — frescura_pelo_scalars_e_monotonia_por_leitor, reactive.rs:541:9 «assertion failed: lidas > 0»; não repetida (STOP). As duas em ~/lumyx-evidence/flakes.log. O proprietário alargou o TD à classe, sem TD-DRAFT à parte."
 source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs
