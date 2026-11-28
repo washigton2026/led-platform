@@ -200,7 +200,7 @@ first_closed_on: 2026-06-19 (commit 94c42e4 — ArcSwap)
 reopened_on: 2026-10-11
 closed_on: 2026-11-26
 closed_by: "Decisao do proprietario (2026-11-26): fecha com o TD-030 e com a mesma evidencia (docs/evidence/td-030-fecho-2026-11-26.md). Medicao de fecho N=3000 (PR #65 [MEDICAO], run 45738144174): o seqlock de fix/td-030-seqlock (7aeec49, PR #56) da 0/3000 violacoes em ubuntu-24.04 x86_64, macos-26 arm64 e ubuntu-24.04-arm aarch64. Fecha COM OS MESMOS DESVIOS do TD-030 (ver desvios_fecho): o criterio do accept v3 NAO foi cumprido."
-evidence_ref: docs/evidence/td-030-fecho-2026-11-26.md
+evidence_ref: docs/evidence/td-030-fecho-2026-11-27.md
 required_test: audioshare_scalars_beat_timestamp_coherent_under_concurrency
 source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs, crates/led-pixel-engine/tests/td030_estrutural.rs, crates/led-pixel-engine/tests/no_alloc_reativo.rs
 fix_substituido: |
@@ -1981,7 +1981,7 @@ severity_note: "Critical por decisão do operador (ordem F, 2026-10-11): a repro
 status:    closed
 closed_on: 2026-11-26
 closed_by: "Decisao do proprietario (2026-11-26): aceitou o resultado da medicao de fecho N=3000 (PR #65 [MEDICAO], fechado sem merge; run 45738144174, jobs 139636283990, 139636284296, 139636284481, lidos no log pela API) e o caminho de fecho. F = fix/td-030-seqlock @ 7aeec49 (PR #56): 0/3000 violacoes em ubuntu-24.04 x86_64, macos-26 arm64 e ubuntu-24.04-arm aarch64, com 12 testes em 3000 iteracoes nas tres. Regra de saida do accept da medicao: manter o seqlock. Fecha COM DESVIOS ao criterio do accept v3 (ver desvios_fecho): o criterio v3 NAO foi cumprido."
-evidence_ref: docs/evidence/td-030-fecho-2026-11-26.md
+evidence_ref: docs/evidence/td-030-fecho-2026-11-27.md
 required_test: audioshare_scalars_beat_timestamp_coherent_under_concurrency
 origin:    "PR #30 (R4.6, so a etiqueta da imagem macOS mudou), run 37585504571, job 112674573237 `test (macos-26)`, Image macos-26-arm64 20260907.0351.1 (a mesma do macos-latest): `panicked at crates/led-pixel-engine/src/reactive.rs:474:9: coherence violated 1 times: beat/timestamp_ms from different publishes`. Nao repetido (STOP, 2026-10-07). Unica ocorrencia conhecida; o teste passou em todas as runs anteriores lidas."
 source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs, crates/led-pixel-engine/tests/td030_estrutural.rs, crates/led-pixel-engine/tests/no_alloc_reativo.rs
@@ -2363,32 +2363,52 @@ negative_control: |
 
 ---
 
-## TD-038 — fallbacks_medidos_com_escritor_continuo não garante que a leitora arranca; com leituras=0 as asserções de coerência não correm
+## TD-038 — Testes de concorrência do led-pixel-engine lançavam a leitora sem barreira de arranque: com 0 leituras, uns reprovavam e outros davam verde vazio
 
 ```yaml
 td_id:     TD-038
-title:     "reactive::tests::fallbacks_medidos_com_escritor_continuo (led-pixel-engine) lança a thread leitora e publica 50 000 vezes sem barreira de arranque: no windows (allow-failure) de b4c3b7a deu leituras=0 e reprovou em assert!(leituras > 0)"
+title:     "Classe (decisão do proprietário 2026-11-27): testes de concorrência do led-pixel-engine em que a leitora é lançada com spawn em `while !parar` e o escritor não espera por ela — a leitora pode não fazer nenhuma iteração. T1/T2/T5 reprovavam por `> 0` (2 ocorrências reais no windows); T3/T4 davam VERDE com 0 leituras"
 severity:  Medium
-status:    open
+status:    pending-verification
 area:      TD-030 (seqlock do AudioShare)
-origin:    "Ocorrência 1: run 45874977001/1, job 140099654308 windows (allow-failure), windows-2025-vs2026, commit b4c3b7a (push na main, merge do #66): «TD030_FALLBACKS publicacoes=50000 leituras=0 k=16 esgotadas=0 sem_snapshot=0», panicked at crates\\led-pixel-engine\\src\\reactive.rs:687:9 «assertion failed: leituras > 0». Repetição D-REP (tentativa 2, job 140106749132) verde. Registado em ~/lumyx-evidence/flakes.log; a 2.ª ocorrência em qualquer job é STOP."
-source_files: crates/led-pixel-engine/src/reactive.rs
+origin:    "Ocorrência 1: run 45874977001/1, job 140099654308 windows (allow-failure), b4c3b7a — fallbacks_medidos_com_escritor_continuo, «TD030_FALLBACKS … leituras=0», reactive.rs:687:9 «assertion failed: leituras > 0»; repetição D-REP verde. Ocorrência 2 (outro teste, mesma classe): run 46082339639/1, job 140783924395 windows (allow-failure), ef0f1f2 — frescura_pelo_scalars_e_monotonia_por_leitor, reactive.rs:541:9 «assertion failed: lidas > 0»; não repetida (STOP). As duas em ~/lumyx-evidence/flakes.log. O proprietário alargou o TD à classe, sem TD-DRAFT à parte."
+source_files: crates/led-pixel-engine/src/reactive.rs, crates/led-pixel-engine/src/seqlock.rs
 context: |
-  O teste lança a leitora com std::thread::spawn e começa logo a publicar; a leitora só lê enquanto `parar` for false.
-  Nada garante que a leitora faz uma leitura antes de o escritor terminar as 50 000 publicações e ligar `parar`.
-  Com leituras=0 o laço da leitora não corre, e as três asserções de coerência (sample_rate 4242, bass == timestamp,
-  beat == timestamp ímpar) não exercitam nada: o teste passa a medir o escalonador. O assert!(leituras > 0) apanhou-o.
-  NÃO medido: a distribuição de leituras por SO na CI. Os logs de jobs verdes não trazem a linha TD030_FALLBACKS
-  (o libtest só mostra o stderr de testes que falham); a única amostra de CI é a falha do windows.
+  Inventário (accept v3 §3.2, código de ef0f1f2). Testes que PODEM correr em vazio:
+    - T1 reactive::tests::frescura_pelo_scalars_e_monotonia_por_leitor (`> 0` existia: reprova);
+    - T2 reactive::tests::fallbacks_medidos_com_escritor_continuo (`> 0` existia: reprova);
+    - T3 reactive::adversarial_tests::audioshare_scalars_beat_timestamp_coherent_under_concurrency
+      (sem `> 0`: VERDE vazio). É o required_test do TD-030 e do TD-002;
+    - T4 reactive::adversarial_tests::audioshare_isolamento_entre_instancias (sem `> 0`: VERDE vazio);
+    - T5 seqlock::tests::frescura_concorrente_monotonica_por_leitor (`> 0` existia: reprova).
+  Testes que NÃO podem correr em vazio, e ficam como estão:
+    - fallback_sob_contencao_forcada: `parar` só depois de 200 fallbacks, e um fallback exige escrita concorrente;
+    - audioshare_miri_2thread_concurrent_no_ub: laços fixos de 32.
+  Linha de base «antes» (accept §2), lida e aceite pelo CIO: PR #69 (fechado sem merge), runs 46084441257 e
+  46084441204, 450/450 ok isolados com --exact, 0 com leituras=0; ~/lumyx-evidence/2026-11-27-td038-linha-de-base/.
+  O --exact subestima o risco: as falhas reais foram no job windows completo (92 testes em paralelo).
 impact: |
-  Falso vermelho no job windows (allow-failure); e, mais sério, uma execução verde com poucas leituras dá pouca
-  cobertura de coerência sem que nada o diga. O D11 depende deste TD (nota do proprietário, 2026-11-26).
-required_fix: |
-  Barreira de arranque: o escritor só publica depois de a leitora ter feito pelo menos uma leitura (sinal atómico ou
-  Barrier); o assert passa a exigir leituras durante a janela de publicação. Accept escrito ANTES do código:
-  ~/lumyx-evidence/2026-11-26-td038/accept.md (área do TD-030, N3).
-falsification_required: |
-  Controlo negativo determinístico: um atraso forçado no arranque da leitora reproduz leituras=0 (e o vermelho) na
-  versão antiga e não na nova. Medição das leituras por SO antes e depois.
+  T1, T2 e T5: falso vermelho no windows (allow-failure).
+  T3 e T4 eram mais graves: verde sem exercitar o detetor. O T3 é o required_test do fecho do TD-030 e do TD-002.
+  O TD-038 corrige-o sem reabrir o TD-030: o gate loom, os canários do Miri e o controlo C em arm64 são
+  independentes do T3. O D11 depende deste TD (nota do proprietário, 2026-11-26).
+fix_ref:   "ramo fix/td-038-barreira-de-arranque (base ef0f1f2). Barreira de arranque, só em #[cfg(test)]: `Arranque`/`Leitora` em reactive.rs mod tests (T1–T4); inline no T5 (seqlock.rs, sem novas menções a miri, canários M01/M05 intocados). O escritor espera, com prazo de 5 s, por uma leitura de cada leitora antes da 1.ª publicação e por outra depois de metade. T3 e T4 ganham `assert!(… > 0)` e imprimem o contador. A evidência do TD-030/TD-002 foi regenerada no mesmo commit (Q2: testes vigiados + gate loom + miri seqlock com canários, sem N=3000)."
+evidence_ref: docs/evidence/td-038-barreira-de-arranque-2026-11-27.md
+required_test: audioshare_scalars_beat_timestamp_coherent_under_concurrency
+negative_control: |
+  Mutação por SINAL (accept v3 §4), em cópias git archive com binários distintos. A leitora só arranca quando o
+  escritor terminou OU está bloqueado à espera dela. 20/20 por teste:
+    - antigo: T1/T2/T5 vermelhos pelo `> 0`; T3/T4 VERDES com 0 leituras;
+    - novo: verde com contador > 0, mesmo sem as asserções `> 0`;
+    - novo sem a espera do escritor: os 5 vermelhos pelo `> 0`.
+  Evidência: docs/evidence/td-038-barreira-de-arranque-2026-11-27.md §2; ~/lumyx-evidence/2026-11-27-td038-fix/neg/.
+pending_gate: |
+  1. CI do PR de fix/td-038-barreira-de-arranque lida job a job, incluindo:
+     - windows (allow-failure);
+     - miri (seqlock): 3/3, canários M01/M05 mortos, árvore reposta;
+     - loom.
+  2. Medição «depois» por SO (accept §5.5): o mesmo método do PR #69 (N=30, os 5 testes, --exact --nocapture),
+     com o patch de instrumentação dispensado porque T3/T4 já imprimem o contador.
+  3. PR mergeado na main, com a CI da main lida job a job.
 review_by: 2026-12-31
 ```

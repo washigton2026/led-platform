@@ -497,6 +497,79 @@ mod tests {
         share.publish(&f);
     }
 
+    // ── TD-038: barreira de arranque dos testes de concorrência com a leitora em `while !parar` ──
+    // Sem ela, o escritor podia publicar tudo e ligar `parar` antes de a leitora ler uma única vez: os testes com
+    // `> 0` davam vermelho (2 ocorrências no windows) e os sem `> 0` davam VERDE com 0 leituras. O escritor espera,
+    // com prazo, que cada leitora tenha lido (arranque) e que volte a ler depois de metade das publicações (meio).
+    // `a_espera` é o sinal «o escritor está bloqueado na barreira» (controlo negativo do §4 do accept do TD-038).
+    pub(super) struct Arranque {
+        leitoras: u64,
+        prontas: std::sync::atomic::AtomicU64,
+        pub(super) a_espera: std::sync::atomic::AtomicBool,
+        meio: std::sync::atomic::AtomicBool,
+        no_meio: std::sync::atomic::AtomicU64,
+    }
+
+    /// O lado da leitora: `leu()` depois de cada leitura.
+    pub(super) struct Leitora {
+        arranque: Arc<Arranque>,
+        pronta: bool,
+        no_meio: bool,
+    }
+
+    const PRAZO_DA_BARREIRA: std::time::Duration = std::time::Duration::from_secs(5);
+
+    impl Arranque {
+        pub(super) fn new(leitoras: u64) -> Arc<Self> {
+            Arc::new(Arranque {
+                leitoras,
+                prontas: std::sync::atomic::AtomicU64::new(0),
+                a_espera: std::sync::atomic::AtomicBool::new(false),
+                meio: std::sync::atomic::AtomicBool::new(false),
+                no_meio: std::sync::atomic::AtomicU64::new(0),
+            })
+        }
+
+        pub(super) fn leitora(self: &Arc<Self>) -> Leitora {
+            Leitora { arranque: self.clone(), pronta: false, no_meio: false }
+        }
+
+        /// Escritor, antes da 1.ª publicação: espera que cada leitora tenha lido uma vez.
+        pub(super) fn espera_arranque(&self) {
+            self.a_espera.store(true, std::sync::atomic::Ordering::Release);
+            self.espera(&self.prontas, "arranque");
+        }
+
+        /// Escritor, a meio das publicações: espera que cada leitora leia de novo depois deste ponto.
+        pub(super) fn espera_meio(&self) {
+            self.meio.store(true, std::sync::atomic::Ordering::Release);
+            self.espera(&self.no_meio, "meio");
+        }
+
+        fn espera(&self, contador: &std::sync::atomic::AtomicU64, fase: &str) {
+            let inicio = std::time::Instant::now();
+            while contador.load(std::sync::atomic::Ordering::Acquire) < self.leitoras {
+                assert!(inicio.elapsed() < PRAZO_DA_BARREIRA,
+                    "TD-038: barreira ({fase}): {} de {} leitoras em {PRAZO_DA_BARREIRA:?}",
+                    contador.load(std::sync::atomic::Ordering::Acquire), self.leitoras);
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    impl Leitora {
+        pub(super) fn leu(&mut self) {
+            if !self.pronta {
+                self.pronta = true;
+                self.arranque.prontas.fetch_add(1, std::sync::atomic::Ordering::Release);
+            }
+            if !self.no_meio && self.arranque.meio.load(std::sync::atomic::Ordering::Acquire) {
+                self.no_meio = true;
+                self.arranque.no_meio.fetch_add(1, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+
     // ── TD-030 (ordem G): ORÁCULO DE FRESCURA pelo scalars() ──
     // Uma leitura iniciada depois de `c` publicações concluídas nunca devolve versão < c nem o default (c > 0), a não
     // ser num fallback CONTADO (que devolve o último válido desta thread); a versão vista nunca recua.
@@ -507,7 +580,8 @@ mod tests {
         let share = Arc::new(AudioShare::new());
         let parar = Arc::new(AtomicBool::new(false));
         let concluidas = Arc::new(AtomicU64::new(0));
-        let (rs, rp, rc) = (share.clone(), parar.clone(), concluidas.clone());
+        let arranque = Arranque::new(1);
+        let (rs, rp, rc, mut ra) = (share.clone(), parar.clone(), concluidas.clone(), arranque.leitora());
         let leitor = std::thread::spawn(move || {
             let (mut ultima, mut lidas, mut por_fallback) = (0u64, 0u64, 0u64);
             while !rp.load(Ordering::Relaxed) {
@@ -516,6 +590,7 @@ mod tests {
                 let s = rs.scalars();
                 let (fb1, _) = rs.fallbacks_do_leitor();
                 lidas += 1;
+                ra.leu();
                 if s != AudioScalars::default() {
                     assert_eq!(s.sample_rate, 4242, "snapshot alheio: {s:?}");
                     assert_eq!(s.bass, s.timestamp_ms as f32, "snapshot incoerente: {s:?}");
@@ -532,7 +607,9 @@ mod tests {
             }
             (lidas, por_fallback)
         });
+        arranque.espera_arranque();
         for v in 1..=n {
+            if v == n / 2 { arranque.espera_meio(); }
             publica_versao(&share, v, 4242);
             concluidas.store(v, Ordering::Release);
         }
@@ -661,12 +738,14 @@ mod tests {
         let n: u64 = if cfg!(miri) { 40 } else { 50_000 };
         let share = Arc::new(AudioShare::new());
         let parar = Arc::new(AtomicBool::new(false));
-        let (rs, rp) = (share.clone(), parar.clone());
+        let arranque = Arranque::new(1);
+        let (rs, rp, mut ra) = (share.clone(), parar.clone(), arranque.leitora());
         let leitor = std::thread::spawn(move || {
             let mut leituras = 0u64;
             while !rp.load(Ordering::Relaxed) {
                 leituras += 1;
                 let s = rs.scalars();
+                ra.leu();
                 if s != AudioScalars::default() {
                     assert_eq!(s.sample_rate, 4242, "snapshot alheio: {s:?}");
                     assert_eq!(s.bass, s.timestamp_ms as f32, "snapshot incoerente: {s:?}");
@@ -675,7 +754,9 @@ mod tests {
             }
             leituras
         });
+        arranque.espera_arranque();
         for i in 1..=n {
+            if i == n / 2 { arranque.espera_meio(); }
             let mut f = features(i % 2 == 1, i, i as f32);
             f.sample_rate = 4242;
             share.publish(&f);
@@ -918,10 +999,16 @@ mod adversarial_tests {
         // Writer: publishes 10_000 frames alternating beat/no-beat with matched timestamps.
         // TD-030 (R6.2): `publicado` = índice do último publish CONCLUÍDO, para o diagnóstico.
         let publicado = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+        // TD-038: barreira de arranque (super::tests::Arranque) — sem ela a leitora podia não ler nada e o
+        // assert_eq!(v, 0) passava com 0 leituras.
+        let arranque = super::tests::Arranque::new(1);
         let ws = share.clone();
         let wp = publicado.clone();
+        let wa = arranque.clone();
         let writer = thread::spawn(move || {
+            wa.espera_arranque();
             for i in 0u64..10_000 {
+                if i == 5_000 { wa.espera_meio(); }
                 let beat = i % 2 == 1;
                 ws.publish(&af(beat, i, 0.0, 0.0));
                 wp.store(i, Ordering::SeqCst);
@@ -935,12 +1022,14 @@ mod adversarial_tests {
         let st = stop.clone();
         let viol = violations.clone();
         let rp = publicado.clone();
+        let mut ra = arranque.leitora();
         let reader = thread::spawn(move || {
             let mut iteracao: u64 = 0;
             let mut primeira: Option<(bool, u64, u64, u64)> = None;
             while !st.load(Ordering::Relaxed) {
                 iteracao += 1;
                 let sc = rs.scalars();
+                ra.leu();
                 // Coherence invariant: beat ↔ odd timestamp.
                 let expected_beat = sc.timestamp_ms % 2 == 1;
                 if sc.timestamp_ms > 0 && sc.beat != expected_beat {
@@ -958,6 +1047,8 @@ mod adversarial_tests {
         let (primeira, iteracoes) = reader.join().unwrap();
 
         let v = violations.load(Ordering::Relaxed);
+        eprintln!("TD038_T3 leituras={iteracoes} violacoes={v}");
+        assert!(iteracoes > 0, "TD-038: a leitora não leu nada — o detetor não exercitou nada");
         assert_eq!(
             v,
             0,
@@ -1006,9 +1097,14 @@ mod adversarial_tests {
         let mut leitores = Vec::new();
         for id in 1..=instancias {
             let share = Arc::new(AudioShare::new());
+            // TD-038: barreira de arranque por instância (super::tests::Arranque)
+            let arranque = super::tests::Arranque::new(1);
             let ws = share.clone();
+            let wa = arranque.clone();
             escritores.push(thread::spawn(move || {
+                wa.espera_arranque();
                 for i in 1..=publicacoes {
+                    if i == publicacoes / 2 { wa.espera_meio(); }
                     ws.publish(&AudioFeatures {
                         sample_rate: id,
                         timestamp_ms: i,
@@ -1027,12 +1123,14 @@ mod adversarial_tests {
             let st = parar.clone();
             let violacoes = Arc::new(AtomicU32::new(0));
             let rv = violacoes.clone();
+            let mut ra = arranque.leitora();
             leitores.push((id, violacoes, thread::spawn(move || {
                 let mut primeira: Option<AudioScalars> = None;
                 let mut leituras = 0u64;
                 while !st.load(Ordering::Relaxed) {
                     leituras += 1;
                     let sc = rs.scalars();
+                    ra.leu();
                     if sc == AudioScalars::default() {
                         continue;
                     }
@@ -1054,14 +1152,20 @@ mod adversarial_tests {
         }
         parar.store(true, Ordering::Relaxed);
         let mut falhas = Vec::new();
+        let mut sem_leituras = Vec::new();
         for (id, violacoes, leitor) in leitores {
             let (primeira, leituras) = leitor.join().unwrap();
             let v = violacoes.load(Ordering::Relaxed);
+            eprintln!("TD038_T4 instancia={id} leituras={leituras} violacoes={v}");
+            if leituras == 0 {
+                sem_leituras.push(id);
+            }
             if v > 0 {
                 falhas.push(format!("instancia {id}: {v} snapshots alheias/incoerentes em {leituras} leituras; primeira={primeira:?}"));
             }
         }
         assert!(falhas.is_empty(), "TD-030 isolamento violado: {}", falhas.join(" | "));
+        assert!(sem_leituras.is_empty(), "TD-038: leitoras sem nenhuma leitura (instâncias {sem_leituras:?}) — o teste não exercitou nada");
     }
 }
 

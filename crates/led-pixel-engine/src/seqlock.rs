@@ -188,10 +188,19 @@ mod tests {
         let parar = std::sync::Arc::new(AtomicBool::new(false));
         let concluidas = std::sync::Arc::new(AtomicU64::new(0));
         let mut leitores = Vec::new();
+        // TD-038: barreira de arranque — o escritor espera, com prazo, que cada leitor tenha uma leitura aceite antes
+        // da 1.ª escrita (`prontas`) e outra depois de metade das escritas (`no_meio`). `a_espera` = «o escritor está
+        // bloqueado na barreira» (sinal do controlo negativo do accept do TD-038).
+        let prontas = std::sync::Arc::new(AtomicU64::new(0));
+        let a_espera = std::sync::Arc::new(AtomicBool::new(false));
+        let meio = std::sync::Arc::new(AtomicBool::new(false));
+        let no_meio = std::sync::Arc::new(AtomicU64::new(0));
         for _ in 0..if cfg!(miri) { 1 } else { 3 } {
             let (r, p, c) = (r.clone(), parar.clone(), concluidas.clone());
+            let (pr, me, nm) = (prontas.clone(), meio.clone(), no_meio.clone());
             leitores.push(thread::spawn(move || {
                 let (mut lidas, mut ultima) = (0u64, 0u64);
+                let mut leu_no_meio = false;
                 while !p.load(Ordering::Relaxed) {
                     let antes = c.load(Ordering::Acquire);
                     let Some(v) = r.tentar() else { continue };
@@ -200,11 +209,33 @@ mod tests {
                     assert!(v[0] >= ultima, "a versão recuou: {} depois de {ultima}", v[0]);
                     ultima = v[0];
                     lidas += 1;
+                    if lidas == 1 {
+                        pr.fetch_add(1, Ordering::Release);
+                    }
+                    if !leu_no_meio && me.load(Ordering::Acquire) {
+                        leu_no_meio = true;
+                        nm.fetch_add(1, Ordering::Release);
+                    }
                 }
                 (lidas, ultima)
             }));
         }
+        let total = leitores.len() as u64;
+        let espera = |contador: &AtomicU64, fase: &str| {
+            let inicio = std::time::Instant::now();
+            while contador.load(Ordering::Acquire) < total {
+                assert!(inicio.elapsed() < std::time::Duration::from_secs(5),
+                    "TD-038: barreira ({fase}): {} de {total} leitores em 5 s", contador.load(Ordering::Acquire));
+                thread::yield_now();
+            }
+        };
+        a_espera.store(true, Ordering::Release);
+        espera(&prontas, "arranque");
         for i in 1..=n {
+            if i == n / 2 {
+                meio.store(true, Ordering::Release);
+                espera(&no_meio, "meio");
+            }
             w.escrever([i; 4]);
             concluidas.store(i, Ordering::Release);
         }
