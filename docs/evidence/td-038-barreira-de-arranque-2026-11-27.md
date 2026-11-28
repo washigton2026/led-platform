@@ -105,3 +105,43 @@ test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
   - a CI do PR lida job a job, incluindo o windows (allow-failure);
   - a medição «depois» por SO (§5.5).
 - Não é arm64: o §4 correu em x86_64 local; a arm64 só entra pela CI (macos-26) e pela medição «depois».
+
+## 4. Fecho (critério 7 do accept v3), 2026-11-28 — CI e medição lidas no log, job a job
+# A região de prova e os watched acima não mudaram: reactive.rs e seqlock.rs da main 1975984 têm os mesmos sha256
+# (o código é o de c3b9dd0). Leituras completas em ~/lumyx-evidence/, cada pasta com SHA256SUMS (verificados a 2026-11-28, 0 falhas).
+#
+# 4.1 CI do PR #70 (fix/td-038-barreira-de-arranque @ c3b9dd0), run 46137292750, 9/9 jobs success.
+#   ~/lumyx-evidence/2026-11-27-td038-fix/ci-c3b9dd0/TABELA.txt
+#     sha256 1001eb478cae237d42898ae3df4b761052454f327bd3a436092ab0bd3a0430dc
+#   - test (ubuntu-24.04), test (macos-26), windows (allow-failure): T1–T5 «... ok» nos 3; 109 linhas «test result: ok.»
+#     em cada um; 1213 / 1217 / 1105 passed, 0 failed, 10 ignored; nenhum «... FAILED».
+#   - miri (seqlock): «miri seqlock: 3/3 testes (piso 3), exit 0»; canários M01 (seqlock.rs:206:21) e M05 (:207:21)
+#     mortos; «árvore reposta».
+#   - loom: «TD-030 gate: OK — std 14 oráculos, loom 2/2, 7 canários mortos.»
+#   - debt gate: «Result: 0 Critical, 0 Warning, 24 OK · 10 open · 2 wontfix»; gate suite: «esperados 36», 36 passed.
+#
+# 4.2 CI da main sobre o merge do #70 (1975984), run 46138069440 (push), 9/9 jobs success.
+#   ~/lumyx-evidence/2026-11-27-td038-fix/ci-main-19759840/TABELA.txt
+#     sha256 b827328385da6803e4b112855aa3400f6be6cb3b1c054d3227f692153ff28a29
+#   - Os mesmos números de 4.1 nos 3 jobs de teste, no miri (seqlock), no loom, no debt gate e na gate suite.
+#
+# 4.3 Controlo negativo da §4 (secção 2 acima), resultado por teste e por variante:
+#   ~/lumyx-evidence/2026-11-27-td038-fix/neg/resultado.tsv
+#     sha256 e4af777759e27ec701e3afdd9ac52419ed70bea372d94e810994ea5560704e8b
+#
+# 4.4 Antes / depois por SO (§2 e §5.5): N=30 por teste, --exact --nocapture, o mesmo medir.sh.
+#   antes  = PR #69 @ cd5809d (fechado sem merge), runs 46084441257 e 46084441204
+#     ~/lumyx-evidence/2026-11-27-td038-linha-de-base/ci-cd5809d/TABELA.txt
+#       sha256 4879e118107c80ba6c0cf1cbe498cf763aebb382891cb39d52520d995c0ab9ee
+#     linha-de-base.tsv sha256 e265a1db2b533ad5aee55cc1192e8d887e713f6529d1c9b59916020ebd3d253a
+#   depois = PR #71 @ 28df81c (sobre 1975984; fechado sem merge), runs 46138787130 e 46138787137
+#     patch de instrumentação de T3/T4 dispensado (accept v3 §2; decisão do proprietário, 2026-11-28): a correção já
+#     imprime TD038_T3/TD038_T4; o passo verifica árvore limpa e as 2 marcas exatas (marcas=2 t3=1 t4=1 nos 3 SO).
+#     ~/lumyx-evidence/2026-11-28-td038-depois/ci-28df81c/TABELA.txt
+#       sha256 5ef0fddd53b6a9eb96af2ce3763ee51b70e92f50cf9e52c2c3af5d14e6c26b11
+#     linha-de-base.tsv sha256 3d99ba89276c3a2450c0b5e0252e120ea1a7f8dfae73d38d2358ba9f246ce4ec
+#   Nos dois, ubuntu-24.04 x86_64, macos-26 arm64 e windows-latest x86_64, T1–T5: ok 30/30, FAILED 0, ok_sem_marca 0,
+#   leituras=0 em 0. Mín/mediana/máx por SO e por teste nas duas TABELAS (aceite pelo CIO, 2026-11-28).
+#
+# 4.5 O que o fecho NÃO acrescenta à secção 3: a frequência por --exact continua a não medir o job completo; a prova
+#   da correção continua a ser a mutação determinística da §4. Não reabre o TD-030.
